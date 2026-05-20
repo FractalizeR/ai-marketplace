@@ -1,0 +1,17 @@
+parameters:
+    # VULN: hardcoded_secret id=DVWA-10
+    # Embedded API key in container parameters. Real apps must read this from
+    # %env(STRIPE_SECRET_KEY)% / vault. Will be picked up by recipe `secrets`
+    # candidate scan (regex `sk_live_`) — sink_kind=hardcoded_secret.
+    app.payment_secret: 'sk_live_FAKE_FIXTURE_KEY_NOT_REAL'
+
+services:
+    _defaults:
+        autowire: true
+        autoconfigure: true
+        public: false
+
+    App\:
+        resource: '../src/'
+        exclude:
+            - '../src/Entity/'

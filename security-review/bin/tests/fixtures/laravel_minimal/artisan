@@ -1,0 +1,5 @@
+#!/usr/bin/env php
+<?php
+// Placeholder artisan binary for fixture detection.
+// Real Laravel projects bootstrap the application kernel here.
+exit(0);

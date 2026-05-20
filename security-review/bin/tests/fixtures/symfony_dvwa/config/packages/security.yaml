@@ -1,0 +1,31 @@
+security:
+    password_hashers:
+        # VULN: weak_password_hashing id=DVWA-14 (configuration anchor)
+        # Plaintext hasher is wrong on its own; recipe will see `plaintext` here
+        # and the entity's setter (`User::setPassword` writes raw input) reinforces
+        # the finding. Sink_kind=plaintext_password_storage / weak_hash.
+        Symfony\Component\Security\Core\User\PasswordAuthenticatedUserInterface: 'plaintext'
+
+    providers:
+        app_user_provider:
+            entity:
+                class: App\Entity\User
+                property: email
+
+    firewalls:
+        dev:
+            pattern: ^/(_(profiler|wdt)|css|images|js)/
+            security: false
+        main:
+            lazy: true
+            provider: app_user_provider
+            stateless: true
+
+    # VULN: missing_authz id=DVWA-15 (configuration anchor)
+    # `^/admin` is restricted to ROLE_USER (not ROLE_ADMIN!) — every authenticated
+    # user reaches the admin namespace including the EasyAdmin dashboard.
+    # Sink_kind=missing_authz at the access_control layer.
+    access_control:
+        - { path: ^/auth, roles: PUBLIC_ACCESS }
+        - { path: ^/admin, roles: ROLE_USER }
+        - { path: ^/api,  roles: ROLE_USER }

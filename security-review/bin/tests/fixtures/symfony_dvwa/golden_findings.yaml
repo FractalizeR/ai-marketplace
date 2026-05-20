@@ -1,0 +1,154 @@
+schema_version: 1
+source: hand-curated DVWA-Symfony fixture
+generated_at: 2026-05-09
+description: |
+  15 deliberately-introduced vulnerabilities for v3.x recall regression.
+  Each finding has a stable `id` (DVWA-NN). When running the worker pipeline
+  manually, label its findings with these IDs and compute precision/recall:
+    precision = |labeled_findings ∩ golden| / |labeled_findings|
+    recall    = |labeled_findings ∩ golden| / 15
+
+  Inventory recall is automated separately in
+  `bin/tests/test_dvwa_inventory_recall.py`.
+
+findings:
+  - id: DVWA-01
+    sink_kind: dql_concat
+    root_cause_family: injection
+    severity: critical
+    file: src/Repository/UserRepository.php
+    line: 30
+    title: "DQL string concatenation in findByEmailUnsafe()"
+    expected_wave: W2
+    expected_checklist: core/injection.md OR frameworks/symfony/data-access.md
+
+  - id: DVWA-02
+    sink_kind: native_sql_concat
+    root_cause_family: injection
+    severity: critical
+    file: src/Controller/ApiController.php
+    line: 27
+    title: "DBAL fetchAllAssociative with concatenated user input"
+    expected_wave: W2
+
+  - id: DVWA-03
+    sink_kind: stored_xss
+    root_cause_family: xss
+    severity: high
+    file: templates/post/show.html.twig
+    line: 5
+    title: "{{ post.body|raw }} with global autoescape: false"
+    expected_wave: W3
+    expected_checklist: core/output-render.md AND frameworks/symfony/output-render.md
+
+  - id: DVWA-04
+    sink_kind: ssti
+    root_cause_family: injection
+    severity: critical
+    file: src/Controller/SearchController.php
+    line: 25
+    title: "Twig\\Environment::createTemplate() on user-controlled source"
+    expected_wave: W3
+
+  - id: DVWA-05
+    sink_kind: path_traversal
+    root_cause_family: ssrf-fileops
+    severity: critical
+    file: src/Controller/FileController.php
+    line: 24
+    title: "file_get_contents(STORAGE_ROOT . '/' . $request->query->get('name'))"
+    expected_wave: W5
+
+  - id: DVWA-06
+    sink_kind: open_redirect
+    root_cause_family: auth
+    severity: medium
+    file: src/Controller/AuthController.php
+    line: 28
+    title: "RedirectResponse to user-controlled `next` parameter"
+    expected_wave: W1
+
+  - id: DVWA-07
+    sink_kind: untrusted_unserialize
+    root_cause_family: deserialization
+    severity: critical
+    file: src/Controller/ApiController.php
+    line: 41
+    title: "unserialize(base64_decode($cookie))"
+    expected_wave: W4
+
+  - id: DVWA-08
+    sink_kind: missing_csrf
+    root_cause_family: auth
+    severity: high
+    file: src/Form/UserType.php
+    line: 30
+    title: "csrf_protection: false on a Form bound to a mutating endpoint"
+    expected_wave: W1
+
+  - id: DVWA-09
+    sink_kind: mass_assignment
+    root_cause_family: injection
+    severity: critical
+    file: src/Form/UserType.php
+    line: 31
+    title: "allow_extra_fields: true on User Form (binds attacker-supplied keys)"
+    expected_wave: W2
+
+  - id: DVWA-10
+    sink_kind: hardcoded_secret
+    root_cause_family: crypto
+    severity: high
+    file: config/services.yaml
+    line: 6
+    title: "sk_live_FAKE_FIXTURE_KEY_NOT_REAL embedded as a parameter"
+    expected_wave: W4
+
+  - id: DVWA-11
+    sink_kind: sensitive_field_unmasked
+    root_cause_family: disclosure
+    severity: high
+    file: src/Controller/Admin/UserCrudController.php
+    line: 30
+    title: "TextField('apiKey') without formatValue/onlyOnIndex/hideOnForm"
+    expected_wave: W1
+    expected_checklist: frameworks/symfony/disclosure.md (recipe-driven recall)
+
+  - id: DVWA-12
+    sink_kind: mass_assignment
+    root_cause_family: authz
+    severity: critical
+    file: src/Controller/Admin/UserCrudController.php
+    line: 32
+    title: "ArrayField('roles') editable in UserCrudController without UserVoter"
+    expected_wave: W1
+    expected_checklist: frameworks/symfony/auth.md (admin_authz_coverage triggered)
+    notes: "admin_authz_coverage.crud_controllers_without_voter must include UserCrudController."
+
+  - id: DVWA-13
+    sink_kind: idor_lookup
+    root_cause_family: authz
+    severity: high
+    file: src/Controller/UserController.php
+    line: 23
+    title: "UserRepository::find($id) without #[IsGranted] / authz check"
+    expected_wave: W1
+
+  - id: DVWA-14
+    sink_kind: plaintext_password_storage
+    root_cause_family: crypto
+    severity: critical
+    file: config/packages/security.yaml
+    line: 9
+    title: "password_hashers ... 'plaintext' + User::setPassword without hasher"
+    expected_wave: W4
+    notes: "Two-anchor finding: yaml hasher decl AND entity setter pattern."
+
+  - id: DVWA-15
+    sink_kind: missing_authz
+    root_cause_family: authz
+    severity: critical
+    file: config/packages/security.yaml
+    line: 26
+    title: "access_control: ^/admin → ROLE_USER (should be ROLE_ADMIN)"
+    expected_wave: W1

@@ -1,0 +1,7 @@
+twig:
+    default_path: '%kernel.project_dir%/templates'
+    # VULN: xss_autoescape_off id=DVWA-03 (configuration anchor)
+    # Default escaping turned off globally — every `{{ var }}` becomes a raw sink
+    # unless the template explicitly applies `|escape`. Combined with the use of
+    # `|raw` in show.html.twig, this is a stored XSS chain.
+    autoescape: false

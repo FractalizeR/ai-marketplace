@@ -1,0 +1,19 @@
+{
+  "name": "fractalizer-marketplace",
+  "owner": {
+    "name": "FractalizeR",
+    "url": "https://github.com/FractalizeR"
+  },
+  "metadata": {
+    "description": "Personal collection of Claude Code plugins for AI agents",
+    "version": "1.0.0",
+    "pluginRoot": "."
+  },
+  "plugins": [
+    {
+      "name": "fr-security-review",
+      "source": "./security-review",
+      "description": "Framework-aware static-first security audit для PHP/Symfony/Laravel: recipe-driven recon, фокусные волны воркеров, детерминированная дедупликация, обнаружение GraphQL. Schema v2."
+    }
+  ]
+}

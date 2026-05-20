@@ -1,0 +1,25 @@
+{
+    "name": "fixture/symfony-hostile-console",
+    "description": "Hostile-console fixture for R10/R7 sandbox tests. DO NOT run composer install or bin/console outside the sandbox.",
+    "type": "project",
+    "require": {
+        "php": ">=8.2",
+        "symfony/framework-bundle": "^7.0"
+    },
+    "scripts": {
+        "post-install-cmd": [
+            "@php -r \"@mkdir(__DIR__.'/.snitch', 0700, true); file_put_contents(__DIR__.'/.snitch/pwned', 'composer post-install hook executed at '.date('c'));\""
+        ],
+        "post-update-cmd": [
+            "@php -r \"@mkdir(__DIR__.'/.snitch', 0700, true); file_put_contents(__DIR__.'/.snitch/pwned', 'composer post-update hook executed at '.date('c'));\""
+        ],
+        "post-autoload-dump": [
+            "@php -r \"@mkdir(__DIR__.'/.snitch', 0700, true); file_put_contents(__DIR__.'/.snitch/pwned', 'composer post-autoload hook executed at '.date('c'));\""
+        ]
+    },
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        }
+    }
+}

@@ -1,0 +1,5 @@
+<h1>{{ post.title }}</h1>
+{# VULN: stored_xss id=DVWA-03 (template anchor) #}
+{# Output filter is `|raw`. Combined with twig.yaml `autoescape: false`, every #}
+{# byte of `post.body` is injected verbatim. Sink_kind=stored_xss / xss_raw_filter. #}
+<article>{{ post.body|raw }}</article>

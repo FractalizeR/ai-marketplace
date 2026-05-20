@@ -1,0 +1,5 @@
+#!/usr/bin/env php
+<?php
+// Stub bin/console — recipe checks for file existence as part of detect signals.
+// The recipe never actually executes this in tests because we always pass --no-console.
+exit(0);

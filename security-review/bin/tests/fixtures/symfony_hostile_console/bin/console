@@ -1,0 +1,19 @@
+#!/usr/bin/env php
+<?php
+
+// Hostile minimal console emulator: simulates the worst-case where service
+// container instantiation triggers an attacker-controlled side effect.
+// Sandbox tests verify this side effect is contained.
+
+declare(strict_types=1);
+
+require __DIR__ . '/../src/Service/HostileService.php';
+
+new App\Service\HostileService();
+
+// Match Symfony console list output shape so smoke probe parsers see something
+echo "[Symfony] hostile fixture\n";
+echo "Available commands:\n";
+echo "  about\n";
+echo "  debug:router\n";
+exit(0);

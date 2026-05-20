@@ -1,0 +1,19 @@
+{
+    "name": "fixture/symfony-minimal",
+    "description": "Symfony 7 minimal fixture for fr-security-review v3 recipe tests",
+    "type": "project",
+    "require": {
+        "php": ">=8.2",
+        "symfony/framework-bundle": "^7.0",
+        "symfony/security-bundle": "^7.0",
+        "symfony/form": "^7.0",
+        "symfony/messenger": "^7.0",
+        "doctrine/orm": "^3.0",
+        "doctrine/doctrine-bundle": "^2.10"
+    },
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        }
+    }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "fr-security-review",
+  "version": "3.4.0",
+  "description": "Framework-aware static-first security audit для PHP/Symfony/Laravel: recipe-driven recon, фокусные волны воркеров, детерминированная дедупликация, обнаружение GraphQL. Schema v2.",
+  "author": {
+    "name": "Vladislav Rastrusny",
+    "email": "vladislav.rastrusny@gmail.com",
+    "url": "https://github.com/FractalizeR"
+  },
+  "homepage": "https://github.com/FractalizeR/ai-marketplace",
+  "repository": "https://github.com/FractalizeR/ai-marketplace.git",
+  "license": "Elastic-2.0",
+  "keywords": [
+    "security",
+    "audit",
+    "vulnerability",
+    "php",
+    "symfony",
+    "laravel",
+    "owasp",
+    "static-analysis",
+    "code-review"
+  ],
+  "category": "security"
+}

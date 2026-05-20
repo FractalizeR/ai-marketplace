@@ -1,0 +1,12 @@
+framework:
+    messenger:
+        transports:
+            # VULN: insecure_transport id=DVWA-07 (configuration anchor)
+            # `php_serialize` deserializes arbitrary objects from the broker —
+            # if message content (or queue itself) is attacker-controlled, this
+            # is RCE. Pair with the `unserialize($_COOKIE)` sink in ApiController.
+            async:
+                dsn: 'doctrine://default'
+                serializer: messenger.transport.native_php_serializer
+        routing:
+            'App\Message\ProcessOrder': async
