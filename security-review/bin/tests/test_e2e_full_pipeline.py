@@ -62,7 +62,7 @@ SEEDED_IDOR_MD = """# Vulnerability 1: [missing_authz]: `src/Controller/PostCont
 * **Impact**: IDOR -- disclosure of any Post by guessable id.
 * **Recommendation**: add `denyAccessUnlessGranted(PostVoter::VIEW, $post)`
     or scope query by current user.
-* **Discovered via**: checklist:frameworks/symfony/auth.md
+* **Discovered via**: checklist:stacks/symfony/auth.md
 """
 
 
@@ -141,11 +141,11 @@ class FullPipelineOnSymfonyMinimal(unittest.TestCase):
                       msg=f"slice_ids in plan: {slice_ids}")
 
     def test_plan_resolves_symfony_auth_checklist(self):
-        # Stack=symfony → frameworks/symfony/auth.md must be in the plan
+        # Stack=symfony → stacks/symfony/auth.md must be in the plan
         # for any wave that includes the `auth` theme.
         all_checklists = {c for s in self.plan for c in s.get("checklists", [])}
         self.assertTrue(
-            any("frameworks/symfony/auth.md" in c for c in all_checklists),
+            any("stacks/symfony/auth.md" in c for c in all_checklists),
             msg=f"no symfony auth checklist resolved; checklists={all_checklists}",
         )
         self.assertTrue(

@@ -1,6 +1,6 @@
 # Laravel stack — detection
 
-This file describes how `recipes/laravel` detects a Laravel project and activates checklists from `frameworks/laravel/`. It is not a checklist itself — there are no vulnerability items.
+This file describes how `recipes/laravel` detects a Laravel project and activates checklists from `stacks/laravel/`. It is not a checklist itself — there are no vulnerability items.
 
 ## Laravel project signals (by `composer.json` and file structure)
 
@@ -15,7 +15,7 @@ stack:
   detected_via: composer.json+artisan+config+app/Models
 ```
 
-`plan_waves.resolve_checklists(themes, stack="laravel", plugin_root)` then adds to each theme the file `frameworks/laravel/{theme}.md`, if it exists.
+`plan_waves.resolve_checklists(themes, ctx, plugin_root)` (where `ctx.stack == "laravel"`) then adds to each theme the file `stacks/laravel/{theme}.md`, if it exists.
 
 ## What lands in the `framework_specific.laravel` bag
 
@@ -37,6 +37,6 @@ See `bin/recon/recipes/laravel.py::FRAMEWORK_SPECIFIC_SCHEMA` for the exact shap
 
 ## What "framework: none/unknown" means
 
-`none` — generic PHP project without a framework. `frameworks/laravel/*.md` are not loaded. Worker operates only with core checklists.
+`none` — generic PHP project without a framework. `stacks/laravel/*.md` are not loaded. Worker operates only with core checklists.
 
 `unknown` — detect did not fire (possibly non-standard installation). The recon agent writes `recon_confidence: low`, plan_waves does not activate framework sections.

@@ -20,7 +20,7 @@ findings:
     line: 30
     title: "DQL string concatenation in findByEmailUnsafe()"
     expected_wave: W2
-    expected_checklist: core/injection.md OR frameworks/symfony/data-access.md
+    expected_checklist: core/injection.md OR stacks/symfony/data-access.md
 
   - id: DVWA-02
     sink_kind: native_sql_concat
@@ -39,7 +39,7 @@ findings:
     line: 5
     title: "{{ post.body|raw }} with global autoescape: false"
     expected_wave: W3
-    expected_checklist: core/output-render.md AND frameworks/symfony/output-render.md
+    expected_checklist: core/output-render.md AND stacks/symfony/output-render.md
 
   - id: DVWA-04
     sink_kind: ssti
@@ -112,7 +112,7 @@ findings:
     line: 30
     title: "TextField('apiKey') without formatValue/onlyOnIndex/hideOnForm"
     expected_wave: W1
-    expected_checklist: frameworks/symfony/disclosure.md (recipe-driven recall)
+    expected_checklist: stacks/symfony/disclosure.md (recipe-driven recall)
 
   - id: DVWA-12
     sink_kind: mass_assignment
@@ -122,7 +122,7 @@ findings:
     line: 32
     title: "ArrayField('roles') editable in UserCrudController without UserVoter"
     expected_wave: W1
-    expected_checklist: frameworks/symfony/auth.md (admin_authz_coverage triggered)
+    expected_checklist: stacks/symfony/auth.md (admin_authz_coverage triggered)
     notes: "admin_authz_coverage.crud_controllers_without_voter must include UserCrudController."
 
   - id: DVWA-13

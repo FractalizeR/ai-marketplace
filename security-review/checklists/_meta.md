@@ -2,41 +2,72 @@
 
 This file describes the format and rules for all `checklists/**/*.md` in the `fr-security-review` plugin.
 
-## Two-level structure
+## Five-layer structure
 
 ```
 checklists/
 ├── _meta.md
-├── core/                       # always active (any project, any stack)
-│   └── {theme}.md              # auth, crypto, disclosure, injection, data-access,
-│                               # output-render, serialization, ssrf-fileops, fintech, frontend-js
-└── frameworks/
-    └── {stack}/                # active only if CONTEXT.md frontmatter contains this stack
-        ├── _detect.md          # how detection fires (for documentation)
-        └── {theme}.md          # the same theme, but framework-specific refinements
+├── core/                              # always active (any project, any stack)
+│   └── {theme}.md                     # auth, crypto, disclosure, injection, data-access,
+│                                      # output-render, serialization, ssrf-fileops, fintech, frontend-js
+├── languages/                         # generic language layer (PHP/Python/Node)
+│   └── {language}/{theme}.md          # active iff CONTEXT.md frontmatter has `stack.language: <language>`
+├── stacks/                            # framework layer (symfony, laravel, django, …)
+│   └── {stack}/                       # active iff `stack.framework == <stack>` and stack ∉ {none, unknown}
+│       ├── _detect.md                 # how detection fires (documentation)
+│       ├── {theme}.md                 # framework-specific refinement of the theme
+│       └── addons/                    # sub-framework / bundle layer (EasyAdmin, API Platform, …)
+│           └── {addon}/{theme}.md     # active iff `<addon>` is in `stack.addons`
+└── integrations/                      # vendor SDK / service integrations (auth0, stripe, …)
+    └── {integration}/{theme}.md       # active iff `<integration>` is in `stack.integrations`
+                                       # — independent of stack/language
 ```
 
-**Resolution rule (see `bin/plan_waves.py::resolve_checklists`):** for each wave theme, the worker always gets `core/{theme}.md`, and additionally `frameworks/{stack}/{theme}.md` — if the corresponding stack is detected for the project and the file exists. When no framework file is present (or `framework: none/unknown`), the worker uses only core.
+**Resolution rule (see `bin/plan_waves.py::resolve_checklists`):** for each wave theme, the worker assembles a chain of up to five layers, from least specific to most specific:
 
-**Priority on instruction conflict:** the framework file is **more specific**, its instructions take precedence over core. The worker loads both files at once and applies the refinement where one exists.
+1. `core/{theme}.md` — always loaded if present.
+2. `languages/{language}/{theme}.md` — loaded if `ctx.language` is set (skip the whole layer otherwise).
+3. `stacks/{stack}/{theme}.md` — loaded if `ctx.stack ∉ {none, unknown}` (skip the stack and addons layers otherwise).
+4. `stacks/{stack}/addons/{addon}/{theme}.md` for each addon in `ctx.addons` (alphabetical, deterministic order).
+5. `integrations/{integration}/{theme}.md` for each integration in `ctx.integrations` (alphabetical, deterministic order). Integrations are **independent of stack** — they apply even on a generic / unknown stack.
 
-**Framework file anchor.** Each `frameworks/{stack}/{theme}.md` starts with a standard header (after the title):
+Missing files at any layer are silently skipped — every non-core layer is opt-in.
 
-> This checklist extends `core/{theme}.md` for projects on {stack}. On instruction conflict, this file takes precedence as the more specific one. The worker loads both files at once.
+**Priority on instruction conflict:** the more specific layer wins. Precedence (high → low): `integrations > addons > stacks > languages > core`. The worker loads the whole chain at once and applies the most-specific refinement where one exists.
+
+**Non-core file anchor.** Each non-core checklist (languages, stacks, addons, integrations) starts with a standard header (after the title):
+
+> This checklist extends `core/{theme}.md` and follows the resolution chain (core → languages → stacks → addons → integrations). On instruction conflict, the more specific layer takes precedence. The worker loads the whole chain at once.
+
+## Layer conventions
+
+- **core/** — language-agnostic, stack-agnostic patterns. Generic vulnerability categories (SQL injection, XSS, weak crypto, missing authz) described in terms that apply to any code base. The closed `sink_kind` enum lives here.
+- **languages/{language}/** — language-generic refinements that are not tied to any framework: PHP `preg_replace('/e')`, Python `pickle.loads`, Node `child_process.exec`, etc. Activated by `stack.language`.
+- **stacks/{stack}/** — framework-level refinements: Symfony Voters / `#[IsGranted]`, Laravel Policies / `Auth::user()`, Django middleware, FastAPI dependencies. Activated by `stack.framework`.
+- **stacks/{stack}/addons/{addon}/** — sub-frameworks or bundles that ride on top of a stack: EasyAdmin, Sonata, API Platform, Filament, Nova, Lighthouse. Activated by an entry in `stack.addons`.
+- **integrations/{integration}/** — vendor SDK / service integrations: Auth0, AWS Cognito, Stripe, Okta, KeyCloak. Activated by an entry in `stack.integrations`. Independent of the stack — a generic-PHP project using Stripe still loads `integrations/stripe/`.
+
+## Reserved (not yet populated)
+
+The following layer slots are reserved for future content. Files do not exist yet, so resolution silently skips them; orchestrator may pre-create the directories to make intent visible.
+
+- `languages/php/`, `languages/python/`
+- `stacks/django/`, `stacks/fastapi/`
+- `integrations/auth0/`, `integrations/aws-cognito/`
 
 ## Mandatory checklist header
 
-Every checklist (both core and framework) includes a standard methodology block. **Do not change the wording** — workers recognize this block when loading:
+Every checklist (core and every non-core layer) includes a standard methodology block. **Do not change the wording** — workers recognize this block when loading:
 
 > **These are typical patterns of the category, not an exhaustive list.** If you discover an exploitable vulnerability that passes the methodology (input source → transformations → sink + concrete exploit path) — reporting is **mandatory**, even if it does not fall under any item below. The checklist is a search-priority pointer, not a filter.
 
-For framework files, the anchor (about precedence over core) goes **before** this header.
+For non-core files, the precedence anchor (about the resolution chain) goes **before** this header.
 
 ## `## Recommended sink_kinds` — only in core files
 
 Each **core** checklist lists the values from the closed `sink_kind` enum that it covers. The worker picks `sink_kind` for each finding from this list (or `other:<name>` for categories that do not fit the enum).
 
-**Framework files DO NOT declare their own `## Recommended sink_kinds` section** — they refine the applicability of `sink_kind` values declared in the corresponding `core/{theme}.md`. This rule is fixed: a framework checklist **does not introduce new `sink_kind` values**, but narrows/refines applicability of the core sink_kind. All worker findings are always classified by `sink_kind` from the core enum.
+**Non-core files (languages, stacks, addons, integrations) DO NOT declare their own `## Recommended sink_kinds` section** — they refine the applicability of `sink_kind` values declared in the corresponding `core/{theme}.md`. This rule is fixed: a non-core checklist **does not introduce new `sink_kind` values**, but narrows/refines applicability of the core sink_kind. All worker findings are always classified by `sink_kind` from the core enum.
 
 `sink_kind` enum values:
 `dql_concat`, `native_sql_concat`, `unsafe_html_render`, `template_raw`, `ssti`, `unserialize_untrusted`, `command_exec`, `file_include_dynamic`, `path_traversal`, `redirect_open`, `weak_hash`, `hardcoded_secret`, `cors_misconfig`, `missing_authz`, `idor_lookup`, `xxe`, `ssrf`, `mass_assignment`, `csrf_missing`, `decimal_arith`, `race_condition`, `webhook_unverified`, `pii_in_logs`, `stacktrace_exposed`, `type_juggling`, `oauth_state_missing`, `webhook_replay`, `weak_random`, `secret_in_response`, `sensitive_field_unmasked`.
@@ -96,26 +127,28 @@ Example:
 
 Floor rules **do not replace** the quality gate (confidence ≥ 8, severity ≥ MEDIUM) — they refine it for specific patterns.
 
-Floor rules may live in both core and framework — wherever they are most specific. If a pattern is mentioned in both, the framework version (more specific) takes precedence.
+Floor rules may live in any layer — wherever they are most specific. If a pattern is mentioned in multiple layers, the more specific layer (per resolution chain) takes precedence.
 
 ## Confidence floor — where it lives
 
 | Pattern type | Where |
 | --- | --- |
 | Generic (no framework signatures): `==` for secrets, MD5 for password, `unserialize($_GET[...])` | `core/{theme}.md` |
-| Framework-specific (`#[IsGranted]`, `security.yaml`, `Voter`, `#[Route]`, EasyAdmin/Sonata) | `frameworks/{stack}/{theme}.md` |
+| Framework-specific (`#[IsGranted]`, `security.yaml`, `Voter`, `#[Route]`) | `stacks/{stack}/{theme}.md` |
+| Bundle/addon-specific (EasyAdmin/Sonata/API Platform) | `stacks/{stack}/addons/{addon}/{theme}.md` |
+| Vendor-SDK-specific (Stripe/Auth0/Cognito) | `integrations/{integration}/{theme}.md` |
 
 ## Cross-theme duplication (admin-CRUD)
 
-The checklists `frameworks/symfony/auth.md` AND `frameworks/symfony/data-access.md` both contain a section on admin-bundle CRUD (EasyAdmin/Sonata) — intentionally. A worker running in W1 (auth) and W2 (injection/data-access) gets admin context both times. This is the only sanctioned case of duplication between files of the same stack (handled in dedupe via `flag=[CROSS_SINK_MERGE]` for findings on the same line).
+The checklists `stacks/symfony/auth.md` AND `stacks/symfony/data-access.md` both contain a section on admin-bundle CRUD (EasyAdmin/Sonata) — intentionally. A worker running in W1 (auth) and W2 (injection/data-access) gets admin context both times. This is the only sanctioned case of duplication between files of the same stack (handled in dedupe via `flag=[CROSS_SINK_MERGE]` for findings on the same line).
 
 ## Cross-theme duplication (GraphQL)
 
 A section on GraphQL is present in three themes of one stack:
 
-- `frameworks/{stack}/auth.md` — field-level authz (resolver without `@guard`/`#[IsGranted]`/`@can`/voter check, introspection in prod as information disclosure).
-- `frameworks/{stack}/data-access.md` — query depth/complexity DoS, alias batching, persisted-queries bypass, introspection as enumeration vector.
-- `frameworks/{stack}/output-render.md` — output filtering (resolver returns an Entity without `#[Groups]`/`$hidden`/Resource projection).
+- `stacks/{stack}/auth.md` — field-level authz (resolver without `@guard`/`#[IsGranted]`/`@can`/voter check, introspection in prod as information disclosure).
+- `stacks/{stack}/data-access.md` — query depth/complexity DoS, alias batching, persisted-queries bypass, introspection as enumeration vector.
+- `stacks/{stack}/output-render.md` — output filtering (resolver returns an Entity without `#[Groups]`/`$hidden`/Resource projection).
 
 Distribution across themes reflects different attack classes; from a single location (for example, schema YAML or a single resolver) usually only one category is exploited. Dedupe already knows: if two findings land on the same `(sink_file, sink_line)` but with a different `sink_kind`, one gets `[CROSS_SINK_MERGE]`, the rest become `alternative_sink_kinds`.
 
@@ -156,17 +189,17 @@ The new `sink_kind` values in 3.4.0 are close in meaning to existing ones — fo
 - item
 ```
 
-## Framework file structure
+## Non-core file structure (languages / stacks / addons / integrations)
 
 ```markdown
-# <Category name> ({stack})
+# <Category name> ({layer-specific scope, e.g. {stack} / {addon} / {integration}})
 
-<anchor on precedence over core — copy verbatim from this _meta>
+<anchor on precedence and the resolution chain — copy verbatim from this _meta>
 
 <mandatory methodology header — copy verbatim>
 
 ## Confidence floor rules
-(optional, framework-specific)
+(optional, layer-specific)
 
 - ...
 

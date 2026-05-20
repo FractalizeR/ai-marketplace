@@ -67,7 +67,7 @@ Save the manual-run report as `<review_root>/RECALL_<sha>.md` next to REPORT.md.
 
 ## Known fixture limitations
 
-- **DVWA-15 (missing_authz at config level):** anchor is in `security.yaml`, not in code; the recipe emits `auth_layer.summary` correctly, but the specific `^/admin -> ROLE_USER` mismatch is caught by the worker against the `frameworks/symfony/auth.md` checklist.
+- **DVWA-15 (missing_authz at config level):** anchor is in `security.yaml`, not in code; the recipe emits `auth_layer.summary` correctly, but the specific `^/admin -> ROLE_USER` mismatch is caught by the worker against the `stacks/symfony/auth.md` checklist.
 - **Dual anchors:** DVWA-14 (plaintext_password) -- two anchors, in `security.yaml` (hasher) and `User::setPassword` (no hashing). The worker must report ONE finding spanning both; dedupe must support this (sink_hash on the canonical file).
 
 ## Not to be confused with

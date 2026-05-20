@@ -156,6 +156,103 @@ class FrontmatterV2(unittest.TestCase):
             self.assertFalse(res.ok())
             self.assertTrue(any("language" in e or "framework" in e for e in res.errors))
 
+    # --- Optional stack.addons / stack.integrations validation ---
+
+    def test_addons_valid_list_no_error(self):
+        fm = VALID_FRONTMATTER_V2.replace(
+            "  detected_via: composer.json",
+            "  detected_via: composer.json\n  addons:\n    - a\n    - b",
+        )
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), fm, all_core_sections_pending())
+            res = vc.validate_context_file(p)
+            self.assertTrue(res.ok(), msg=f"errors: {res.errors}")
+
+    def test_addons_scalar_errors(self):
+        # `addons: "stripe"` — scalar not a list.
+        fm = VALID_FRONTMATTER_V2.replace(
+            "  detected_via: composer.json",
+            '  detected_via: composer.json\n  addons: "stripe"',
+        )
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), fm, all_core_sections_pending())
+            res = vc.validate_context_file(p)
+            self.assertFalse(res.ok())
+            self.assertTrue(
+                any("addons" in e for e in res.errors),
+                msg=f"errors: {res.errors}",
+            )
+
+    def test_addons_non_string_items_error(self):
+        # `addons: [1, 2]` — integer items rejected.
+        fm = VALID_FRONTMATTER_V2.replace(
+            "  detected_via: composer.json",
+            "  detected_via: composer.json\n  addons:\n    - 1\n    - 2",
+        )
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), fm, all_core_sections_pending())
+            res = vc.validate_context_file(p)
+            self.assertFalse(res.ok())
+            self.assertTrue(
+                any("addons" in e and "string" in e for e in res.errors),
+                msg=f"errors: {res.errors}",
+            )
+
+    def test_addons_missing_key_no_error(self):
+        # No `addons:` key — accepted (already covered by minimal_valid_passes,
+        # but make it explicit and self-contained).
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), VALID_FRONTMATTER_V2, all_core_sections_pending())
+            res = vc.validate_context_file(p)
+            self.assertTrue(res.ok(), msg=f"errors: {res.errors}")
+            # Confirm no `addons` error sneaked in.
+            self.assertFalse(any("addons" in e for e in res.errors))
+
+    def test_integrations_valid_list_no_error(self):
+        fm = VALID_FRONTMATTER_V2.replace(
+            "  detected_via: composer.json",
+            "  detected_via: composer.json\n  integrations:\n    - a\n    - b",
+        )
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), fm, all_core_sections_pending())
+            res = vc.validate_context_file(p)
+            self.assertTrue(res.ok(), msg=f"errors: {res.errors}")
+
+    def test_integrations_scalar_errors(self):
+        fm = VALID_FRONTMATTER_V2.replace(
+            "  detected_via: composer.json",
+            '  detected_via: composer.json\n  integrations: "stripe"',
+        )
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), fm, all_core_sections_pending())
+            res = vc.validate_context_file(p)
+            self.assertFalse(res.ok())
+            self.assertTrue(
+                any("integrations" in e for e in res.errors),
+                msg=f"errors: {res.errors}",
+            )
+
+    def test_integrations_non_string_items_error(self):
+        fm = VALID_FRONTMATTER_V2.replace(
+            "  detected_via: composer.json",
+            "  detected_via: composer.json\n  integrations:\n    - 1\n    - 2",
+        )
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), fm, all_core_sections_pending())
+            res = vc.validate_context_file(p)
+            self.assertFalse(res.ok())
+            self.assertTrue(
+                any("integrations" in e and "string" in e for e in res.errors),
+                msg=f"errors: {res.errors}",
+            )
+
+    def test_integrations_missing_key_no_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), VALID_FRONTMATTER_V2, all_core_sections_pending())
+            res = vc.validate_context_file(p)
+            self.assertTrue(res.ok(), msg=f"errors: {res.errors}")
+            self.assertFalse(any("integrations" in e for e in res.errors))
+
 
 # ---------------------------------------------------------------------------
 # Section shapes.
