@@ -327,8 +327,8 @@ _FILE_OPS_RE = re.compile(
     r"Storage::(?:get|put|putFile|putFileAs|append|prepend|disk|delete|"
     r"deleteDirectory|move|copy|download|getRaw|readStream))\s*\("
 )
-# `new Client(` без префикса — слишком общий: ловит Stripe\Client, App\Services\Client.
-# Требуем GuzzleHttp namespace, опциональный leading-backslash для FQN.
+# `new Client(` without a prefix is too general — it catches Stripe\Client, App\Services\Client.
+# Require GuzzleHttp namespace, optional leading-backslash for FQN.
 _HTTP_CLIENT_RE = re.compile(
     r"\b(Http::(?:get|post|put|patch|delete|withHeaders|withToken|asForm|"
     r"send|head|options|withBasicAuth|withDigestAuth)|"

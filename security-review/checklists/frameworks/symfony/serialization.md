@@ -1,24 +1,24 @@
 # Deserialization (Symfony) — Symfony Serializer, Messenger, JMS
 
-> Этот чек-лист дополняет `core/serialization.md` для проектов на symfony. При конфликте инструкций — приоритет за этим файлом, как более специфичным. Worker загружает оба файла одновременно.
+> This checklist complements `core/serialization.md` for symfony projects. On conflicting instructions, this file takes priority as the more specific one. Worker loads both files simultaneously.
 
-**Это типичные паттерны категории, не исчерпывающий список.** Если ты обнаружил эксплуатируемую уязвимость, проходящую методологию (источник входа → трансформации → sink + конкретный путь эксплуатации) — репортить **обязательно**, даже если она не подпадает ни под один пункт ниже. Чек-лист — указатель приоритета поиска, а не фильтр.
+**These are typical patterns of the category, not an exhaustive list.** If you discover an exploitable vulnerability that passes the methodology (input source → transformations → sink + a concrete exploit path) — reporting is **mandatory**, even if it does not fall under any item below. The checklist is a search-priority pointer, not a filter.
 
 ## Symfony Serializer
 
-- `$serializer->deserialize($request->getContent(), Entity::class, 'json')` без `AbstractNormalizer::ATTRIBUTES` whitelist — mass assignment
-- `ObjectNormalizer` без ограничений для entity с privileged setters (`setRoles`, `setIsAdmin`)
-- Отсутствие `#[Groups]` или неправильные группы → утечка внутренних полей в API response
-- `getIgnoredAttributes()` не применяется для input
-- Кастомный normalizer, вызывающий `unserialize()` на части payload
+- `$serializer->deserialize($request->getContent(), Entity::class, 'json')` without `AbstractNormalizer::ATTRIBUTES` whitelist — mass assignment
+- `ObjectNormalizer` without restrictions for an entity with privileged setters (`setRoles`, `setIsAdmin`)
+- Missing `#[Groups]` or wrong groups → leak of internal fields in API response
+- `getIgnoredAttributes()` is not applied to input
+- Custom normalizer calling `unserialize()` on part of the payload
 
 ## Symfony Messenger
 
-- Transport, десериализующий внешние сообщения: AMQP/Redis/Doctrine transports — формат PHP-сериализации по умолчанию означает unserialize
-- `PhpSerializer` как serializer для транспорта, принимающего сообщения из ненадёжных источников
-- Handler без проверки владельца / authz на данных сообщения:
-  - сообщение содержит `userId`, handler выполняет операцию на этом user без сверки с actor
-  - сообщение содержит `filePath`, handler читает файл без path validation
-- Отсутствие `UserContext` / identity attached to message: в async handler не ясно, кто инициировал операцию → обходит authz
-- Повторная обработка того же сообщения (no idempotency) → double-spend, duplicate emails
-- `Throwable` в handler → сообщение retried бесконечно с side-effects
+- Transport deserializing external messages: AMQP/Redis/Doctrine transports — PHP-serialization format by default means unserialize
+- `PhpSerializer` as the serializer for a transport accepting messages from untrusted sources
+- Handler without owner / authz check on message data:
+  - message contains `userId`, handler performs an operation on that user without cross-checking against the actor
+  - message contains `filePath`, handler reads the file without path validation
+- Missing `UserContext` / identity attached to the message: in async handler it is not clear who initiated the operation → bypasses authz
+- Repeated processing of the same message (no idempotency) → double-spend, duplicate emails
+- `Throwable` in handler → message retried indefinitely with side effects

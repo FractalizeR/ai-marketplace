@@ -105,15 +105,15 @@ def _existing_scope_dirs(root: Path) -> list[str]:
 
 def compute_code_fingerprint(root: Path) -> str:
     """SHA-256 over:
-    1. `git ls-files -s` по scope-директориям (blob-хеши tracked content)
-    2. `git diff HEAD` по scope-директориям (staged + unstaged diff)
-    3. `git status --porcelain=v1` по scope-директориям (untracked и прочее)
+    1. `git ls-files -s` over scope directories (blob hashes of tracked content)
+    2. `git diff HEAD` over scope directories (staged + unstaged diff)
+    3. `git status --porcelain=v1` over scope directories (untracked and the rest)
     """
     h = hashlib.sha256()
 
     scope = _existing_scope_dirs(root)
     if not scope:
-        # Нет ни одной из scope-директорий — fingerprint всё равно детерминирован.
+        # None of the scope directories exist — fingerprint is still deterministic.
         h.update(b"NO_SCOPE_DIRS\n")
         return h.hexdigest()
 

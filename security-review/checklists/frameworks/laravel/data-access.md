@@ -1,130 +1,130 @@
 # Data access / Eloquent ORM (Laravel)
 
-> Этот чек-лист дополняет `core/data-access.md` для проектов на laravel. При конфликте инструкций — приоритет за этим файлом, как более специфичным. Worker загружает оба файла одновременно.
+> This checklist complements `core/data-access.md` for laravel projects. On conflicting instructions, this file takes priority as the more specific one. Worker loads both files simultaneously.
 
-**Это типичные паттерны категории, не исчерпывающий список.** Если ты обнаружил эксплуатируемую уязвимость, проходящую методологию (источник входа → трансформации → sink + конкретный путь эксплуатации) — репортить **обязательно**, даже если она не подпадает ни под один пункт ниже. Чек-лист — указатель приоритета поиска, а не фильтр.
+**These are typical patterns of the category, not an exhaustive list.** If you discover an exploitable vulnerability that passes the methodology (input source → transformations → sink + a concrete exploit path) — reporting is **mandatory**, even if it does not fall under any item below. The checklist is a search-priority pointer, not a filter.
 
 ## Confidence floor rules
 
-- **`Model::find($request->input('id'))`** в мутирующем контроллере без `$this->authorize(...)` / Policy → **confidence ≥ 8** для IDOR. Аргумент «может быть Policy в другом месте» не снижает confidence — ревьюер проверит.
-- **Прямая конкатенация `$request->...` в `DB::raw()` / `whereRaw()` / `selectRaw()` / `orderByRaw()`** → **confidence ≥ 9** для sql_injection.
+- **`Model::find($request->input('id'))`** in a mutating controller without `$this->authorize(...)` / Policy → **confidence ≥ 8** for IDOR. The argument "there may be a Policy elsewhere" does not lower confidence — the reviewer will verify.
+- **Direct concatenation of `$request->...` into `DB::raw()` / `whereRaw()` / `selectRaw()` / `orderByRaw()`** → **confidence ≥ 9** for sql_injection.
 
 ## Raw SQL injection
 
-- `DB::raw($input)` где `$input` — пользовательский
-- `DB::select("... WHERE x = $userInput")` — конкатенация в plain SQL
-- `whereRaw("col = $userInput")` / `selectRaw("$userField")` без параметра-placeholder и `$bindings`
-- `havingRaw("count > $count")` без параметризации
-- `orderByRaw($_GET['sort'])` — нужен whitelist column names
-- `DB::statement($sql)` с user input
+- `DB::raw($input)` where `$input` is user-controlled
+- `DB::select("... WHERE x = $userInput")` — concatenation in plain SQL
+- `whereRaw("col = $userInput")` / `selectRaw("$userField")` without a placeholder parameter and `$bindings`
+- `havingRaw("count > $count")` without parameterization
+- `orderByRaw($_GET['sort'])` — whitelist of column names required
+- `DB::statement($sql)` with user input
 
 ## Query Builder dynamic patterns
 
-- `->where('col', '=', $req->q)` — параметризовано, безопасно. Но `->whereRaw("col = '$value'")` — не безопасно
-- `->orderBy($req->sort)` — нужен `in_array($req->sort, $allowed)` whitelist (column names не параметризуются)
-- `->orderBy('col', $req->dir)` где `$dir` user-controlled и не валидируется (только asc/desc допустимы)
-- Динамическая table в `DB::table($name)` без whitelist
-- `->whereColumn($a, $b)` с user-controlled column names
+- `->where('col', '=', $req->q)` — parameterized, safe. But `->whereRaw("col = '$value'")` — not safe
+- `->orderBy($req->sort)` — needs `in_array($req->sort, $allowed)` whitelist (column names are not parameterized)
+- `->orderBy('col', $req->dir)` where `$dir` is user-controlled and not validated (only asc/desc allowed)
+- Dynamic table in `DB::table($name)` without a whitelist
+- `->whereColumn($a, $b)` with user-controlled column names
 
 ## Eloquent mass assignment
 
-- `Model::create($request->all())` или `->update($request->all())` без `$fillable` или с `$guarded = []` → mass assignment (admin/role/tenant_id и т.д.)
-- `Model::forceCreate($request->all())` — обход $fillable; критичное использование
-- `Model::fill($request->all())->save()` — обход guards если `$guarded = []`
-- `Model::firstOrCreate(['id' => $req->id], $req->all())` — id как поиск + остальные как create данные
-- `$user->update($request->only(['name', 'email']))` — корректно. `$request->only(['name', 'email', 'role'])` — забыли отфильтровать критичное поле
-- Model с `protected $guarded = []` (default to no guard) — все колонки fillable
+- `Model::create($request->all())` or `->update($request->all())` without `$fillable` or with `$guarded = []` → mass assignment (admin/role/tenant_id, etc.)
+- `Model::forceCreate($request->all())` — bypass of $fillable; critical usage
+- `Model::fill($request->all())->save()` — bypass of guards if `$guarded = []`
+- `Model::firstOrCreate(['id' => $req->id], $req->all())` — id as lookup + the rest as create data
+- `$user->update($request->only(['name', 'email']))` — correct. `$request->only(['name', 'email', 'role'])` — forgot to filter the critical field
+- Model with `protected $guarded = []` (default to no guard) — all columns fillable
 
 ## Route-model binding
 
-- Route `/posts/{post}` с implicit binding → Laravel вызывает `Post::findOrFail($id)`. Без Policy / `$this->authorize` в действии → IDOR
-- Custom binding в `RouteServiceProvider::boot` без tenant scope — атакующий читает чужую запись по id
-- `Route::bind('post', fn($id) => Post::find($id))` без projection scope
-- Implicit binding с soft-deletes (`->withTrashed()`) — может вернуть удалённую запись
-- Scoped binding `/users/{user}/posts/{post:slug}` — корректно. Без scope (`{post}` без `:column`) — bypass через slug коллизию
+- Route `/posts/{post}` with implicit binding → Laravel calls `Post::findOrFail($id)`. Without Policy / `$this->authorize` in the action → IDOR
+- Custom binding in `RouteServiceProvider::boot` without tenant scope — attacker reads someone else's record by id
+- `Route::bind('post', fn($id) => Post::find($id))` without a projection scope
+- Implicit binding with soft-deletes (`->withTrashed()`) — may return a deleted record
+- Scoped binding `/users/{user}/posts/{post:slug}` — correct. Without scope (`{post}` without `:column`) — bypass via slug collision
 
 ## Eloquent relationships / N+1 / data leak
 
-- Eager loading чужих связей: `Post::with('user.privateData')->get()` — отдаёт internal через JSON serialization
-- `belongsTo` / `hasMany` / `morphMany` без projection — `.toArray()` отдаёт все колонки
-- `MorphMap` с user-controlled morph type — атакующий проставляет любой класс → Object Injection-like через polymorphic relations
-- Lazy load `$post->user` в loop (N+1) — DoS-ish + потенциальный leak когда forgotten в auth context
+- Eager loading of foreign relations: `Post::with('user.privateData')->get()` — emits internals through JSON serialization
+- `belongsTo` / `hasMany` / `morphMany` without projection — `.toArray()` emits all columns
+- `MorphMap` with user-controlled morph type — attacker sets any class → Object Injection-like via polymorphic relations
+- Lazy load `$post->user` in a loop (N+1) — DoS-ish + potential leak when forgotten in auth context
 
 ## Soft deletes
 
-- `Model::findOrFail` пропускает soft-deleted, но `withTrashed()->find()` — нет. Authz-проверка должна охватывать оба пути
-- `restore()` без проверки оригинального ownership (запись могла быть передана между tenant-ами)
+- `Model::findOrFail` skips soft-deleted, but `withTrashed()->find()` — no. Authz check must cover both paths
+- `restore()` without checking original ownership (the record may have been transferred between tenants)
 
 ## Transaction boundaries
 
-- `DB::transaction(fn() => ...)` с throw inside, перехватываемым внешним try/catch без revert audit log
-- Race condition: `if (!$user->isLocked()) { $user->lock(); }` без `lockForUpdate()` / row lock
-- Optimistic locking missing: `$model->update(['version' => $version, ...])` без version-field check
+- `DB::transaction(fn() => ...)` with throw inside intercepted by an outer try/catch without reverting the audit log
+- Race condition: `if (!$user->isLocked()) { $user->lock(); }` without `lockForUpdate()` / row lock
+- Optimistic locking missing: `$model->update(['version' => $version, ...])` without a version-field check
 
 ## Database raw migrations / seeds
 
-- Migrations с `DB::statement("ALTER TABLE ... ADD COLUMN role DEFAULT 'admin'")` — все существующие пользователи становятся админами (миграция как backdoor)
-- Seeds в production с `User::factory()->admin()->create()` без условия
+- Migrations with `DB::statement("ALTER TABLE ... ADD COLUMN role DEFAULT 'admin'")` — all existing users become admins (migration as a backdoor)
+- Seeds in production with `User::factory()->admin()->create()` without a condition
 
 ## API Resources data exposure
 
-- `class UserResource extends JsonResource { public function toArray() { return parent::toArray($request); } }` — `parent::toArray` отдаёт **все** колонки, включая `password_hash`/`remember_token`/internal flags
-- Resource без `whenLoaded()` — отдаёт null или N+1 query
-- Conditional attribute `'role' => $this->when($request->user()?->isAdmin, $this->role)` забыт — non-admin читает поле
+- `class UserResource extends JsonResource { public function toArray() { return parent::toArray($request); } }` — `parent::toArray` emits **all** columns, including `password_hash`/`remember_token`/internal flags
+- Resource without `whenLoaded()` — emits null or N+1 query
+- Conditional attribute `'role' => $this->when($request->user()?->isAdmin, $this->role)` forgotten — non-admin reads the field
 
 ## GraphQL data exposure (`nuwave/lighthouse`, `rebing/graphql-laravel`)
 
-- **Query depth/complexity без лимита** — `lighthouse.security.max_query_depth=null` или `max_query_complexity=null` → атакующий шлёт глубоко вложенный query (`a { b { c { d { ... } } } }`) → DoS через resolver expansion и/или N+1 на каждом уровне.
-- **Alias batching** — один HTTP запрос с N alias'ами на одной mutation → N выполнений резолвера → bypass rate limit (limit считает HTTP requests, не операции). Пример: `mutation { a: login(email:"e1") { token } b: login(email:"e2") { token } ... }`.
-- **Persisted-queries-only bypass через client-side query manipulation** — server проверяет hash, но `extensions.persistedQuery.sha256Hash` совпадает с hash другой query с тем же текстом → коллизия / hash spoofing. Также: если режим `persisted_queries` accepts unknown hash и сохраняет → atta вкладывает свою query.
-- **Lighthouse `@paginate` без `maxCount`** — `users { paginate(first: 999999) }` → выгрузка всей таблицы.
-- **Rebing `pagination` без `max_per_page`** — то же самое.
-- **Field-level data leak** — resolver возвращает Eloquent model directly (см. `output-render.md → GraphQL output filtering`).
+- **Query depth/complexity without a limit** — `lighthouse.security.max_query_depth=null` or `max_query_complexity=null` → attacker sends a deeply nested query (`a { b { c { d { ... } } } }`) → DoS via resolver expansion and/or N+1 at every level.
+- **Alias batching** — one HTTP request with N aliases of one mutation → N resolver executions → bypass of rate limit (limit counts HTTP requests, not operations). Example: `mutation { a: login(email:"e1") { token } b: login(email:"e2") { token } ... }`.
+- **Persisted-queries-only bypass via client-side query manipulation** — server checks the hash, but `extensions.persistedQuery.sha256Hash` matches the hash of another query with the same text → collision / hash spoofing. Also: if `persisted_queries` mode accepts an unknown hash and stores it → attacker injects their query.
+- **Lighthouse `@paginate` without `maxCount`** — `users { paginate(first: 999999) }` → dump of the entire table.
+- **Rebing `pagination` without `max_per_page`** — same.
+- **Field-level data leak** — resolver returns Eloquent model directly (see `output-render.md → GraphQL output filtering`).
 
-## whereJsonContains / whereJsonPath с user input
+## whereJsonContains / whereJsonPath with user input
 
-- `User::where('roles', '@>', json_encode($req->input('roles')))` — JSON injection через user-контролируемый payload. `$req->input('roles')` может быть массивом/объектом → `json_encode` выдаёт JSON, который как WHERE-pattern matches любые записи (например `[]` matches all).
-- `whereJsonContains('permissions', $req->input('perm'))` — без cast/validate `$req->input('perm')` может быть `null` (matches NULL JSON), `["admin"]` (escalation), вложенным объектом.
-- `whereJsonPath('$.role', '=', $req->path)` — user-controlled JSON path → атакующий читает другие ветки JSON-документа: `$.password_reset.token`.
-- `Model::whereJsonContains('settings->permissions', $req->permission)` — то же.
-- Mitigation: явный cast (`(string)`, `(int)`, in_array allowlist) перед передачей в whereJson*.
+- `User::where('roles', '@>', json_encode($req->input('roles')))` — JSON injection via user-controlled payload. `$req->input('roles')` may be an array/object → `json_encode` produces JSON which as a WHERE pattern matches any records (e.g., `[]` matches all).
+- `whereJsonContains('permissions', $req->input('perm'))` — without cast/validate `$req->input('perm')` may be `null` (matches NULL JSON), `["admin"]` (escalation), a nested object.
+- `whereJsonPath('$.role', '=', $req->path)` — user-controlled JSON path → attacker reads other branches of the JSON document: `$.password_reset.token`.
+- `Model::whereJsonContains('settings->permissions', $req->permission)` — same.
+- Mitigation: explicit cast (`(string)`, `(int)`, in_array allowlist) before passing into whereJson*.
 
 ## Recipe-driven mass_assignment (`routes_authz_matrix` + `sensitive_columns`)
 
-> **Если `framework_specific.laravel.routes_authz_matrix.status == ok`** и **`framework_specific.laravel.sensitive_columns.status == ok`** — используй recipe-данные. Иначе — graceful fallback на grep.
+> **If `framework_specific.laravel.routes_authz_matrix.status == ok`** and **`framework_specific.laravel.sensitive_columns.status == ok`** — use recipe data. Otherwise — graceful fallback to grep.
 
-**С recipe-данными:**
+**With recipe data:**
 
-1. Для каждой записи в `routes_authz_matrix.routes[]` с mutating method (POST/PUT/PATCH/DELETE) **без** `authz_evidence` (или только soft-evidence без `strength=hard_deny`):
-2. Прочитай контроллер по `controller_file:line`.
-3. Если контроллер использует `Model::create($request->all())` / `$model->fill($request->all())` / `$model->update($request->all())` / `Model::firstOrCreate($req->...)` / `forceCreate(...)`:
-   → **confidence ≥ 8** для `mass_assignment` (sink_kind), framework recall сообщает «route без authz + open mass-fill».
-4. Если в составе assignable атрибутов модели (через `$fillable` или отсутствие `$guarded`) есть item из `sensitive_columns.items[]` (например `is_admin`, `role`, `user_id`, `tenant_id`) с `encryption_status: plaintext`:
-   → **confidence ≥ 9** (escalation: пользователь может перезаписать privilege-поле через mass-fill).
+1. For each record in `routes_authz_matrix.routes[]` with a mutating method (POST/PUT/PATCH/DELETE) **without** `authz_evidence` (or with only soft evidence without `strength=hard_deny`):
+2. Read the controller by `controller_file:line`.
+3. If the controller uses `Model::create($request->all())` / `$model->fill($request->all())` / `$model->update($request->all())` / `Model::firstOrCreate($req->...)` / `forceCreate(...)`:
+   → **confidence ≥ 8** for `mass_assignment` (sink_kind), framework recall reports "route without authz + open mass-fill".
+4. If among assignable model attributes (via `$fillable` or absence of `$guarded`) there is an item from `sensitive_columns.items[]` (e.g., `is_admin`, `role`, `user_id`, `tenant_id`) with `encryption_status: plaintext`:
+   → **confidence ≥ 9** (escalation: user can overwrite a privilege field via mass-fill).
 
-**Без recipe-данных (graceful fallback на grep):**
+**Without recipe data (graceful fallback to grep):**
 
-- Grep по проекту: `\$request->all\(\)` / `Request::all\(\)` / `request\(\)->all\(\)` в контроллерах.
-- Для каждого hit — открой модель из контекста (`User::create(...)` → `app/Models/User.php`), проверь:
-  - наличие `protected $fillable = [...]` (allowlist) или `protected $guarded = ['id']` (denylist),
-  - если `$guarded = []` (default) — все колонки fillable → **confidence ≥ 8**;
-  - если в `$fillable` есть privilege-поля (`role`, `is_admin`, `tenant_id`) — **confidence ≥ 9**.
-- Floor выше при отсутствии Policy/`authorize()` вызова в том же методе контроллера (grep `\$this->authorize|Gate::authorize|@can` в файле/методе).
+- Grep through the project: `\$request->all\(\)` / `Request::all\(\)` / `request\(\)->all\(\)` in controllers.
+- For each hit — open the model from context (`User::create(...)` → `app/Models/User.php`), check:
+  - presence of `protected $fillable = [...]` (allowlist) or `protected $guarded = ['id']` (denylist),
+  - if `$guarded = []` (default) — all columns fillable → **confidence ≥ 8**;
+  - if `$fillable` contains privilege fields (`role`, `is_admin`, `tenant_id`) — **confidence ≥ 9**.
+- Higher floor if there is no Policy/`authorize()` call in the same controller method (grep `\$this->authorize|Gate::authorize|@can` in the file/method).
 
 ## Octane Eloquent global scopes (gate: `framework_specific.laravel.runtime.octane=true`)
 
-> **Применяй только если** `framework_specific.laravel.runtime.octane == true`. Без recipe-секции — пропусти (см. graceful fallback в auth.md).
+> **Apply only if** `framework_specific.laravel.runtime.octane == true`. Without the recipe section — skip (see graceful fallback in auth.md).
 
-- **Global scope с `static` cache** — tenant leak between requests:
+- **Global scope with `static` cache** — tenant leak between requests:
   ```php
   class TenantScope implements Scope {
       private static $cachedTenantId; // <-- state survives request boundary
       public function apply(Builder $b, Model $m) {
-          self::$cachedTenantId ??= auth()->id(); // первое значение становится постоянным
+          self::$cachedTenantId ??= auth()->id(); // first value becomes permanent
           $b->where('tenant_id', self::$cachedTenantId);
       }
   }
   ```
-- **Eloquent observer / global event с captured `auth()->user()`** — `User::saving(function ($model) use ($user) { ... })` зарегистрирован один раз в ServiceProvider boot; `$user` фиксируется на первом запросе.
-- **Model `$casts` / `$appends` mutator, делающий DB-вызов с `auth()->id()`** в getter — кэшируется в `$model->cache` атрибуте instance, но instance может переиспользоваться между запросами при определённых eager-load patterns.
-- **`Model::$globalScopes` static** — booted один раз; если scope регистрируется условно (`if (auth()->check()) ...`) в `boot()` — состояние первого запроса.
+- **Eloquent observer / global event with captured `auth()->user()`** — `User::saving(function ($model) use ($user) { ... })` registered once in ServiceProvider boot; `$user` is fixed on the first request.
+- **Model `$casts` / `$appends` mutator making a DB call with `auth()->id()`** in a getter — cached in the `$model->cache` attribute of the instance, but the instance may be reused between requests under certain eager-load patterns.
+- **`Model::$globalScopes` static** — booted once; if the scope is registered conditionally (`if (auth()->check()) ...`) in `boot()` — state of the first request.

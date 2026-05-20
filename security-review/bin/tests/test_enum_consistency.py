@@ -66,7 +66,7 @@ class EnumConsistencyContract(unittest.TestCase):
 
     def test_security_md_lists_all_kinds_from_python(self):
         text = _SECURITY_MD.read_text(encoding="utf-8")
-        kinds = _kinds_from_enum_line(text, "Закрытый enum `sink_kind`")
+        kinds = _kinds_from_enum_line(text, "Closed enum `sink_kind`")
         py_kinds = set(SINK_KIND_TO_FAMILY.keys())
         missing = py_kinds - kinds
         extra = kinds - py_kinds
@@ -79,9 +79,9 @@ class EnumConsistencyContract(unittest.TestCase):
 
     def test_meta_md_lists_all_kinds_from_python(self):
         text = _META_MD.read_text(encoding="utf-8")
-        # The meta file has an enum block introduced by "Значения enum `sink_kind`:"
-        # — capture the next paragraph after that line.
-        marker_re = re.compile(r"Значения enum `sink_kind`:\s*\n", re.MULTILINE)
+        # The meta file has an enum block introduced by "`sink_kind` enum values:"
+        # -- capture the next paragraph after that line.
+        marker_re = re.compile(r"`sink_kind` enum values:\s*\n", re.MULTILINE)
         m = marker_re.search(text)
         self.assertIsNotNone(
             m, "checklists/_meta.md does not contain the enum marker line"

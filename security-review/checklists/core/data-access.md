@@ -1,24 +1,24 @@
 # Data access / SQL injection / Mass assignment (generic)
 
-**Это типичные паттерны категории, не исчерпывающий список.** Если ты обнаружил эксплуатируемую уязвимость, проходящую методологию (источник входа → трансформации → sink + конкретный путь эксплуатации) — репортить **обязательно**, даже если она не подпадает ни под один пункт ниже. Чек-лист — указатель приоритета поиска, а не фильтр.
+**These are typical patterns of the category, not an exhaustive list.** If you discover an exploitable vulnerability that passes the methodology (input source → transformations → sink + concrete exploit path), reporting is **mandatory**, even if it does not fall under any of the items below. The checklist is a search priority pointer, not a filter.
 
 ## Recommended sink_kinds
 
-- `dql_concat` — конкатенация в ORM-query language (DQL/HQL и подобные)
-- `native_sql_concat` — конкатенация в native SQL / driver-level execution
-- `mass_assignment` — незащищённые setters / приём произвольных полей в денормализацию
+- `dql_concat` — concatenation in ORM query language (DQL/HQL and similar)
+- `native_sql_concat` — concatenation in native SQL / driver-level execution
+- `mass_assignment` — unprotected setters / accepting arbitrary fields during denormalization
 
 ## Native SQL / Connection-level execution
 
-- Driver-level execute типа `$conn->executeQuery("SELECT ... WHERE id = " . $id)` без параметров
-- Driver-level statement execution (`executeStatement`/equivalent) с конкатенацией
-- Native query API (`createNativeQuery()` / equivalent) с ручной склейкой SQL
-- PostgreSQL-специфика:
-  - `array_agg()`, `string_agg()` с user input без escape
-  - `jsonb_set()`, `jsonb_insert()` с контролируемым `path` аргументом
-  - `COPY FROM STDIN` с user-controlled данными
-- Dynamic table/column names: если user input попадает в SQL как identifier (не значение) — параметры не помогут, нужен whitelist
+- Driver-level execute like `$conn->executeQuery("SELECT ... WHERE id = " . $id)` without parameters
+- Driver-level statement execution (`executeStatement`/equivalent) with concatenation
+- Native query API (`createNativeQuery()` / equivalent) with manual SQL assembly
+- PostgreSQL specifics:
+  - `array_agg()`, `string_agg()` with user input without escape
+  - `jsonb_set()`, `jsonb_insert()` with a controlled `path` argument
+  - `COPY FROM STDIN` with user-controlled data
+- Dynamic table/column names: if user input lands in SQL as an identifier (not a value), parameters do not help — a whitelist is required
 
-## Mass assignment / небезопасные setters (generic)
+## Mass assignment / unsafe setters (generic)
 
-- `$entity->setX($request->...->get('x'))` без валидации / whitelist полей — любой framework, любой DTO mapper. Прямой setter privileged-полей (`setRoles`, `setIsAdmin`, `setPaid(true)`) достижим через body request → privilege escalation.
+- `$entity->setX($request->...->get('x'))` without validation / whitelist of fields — any framework, any DTO mapper. A direct setter for privileged fields (`setRoles`, `setIsAdmin`, `setPaid(true)`) reachable via request body → privilege escalation.

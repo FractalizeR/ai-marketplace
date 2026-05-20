@@ -38,21 +38,21 @@ def _mk_finding_md(
 ) -> str:
     snippet_block = "\n".join("    " + ln for ln in sink_snippet.splitlines())
     return (
-        f"# Уязвимость {n}: [{category}]: `{sink_file}:{sink_line}`\n"
+        f"# Vulnerability {n}: [{category}]: `{sink_file}:{sink_line}`\n"
         f"\n"
         f"* **Severity**: {severity}\n"
         f"* **Confidence**: {confidence}/10\n"
-        f"* **Категория**: {category}\n"
+        f"* **Category**: {category}\n"
         f"* **sink_kind**: {sink_kind}\n"
         f"* **root_cause_family**: {root_cause_family}\n"
         f"* **enclosing_symbol**: {enclosing_symbol}\n"
         f"* **sink_snippet**: |\n"
         f"{snippet_block}\n"
-        f"* **Описание**: {description}\n"
-        f"* **Путь данных**: X → Y → {sink_file}:{sink_line}\n"
-        f"* **Сценарий эксплуатации**: test payload\n"
-        f"* **Потенциальное влияние**: test impact\n"
-        f"* **Рекомендация**: test fix\n"
+        f"* **Description**: {description}\n"
+        f"* **Data path**: X -> Y -> {sink_file}:{sink_line}\n"
+        f"* **Exploitation scenario**: test payload\n"
+        f"* **Impact**: test impact\n"
+        f"* **Recommendation**: test fix\n"
         f"* **Discovered via**: {discovered_via}\n"
         f"\n"
     )
@@ -91,11 +91,11 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(f.confidence, 9)
         self.assertEqual(f.slice_id, "W2")
 
-    def test_parses_cyrillic_keys(self):
-        """Регрессия: FIELD_RE должен принимать кириллические ключи
-        (Категория, Описание, Путь данных, Сценарий эксплуатации,
-        Потенциальное влияние, Рекомендация) — без этого `category` пуст
-        и индекс показывает `—`, заголовок показывает `[]`."""
+    def test_parses_english_keys(self):
+        """Regression: FIELD_RE must accept English field keys
+        (Category, Description, Data path, Exploitation scenario,
+        Impact, Recommendation) -- without this `category` is empty
+        and the index shows `--`, the header shows `[]`."""
         md = _mk_finding_md(
             n=1,
             sink_file="src/X.php",
@@ -105,15 +105,15 @@ class ParserTests(unittest.TestCase):
             enclosing_symbol="X::m",
             sink_snippet="$x = 1;",
             category="oauth_state_missing",
-            description="OAuth state отсутствует",
+            description="OAuth state missing",
         )
         p = _write_findings(md, "SECURITY_REVIEW_RESULTS_W1.md")
         findings = df.parse_findings_file(p)
         self.assertEqual(len(findings), 1)
         f = findings[0]
         self.assertEqual(f.category, "oauth_state_missing")
-        self.assertEqual(f.description, "OAuth state отсутствует")
-        self.assertEqual(f.data_path, "X → Y → src/X.php:1")
+        self.assertEqual(f.description, "OAuth state missing")
+        self.assertEqual(f.data_path, "X -> Y -> src/X.php:1")
         self.assertEqual(f.exploit, "test payload")
         self.assertEqual(f.impact, "test impact")
         self.assertEqual(f.recommendation, "test fix")
@@ -133,11 +133,11 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(findings[1].sink_file, "src/B.php")
 
     def test_php_attribute_in_snippet_not_treated_as_heading(self):
-        """Регрессия: парсер прерывал sink_snippet на любой строке, начинающейся
-        с `#`, в т.ч. на PHP attributes `#[ORM\\Column]` / `#[Route]` / `#[AsCommand]`.
-        Это давало пустой snippet → sink_hash='nohash00' → дедуп терял stable hash
-        для всех Doctrine entity property findings (encryption-at-rest).
-        Сейчас прерывает только настоящие markdown headings (`# H1`, `## H2`)."""
+        """Regression: the parser broke sink_snippet on any line starting with `#`,
+        including PHP attributes `#[ORM\\Column]` / `#[Route]` / `#[AsCommand]`.
+        This produced an empty snippet -> sink_hash='nohash00' -> dedupe lost the
+        stable hash for all Doctrine entity property findings (encryption-at-rest).
+        Now it only breaks on real markdown headings (`# H1`, `## H2`)."""
         snippet = (
             "#[ORM\\Column(type: 'string', nullable: false)]\n"
             "private string $accessToken;\n"
@@ -160,8 +160,9 @@ class ParserTests(unittest.TestCase):
                             f"snippet must produce stable hash, got nohash00 with snippet={f.sink_snippet!r}")
 
     def test_markdown_heading_in_snippet_still_breaks(self):
-        """Control: настоящий markdown heading (`#` + space) внутри snippet
-        прерывает извлечение — это намеренно, иначе один блок «съедает» соседний."""
+        """Control: a real markdown heading (`#` + space) inside the snippet
+        breaks extraction -- this is intentional, otherwise one block would
+        consume its neighbor."""
         from dedupe.parser import _extract_snippet_block
         lines = [
             "* **sink_snippet**: |",
@@ -175,10 +176,10 @@ class ParserTests(unittest.TestCase):
                          "real `# H1` heading must stop snippet extraction")
 
     def test_parser_unknown_sink_kind(self):
-        """Регрессия: typo `weakrandom` (вместо `weak_random`) не молча
-        проскакивает — парсер эмитирует UserWarning, finding получает
-        `is_custom_sink=True`, и через `dedupe()` помечается `[CUSTOM_SINK]`
-        (либо в main с auto-promote, либо в manual_review)."""
+        """Regression: a typo `weakrandom` (instead of `weak_random`) does not
+        slip through silently -- the parser emits a UserWarning, the finding
+        gets `is_custom_sink=True`, and `dedupe()` flags it as `[CUSTOM_SINK]`
+        (either in main via auto-promote, or in manual_review)."""
         import warnings as _warnings
         md = _mk_finding_md(
             n=1,
@@ -216,8 +217,8 @@ class ParserTests(unittest.TestCase):
         self.assertIn(df.FLAG_CUSTOM_SINK, all_results[0].flags)
 
     def test_route_attribute_in_snippet_kept(self):
-        """Покрывает `#[Route('/path')]` — другой типичный PHP attribute,
-        часто встречающийся в controller findings."""
+        """Covers `#[Route('/path')]` -- another typical PHP attribute
+        frequently seen in controller findings."""
         snippet = (
             "#[Route('/api/v1/oauth/callback', methods: ['GET'])]\n"
             "public function handleAccessCode(Request $request): Response {"
@@ -330,8 +331,8 @@ class DedupeTests(unittest.TestCase):
         self.assertCountEqual(merged[0].slice_ids, ["W1", "W2"])
 
     def test_different_sink_hash_fallback_merge(self):
-        """После v6.1 адаптивного дедупа: разные hash при одинаковом
-        (file, kind, family, symbol) → merge с флагом, не split."""
+        """After v6.1 adaptive dedupe: different hash with identical
+        (file, kind, family, symbol) -> merge with flag, not split."""
         f1 = df.Finding(
             title_line="h1",
             sink_file="a.php", sink_kind="dql_concat",
@@ -349,14 +350,14 @@ class DedupeTests(unittest.TestCase):
         self.assertIn(df.FLAG_MERGED_DESPITE_HASH_MISMATCH, merged[0].flags)
 
     def test_hash_mismatch_merges_pick_higher_confidence(self):
-        """Pinned regression for [MERGED_DESPITE_HASH_MISMATCH]: при одинаковом
-        (file, kind, family, symbol), но разных snippet'ах (→ разные sink_hash)
-        и разных confidence — Pass 2 fallback heuristic merge'ит обе записи и
-        выбирает primary с бóльшим confidence. (`_pick_primary` ranks by
-        (severity, confidence, len(raw_body)); confidence breaks the tie here
-        before raw_body length is even consulted.) На production run эта
-        эвристика сработала 4 раза; тест защищает её от непреднамеренного
-        изменения при рефакторинге."""
+        """Pinned regression for [MERGED_DESPITE_HASH_MISMATCH]: with identical
+        (file, kind, family, symbol) but different snippets (-> different
+        sink_hash) and different confidence -- the Pass 2 fallback heuristic
+        merges both records and picks the primary with the higher confidence.
+        (`_pick_primary` ranks by (severity, confidence, len(raw_body));
+        confidence breaks the tie here before raw_body length is even
+        consulted.) On a production run this heuristic fired 4 times; the test
+        guards it against unintentional changes during refactoring."""
         f_low = df.Finding(
             title_line="h_low",
             sink_file="src/Repo.php", sink_line=42,
@@ -385,20 +386,21 @@ class DedupeTests(unittest.TestCase):
         self.assertEqual(manual, [])
         mf = merged[0]
         self.assertIn(df.FLAG_MERGED_DESPITE_HASH_MISMATCH, mf.flags)
-        # Primary должен быть finding с бóльшим confidence (severity tied → confidence wins).
+        # Primary must be the finding with the higher confidence (severity tied -> confidence wins).
         self.assertEqual(mf.primary.title_line, "h_high")
         self.assertEqual(mf.primary.confidence, 10)
         self.assertCountEqual(mf.slice_ids, ["W_low", "W_high"])
 
     def test_hash_mismatch_does_not_cross_sink_kind(self):
-        """Negative-control для [MERGED_DESPITE_HASH_MISMATCH]: Pass 2 fallback
-        heuristic дропает только sink_hash, но НЕ sink_kind. Два finding'а с
-        одинаковым (file, family, symbol) и разными sink_kind остаются разными
-        merged-записями (защита от over-merge при рефакторинге Pass 2).
+        """Negative control for [MERGED_DESPITE_HASH_MISMATCH]: the Pass 2
+        fallback heuristic drops only sink_hash, NOT sink_kind. Two findings
+        with identical (file, family, symbol) and different sink_kind stay as
+        separate merged records (guard against over-merge when refactoring
+        Pass 2).
 
-        Используем разные sink_line, чтобы Pass 3 cross-sink merge тоже не
-        схлопнул их (он группирует по (file, line, symbol)) — иначе тест
-        превратится в проверку Pass 3, а не Pass 2."""
+        Different sink_line is used so that Pass 3 cross-sink merge does not
+        collapse them either (it groups by (file, line, symbol)) -- otherwise
+        the test would verify Pass 3, not Pass 2."""
         f_dql = df.Finding(
             title_line="h_dql",
             sink_file="src/Repo.php", sink_line=42,
@@ -695,7 +697,7 @@ class SymbolNormalizationTests(unittest.TestCase):
 
     def test_strips_parenthetical(self):
         self.assertEqual(
-            _normalize_symbol("Foo::bar (и все остальные event-контроллеры)"),
+            _normalize_symbol("Foo::bar (and all other event controllers)"),
             "Foo::bar",
         )
 
@@ -706,8 +708,8 @@ class SymbolNormalizationTests(unittest.TestCase):
         )
 
     def test_strips_namespace_from_bare_class(self):
-        """Регресс из event v2.2.0: entity-sink findings имеют enclosing_symbol
-        = полный FQCN без `::method`."""
+        """Regression from event v2.2.0: entity-sink findings carry
+        enclosing_symbol = full FQCN without `::method`."""
         self.assertEqual(
             _normalize_symbol("App\\Crm\\Core\\Common\\Integration\\IntegrationToken"),
             "IntegrationToken",
@@ -727,8 +729,8 @@ class SymbolNormalizationTests(unittest.TestCase):
         self.assertEqual(_normalize_symbol("UNKNOWN"), "unknown")
 
     def test_merges_findings_with_namespace_variations(self):
-        """Регресс из production run: воркеры пишут symbol по-разному,
-        fallback merge должен их слить."""
+        """Regression from a production run: workers write the symbol in
+        different ways, fallback merge must collapse them."""
         snippet = "code"
         f1 = df.Finding(
             title_line="h1",
@@ -781,8 +783,8 @@ class FallbackMergeTests(unittest.TestCase):
         self.assertNotIn(df.FLAG_MERGED_DESPITE_HASH_MISMATCH, merged[0].flags)
 
     def test_different_hash_same_identity_fallback_merge(self):
-        """Разные snippet'ы (разная нормализация), но совпадает
-        file + kind + family + symbol → должны слиться с флагом."""
+        """Different snippets (different normalization), but matching
+        file + kind + family + symbol -> must merge with a flag."""
         f1 = self._mk("$logger->debug('Request', ['headers' => $var_1])")
         f2 = self._mk("$this->logger->debug('Request', ['headers' => $req])")
         f3 = self._mk("$requestLogger->debug(..., ['headers' => $request->headers])")
@@ -797,7 +799,7 @@ class FallbackMergeTests(unittest.TestCase):
         self.assertEqual(len(all_items), 3)
 
     def test_different_identity_no_fallback_merge(self):
-        """Разные файлы — не сливаются даже на fallback."""
+        """Different files -- do not merge even via fallback."""
         f1 = self._mk("code1")
         f1.sink_file = "src/A.php"
         f2 = self._mk("code2")
@@ -806,8 +808,8 @@ class FallbackMergeTests(unittest.TestCase):
         self.assertEqual(len(merged), 2)
 
     def test_different_sink_kind_cross_sink_merge(self):
-        """Разные sink_kind но одинаковая (file, line, symbol) — pass 3
-        cross-sink merge схлопывает с флагом [CROSS_SINK_MERGE]."""
+        """Different sink_kind but identical (file, line, symbol) -- pass 3
+        cross-sink merge collapses them with the [CROSS_SINK_MERGE] flag."""
         f1 = self._mk("code")
         f1.sink_kind = "pii_in_logs"
         f2 = self._mk("code2")
@@ -823,7 +825,7 @@ class FallbackMergeTests(unittest.TestCase):
         )
 
     def test_different_sink_kind_different_location_no_merge(self):
-        """Разные sink_kind И разные локации — не сливаются."""
+        """Different sink_kind AND different locations -- do not merge."""
         f1 = self._mk("code")
         f1.sink_kind = "pii_in_logs"
         f1.sink_line = 20
@@ -842,12 +844,12 @@ class SnippetParserTests(unittest.TestCase):
             "* **sink_snippet**: |\n"
             "    $q = 'SELECT';\n"
             "    $q .= $user;\n"
-            "* **Описание**: test\n"
+            "* **Description**: test\n"
         )
-        f = _parse_finding_block("# Уязвимость 1: [x]: `a.php:1`", body)
+        f = _parse_finding_block("# Vulnerability 1: [x]: `a.php:1`", body)
         self.assertIn("SELECT", f.sink_snippet)
         self.assertIn("$user", f.sink_snippet)
-        self.assertNotIn("Описание", f.sink_snippet)
+        self.assertNotIn("Description", f.sink_snippet)
 
     def test_snippet_with_fenced_block(self):
         body = (
@@ -857,9 +859,9 @@ class SnippetParserTests(unittest.TestCase):
             "    $q = 'SELECT';\n"
             "    $q .= $user;\n"
             "    ```\n"
-            "* **Описание**: test\n"
+            "* **Description**: test\n"
         )
-        f = _parse_finding_block("# Уязвимость 1: [x]: `a.php:1`", body)
+        f = _parse_finding_block("# Vulnerability 1: [x]: `a.php:1`", body)
         self.assertIn("SELECT", f.sink_snippet)
         self.assertNotIn("```", f.sink_snippet)
 
@@ -867,9 +869,9 @@ class SnippetParserTests(unittest.TestCase):
         body = (
             "* **sink_kind**: dql_concat\n"
             "* **sink_snippet**: $q = $user . $x;\n"
-            "* **Описание**: test\n"
+            "* **Description**: test\n"
         )
-        f = _parse_finding_block("# Уязвимость 1: [x]: `a.php:1`", body)
+        f = _parse_finding_block("# Vulnerability 1: [x]: `a.php:1`", body)
         self.assertEqual(f.sink_snippet, "$q = $user . $x;")
 
     def test_snippet_multiline_without_pipe(self):
@@ -878,35 +880,35 @@ class SnippetParserTests(unittest.TestCase):
             "* **sink_snippet**:\n"
             "    $a = 1;\n"
             "    $b = 2;\n"
-            "* **Описание**: test\n"
+            "* **Description**: test\n"
         )
-        f = _parse_finding_block("# Уязвимость 1: [x]: `a.php:1`", body)
+        f = _parse_finding_block("# Vulnerability 1: [x]: `a.php:1`", body)
         self.assertIn("$a", f.sink_snippet)
         self.assertIn("$b", f.sink_snippet)
 
 
 class RenderingTests(unittest.TestCase):
     def test_render_replays_full_body(self):
-        """Финальный отчёт должен содержать Описание / Exploit / Recommendation
-        из исходного raw_body, а не терять их."""
+        """The final report must contain Description / Exploit / Recommendation
+        from the original raw_body, not lose them."""
         md = _mk_finding_md(
             1, "src/R.php", 10, "dql_concat", "injection", "R::m",
             "$q = 'SELECT' . $user;",
-            description="SQL injection через user input",
+            description="SQL injection via user input",
         )
         p = _write_findings(md, "SECURITY_REVIEW_RESULTS_W1.md")
         findings = df.parse_findings_file(p)
         merged, manual = df.dedupe(findings)
         self.assertEqual(len(merged), 1)
         report = df.render_finding(1, merged[0])
-        self.assertIn("Описание", report)
-        self.assertIn("SQL injection через user input", report)
-        self.assertIn("Сценарий эксплуатации", report)
-        self.assertIn("Рекомендация", report)
+        self.assertIn("Description", report)
+        self.assertIn("SQL injection via user input", report)
+        self.assertIn("Exploitation scenario", report)
+        self.assertIn("Recommendation", report)
         self.assertIn("sink_hash", report)
 
     def test_title_single_category_verbatim(self):
-        """Заголовок показывает категорию как есть, если она одна."""
+        """The header shows the category verbatim when there is only one."""
         md = _mk_finding_md(
             1, "src/R.php", 10, "dql_concat", "injection", "R::m",
             "$q = 'SELECT' . $user;", category="sql_injection_dql",
@@ -918,7 +920,7 @@ class RenderingTests(unittest.TestCase):
         self.assertNotIn("more)", title_line)
 
     def test_title_multiple_categories_trimmed(self):
-        """Регресс v2.2.0 event: multi-merge категорий раздувал заголовок."""
+        """Regression v2.2.0 event: multi-merge of categories bloated the header."""
         f1 = df.Finding(
             title_line="h1",
             sink_file="src/R.php", sink_line=10,
@@ -926,7 +928,7 @@ class RenderingTests(unittest.TestCase):
             enclosing_symbol="R::m",
             sink_snippet="snip",
             category="sql_injection_primary",
-            raw_body="* **Категория**: sql_injection_primary\n",
+            raw_body="* **Category**: sql_injection_primary\n",
         )
         f2 = df.Finding(
             title_line="h2",
@@ -935,7 +937,7 @@ class RenderingTests(unittest.TestCase):
             enclosing_symbol="R::m",
             sink_snippet="snip",
             category="sql_injection_variant_two",
-            raw_body="* **Категория**: sql_injection_variant_two\n",
+            raw_body="* **Category**: sql_injection_variant_two\n",
         )
         f3 = df.Finding(
             title_line="h3",
@@ -944,7 +946,7 @@ class RenderingTests(unittest.TestCase):
             enclosing_symbol="R::m",
             sink_snippet="snip",
             category="sql_injection_variant_three",
-            raw_body="* **Категория**: sql_injection_variant_three\n",
+            raw_body="* **Category**: sql_injection_variant_three\n",
         )
         merged, _ = df.dedupe([f1, f2, f3])
         self.assertEqual(len(merged), 1)
@@ -973,8 +975,8 @@ class RenderingTests(unittest.TestCase):
 
 
 class ParseFailedFindingTests(unittest.TestCase):
-    """Findings без sink_file не выбрасываются — добавляются в manual_review
-    с флагом [PARSE_FAILED]."""
+    """Findings without sink_file are not dropped -- they go to manual_review
+    with the [PARSE_FAILED] flag."""
 
     def _mk(self, sink_file: str = "src/X.php", sink_line: int = 10) -> df.Finding:
         return df.Finding(
@@ -1001,7 +1003,7 @@ class ParseFailedFindingTests(unittest.TestCase):
         self.assertIn(df.FLAG_PARSE_FAILED, manual[0].flags)
 
     def test_line_zero_alone_tolerated(self):
-        """sink_line=0 с валидным sink_file — оставить в main."""
+        """sink_line=0 with a valid sink_file -- keep in main."""
         f = self._mk(sink_file="config/packages/security.yaml", sink_line=0)
         merged, manual = df.dedupe([f])
         parse_failed = [m for m in manual if df.FLAG_PARSE_FAILED in m.flags]
@@ -1018,7 +1020,7 @@ class ParseFailedFindingTests(unittest.TestCase):
 
 
 class CrossSinkMergeTests(unittest.TestCase):
-    """Pass 3: разные воркеры выбирают разные sink_kind для одной уязвимости."""
+    """Pass 3: different workers pick different sink_kind for the same vulnerability."""
 
     def _mk(self, sink_kind: str, family: str = "crypto",
             severity: str = "High", snippet: str = "code") -> df.Finding:
@@ -1042,7 +1044,7 @@ class CrossSinkMergeTests(unittest.TestCase):
         self.assertTrue(len(target.alternative_sink_kinds) >= 1)
 
     def test_cross_sink_prefers_well_known_kind(self):
-        """При выборе primary — предпочитаем не-other:* sink_kind."""
+        """When choosing the primary -- prefer a non-other:* sink_kind."""
         f_custom = self._mk("other:plaintext_oauth_token_at_rest",
                             snippet="code_a")
         f_known = self._mk("hardcoded_secret", snippet="code_b")
@@ -1061,7 +1063,7 @@ class CrossSinkMergeTests(unittest.TestCase):
         self.assertEqual(target.severity, "High")
 
     def test_cross_sink_different_symbol_no_merge(self):
-        """Разные enclosing_symbol → не pass3-merge."""
+        """Different enclosing_symbol -> no pass3 merge."""
         f1 = self._mk("hardcoded_secret", snippet="a")
         f2 = self._mk("other:x", snippet="b")
         f2.enclosing_symbol = "OtherClass::foo"
@@ -1070,8 +1072,8 @@ class CrossSinkMergeTests(unittest.TestCase):
 
 
 class AutoPromoteTests(unittest.TestCase):
-    """other:* находки с severity>=High, confidence>=8 и known symbol
-    промоутятся в основной список."""
+    """other:* findings with severity>=High, confidence>=8 and a known symbol
+    are promoted to the main list."""
 
     def _mk(self, severity: str = "Critical", confidence: int = 9,
             symbol: str = "Auth::check", sink_file: str = "src/Auth.php") -> df.Finding:
@@ -1119,7 +1121,7 @@ class AutoPromoteTests(unittest.TestCase):
 
 
 class SplitReportTests(unittest.TestCase):
-    """Отчёт нарезается по root_cause_family в отдельные файлы + index."""
+    """Report is sliced by root_cause_family into separate files + index."""
 
     def _mk(self, family: str, severity: str = "High",
             sink_file: str = "src/X.php", sink_line: int = 10,
@@ -1182,7 +1184,7 @@ class SplitReportTests(unittest.TestCase):
             self.assertEqual(len(written), 3)
 
     def test_write_split_report_manual_includes_parse_failed(self):
-        """Custom-sink Medium и parse-failed оба попадают в manual_review.md."""
+        """Custom-sink Medium and parse-failed both land in manual_review.md."""
         f_manual = self._mk("authz", severity="Medium",
                             sink_kind="other:experimental")
         f_bad = df.Finding(
@@ -1202,7 +1204,7 @@ class SplitReportTests(unittest.TestCase):
             df.write_split_report(merged, manual, out, details)
             self.assertTrue((details / "manual_review.md").exists())
             self.assertFalse((details / "malformed.md").exists(),
-                             "malformed.md больше не генерируется — всё в manual_review.md")
+                             "malformed.md is no longer generated -- everything in manual_review.md")
             index_text = out.read_text(encoding="utf-8")
             self.assertIn("Manual review: 2 finding", index_text)
             self.assertIn("parse failed: 1", index_text)
@@ -1212,8 +1214,7 @@ class SplitReportTests(unittest.TestCase):
 
 
 class EndToEndFixtureTests(unittest.TestCase):
-    """Фикстура из двух wave-файлов, покрывающая одновременно ключевые
-    пути дедупа."""
+    """Fixture of two wave files covering the key dedupe paths together."""
 
     FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "e2e"
 
@@ -1265,56 +1266,56 @@ class EndToEndFixtureTests(unittest.TestCase):
         self.assertEqual(len(parse_failed), 1)
         self.assertEqual(parse_failed[0].primary.sink_file, "")
 
-    def test_cyrillic_category_parsed(self):
+    def test_category_parsed(self):
         main, _ = self._run_dedupe()
         for mf in main:
             self.assertTrue(
                 mf.categories or mf.primary.category,
-                f"category пустая для {mf.primary.sink_file}:{mf.primary.sink_line}",
+                f"category empty for {mf.primary.sink_file}:{mf.primary.sink_line}",
             )
 
 
 class TitleFallbackParsingTests(unittest.TestCase):
-    """Fallback: title без :line — парсер извлекает файл из backtick content."""
+    """Fallback: title without :line -- parser extracts the file from backtick content."""
 
     def test_title_with_file_no_line_extracts_file(self):
-        header = "# Уязвимость 5: [Secrets in URL]: `config/api/packages/security.yaml`"
+        header = "# Vulnerability 5: [Secrets in URL]: `config/api/packages/security.yaml`"
         body = (
             "* **Severity**: Medium\n"
             "* **Confidence**: 8/10\n"
-            "* **Категория**: Secrets in URL\n"
+            "* **Category**: Secrets in URL\n"
             "* **sink_kind**: pii_in_logs\n"
             "* **root_cause_family**: disclosure\n"
-            "* **enclosing_symbol**: конфиг lexik_jwt_authentication\n"
+            "* **enclosing_symbol**: lexik_jwt_authentication config\n"
             "* **sink_snippet**: |\n"
             "    $var_1->getRequestUri()\n"
-            "* **Описание**: test\n"
+            "* **Description**: test\n"
         )
         f = _parse_finding_block(header, body)
         self.assertEqual(f.sink_file, "config/api/packages/security.yaml")
         self.assertEqual(f.sink_line, 0)
 
     def test_title_with_multi_path_extracts_first(self):
-        header = "# Уязвимость 5: [x]: `config/api/packages/security.yaml + LogRequestListener`"
+        header = "# Vulnerability 5: [x]: `config/api/packages/security.yaml + LogRequestListener`"
         body = "* **Severity**: Medium\n* **sink_kind**: pii_in_logs\n"
         f = _parse_finding_block(header, body)
         self.assertEqual(f.sink_file, "config/api/packages/security.yaml")
 
     def test_title_with_proper_loc_still_preferred(self):
-        header = "# Уязвимость 1: [x]: `src/Foo.php:42`"
+        header = "# Vulnerability 1: [x]: `src/Foo.php:42`"
         body = "* **Severity**: High\n"
         f = _parse_finding_block(header, body)
         self.assertEqual(f.sink_file, "src/Foo.php")
         self.assertEqual(f.sink_line, 42)
 
     def test_title_no_backticks_no_file(self):
-        header = "# Уязвимость 1: [x]: no backticks"
+        header = "# Vulnerability 1: [x]: no backticks"
         body = "* **Severity**: High\n"
         f = _parse_finding_block(header, body)
         self.assertEqual(f.sink_file, "")
 
     def test_fallback_finding_not_parse_failed(self):
-        header = "# Уязвимость 1: [x]: `config/security.yaml`"
+        header = "# Vulnerability 1: [x]: `config/security.yaml`"
         body = (
             "* **Severity**: High\n"
             "* **Confidence**: 9/10\n"
@@ -1332,14 +1333,14 @@ class TitleFallbackParsingTests(unittest.TestCase):
 
 
 class ReflowMarkdownTests(unittest.TestCase):
-    """Формат финальных .md: reflow обязан резать на ≤width."""
+    """Final .md formatting: reflow must wrap to <=width."""
 
     def test_short_lines_unchanged(self):
         text = "# Header\n\nShort line.\n\n* **Severity**: Critical\n"
         self.assertEqual(df.reflow_markdown(text, width=100), text)
 
     def test_wraps_long_prose(self):
-        long_line = "Это очень длинный абзац " * 20
+        long_line = "This is a very long paragraph " * 20
         out = df.reflow_markdown(long_line, width=80)
         self.assertNotEqual(out, long_line)
         for line in out.splitlines():
@@ -1371,13 +1372,13 @@ class ReflowMarkdownTests(unittest.TestCase):
 
     def test_wraps_field_line_with_hanging_indent(self):
         long_desc = (
-            "* **Описание**: OAuth state отсутствует, атакующий может подменить "
-            "токен в callback и получить доступ к чужой CRM через refresh в IntegrationTokenManager."
+            "* **Description**: OAuth state is missing, an attacker can substitute "
+            "the token in the callback and gain access to another CRM via refresh in IntegrationTokenManager."
         )
         out = df.reflow_markdown(long_desc, width=80)
         lines = out.splitlines()
         self.assertGreater(len(lines), 1)
-        self.assertTrue(lines[0].startswith("* **Описание**:"))
+        self.assertTrue(lines[0].startswith("* **Description**:"))
         for cont in lines[1:]:
             self.assertTrue(cont.startswith(" "))
             self.assertFalse(cont.lstrip().startswith(("* ", "- ", "+ ")))
@@ -1386,8 +1387,8 @@ class ReflowMarkdownTests(unittest.TestCase):
 
     def test_wraps_numbered_list_with_hanging_indent(self):
         long_item = (
-            "  1. Реализовать state parameter (random ≥128 bit, привязанный к "
-            "admin-сессии или к pending-flow в БД с TTL 5-10 мин), сравнивать в callback через hash_equals."
+            "  1. Implement a state parameter (random >=128 bit, bound to the "
+            "admin session or to a pending flow in the DB with TTL 5-10 min), compare in the callback via hash_equals."
         )
         out = df.reflow_markdown(long_item, width=80)
         lines = out.splitlines()
@@ -1403,18 +1404,18 @@ class ReflowMarkdownTests(unittest.TestCase):
         self.assertEqual(out, long_heading)
 
     def test_reflow_applied_in_split_report(self):
-        """Регресс: убедиться, что write_split_report применяет reflow."""
+        """Regression: confirm that write_split_report applies reflow."""
         f = _parse_finding_block(
-            "# Уязвимость 1: [x]: `a.php:1`",
+            "# Vulnerability 1: [x]: `a.php:1`",
             "* **Severity**: High\n"
             "* **Confidence**: 9/10\n"
-            "* **Категория**: test_cat\n"
+            "* **Category**: test_cat\n"
             "* **sink_kind**: native_sql_concat\n"
             "* **root_cause_family**: injection\n"
             "* **enclosing_symbol**: A::m\n"
             "* **sink_snippet**: |\n"
             "    $x = 1;\n"
-            "* **Описание**: " + ("очень длинный текст " * 30) + "\n",
+            "* **Description**: " + ("very long text " * 30) + "\n",
         )
         f.source_file = "W1.md"
         merged, manual = df.dedupe([f])

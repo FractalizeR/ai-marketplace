@@ -1,42 +1,42 @@
 # Laravel stack — detection
 
-Этот файл описывает, как `recipes/laravel` детектирует Laravel-проект и активирует чек-листы из `frameworks/laravel/`. Сам по себе чек-листом не является — пунктов с уязвимостями нет.
+This file describes how `recipes/laravel` detects a Laravel project and activates checklists from `frameworks/laravel/`. It is not a checklist itself — there are no vulnerability items.
 
-## Признаки Laravel-проекта (по `composer.json` и файловой структуре)
+## Laravel project signals (by `composer.json` and file structure)
 
-`bin/recon/recipes/laravel.py::detect()` отмечает проект как Laravel при сочетании сигналов: `composer.json` содержит `laravel/framework` в `require`/`require-dev`; в корне проекта присутствует `artisan` (CLI binary); `config/app.php` существует; `app/Models/` существует. Каждый сигнал даёт вес; сумма ≥ 0.7 → recipe выбран. См. `SIGNAL_WEIGHTS` в исходниках.
+`bin/recon/recipes/laravel.py::detect()` marks the project as Laravel on a combination of signals: `composer.json` contains `laravel/framework` in `require`/`require-dev`; `artisan` (CLI binary) is present at the project root; `config/app.php` exists; `app/Models/` exists. Each signal carries a weight; sum ≥ 0.7 → recipe selected. See `SIGNAL_WEIGHTS` in the source.
 
-При срабатывании recon-агент пишет в `<review_root>/CONTEXT.md`:
+On a hit, the recon agent writes into `<review_root>/CONTEXT.md`:
 
 ```yaml
 stack:
   framework: laravel
-  framework_version: <constraint из composer.json require.laravel/framework>
+  framework_version: <constraint from composer.json require.laravel/framework>
   detected_via: composer.json+artisan+config+app/Models
 ```
 
-`plan_waves.resolve_checklists(themes, stack="laravel", plugin_root)` тогда добавляет к каждой теме файл `frameworks/laravel/{theme}.md`, если он существует.
+`plan_waves.resolve_checklists(themes, stack="laravel", plugin_root)` then adds to each theme the file `frameworks/laravel/{theme}.md`, if it exists.
 
-## Что попадает в `framework_specific.laravel` bag
+## What lands in the `framework_specific.laravel` bag
 
-Recipe заполняет (или помечает `status: unknown` с reason) ключи:
+The recipe fills in (or marks `status: unknown` with reason) the keys:
 
-- `policies` — классы из `app/Policies/*` (имя класса, файл, конвенциальная связка с моделью);
-- `service_providers` — классы из `app/Providers/*` (включая RouteServiceProvider, AppServiceProvider, custom-провайдеры);
-- `middleware_groups` — содержимое `app/Http/Kernel.php`: `$middleware` (global), `$middlewareGroups` (web/api), `$middlewareAliases`/`$routeMiddleware` (route-level aliases);
-- `form_requests` — классы из `app/Http/Requests/*` extending `Illuminate\Foundation\Http\FormRequest`;
-- `graphql_layer` — present-if-detected: scalar `{library_name, schema_files, resolvers_dir}` для `nuwave/lighthouse`, `rebing/graphql-laravel`, `api-platform/core`, `webonyx/graphql-php`. См. `bin/recon/graphql_detect.py`.
+- `policies` — classes from `app/Policies/*` (class name, file, conventional pairing with the model);
+- `service_providers` — classes from `app/Providers/*` (including RouteServiceProvider, AppServiceProvider, custom providers);
+- `middleware_groups` — contents of `app/Http/Kernel.php`: `$middleware` (global), `$middlewareGroups` (web/api), `$middlewareAliases`/`$routeMiddleware` (route-level aliases);
+- `form_requests` — classes from `app/Http/Requests/*` extending `Illuminate\Foundation\Http\FormRequest`;
+- `graphql_layer` — present-if-detected: scalar `{library_name, schema_files, resolvers_dir}` for `nuwave/lighthouse`, `rebing/graphql-laravel`, `api-platform/core`, `webonyx/graphql-php`. See `bin/recon/graphql_detect.py`.
 
-См. `bin/recon/recipes/laravel.py::FRAMEWORK_SPECIFIC_SCHEMA` для точного shape.
+See `bin/recon/recipes/laravel.py::FRAMEWORK_SPECIFIC_SCHEMA` for the exact shape.
 
-## Известные ограничения детекции
+## Known detection limitations
 
-- **Laravel 11+** перенесли middleware из `app/Http/Kernel.php` в `bootstrap/app.php` (closure-based). Recipe MVP не парсит bootstrap-стиль — `middleware_groups` будет `status: none`. Воркер должен прочитать `bootstrap/app.php` напрямую.
-- **Lumen** не поддерживается — другая структура; detect не сработает.
-- **Service-locator container bindings** (`$this->app->bind(...)`, deferred providers) парсятся только частично (имя класса провайдера, не его register/boot тело).
+- **Laravel 11+** moved middleware from `app/Http/Kernel.php` into `bootstrap/app.php` (closure-based). Recipe MVP does not parse bootstrap style — `middleware_groups` will be `status: none`. Worker must read `bootstrap/app.php` directly.
+- **Lumen** is not supported — different structure; detect will not fire.
+- **Service-locator container bindings** (`$this->app->bind(...)`, deferred providers) are parsed only partially (provider class name, not its register/boot body).
 
-## Что значит «framework: none/unknown»
+## What "framework: none/unknown" means
 
-`none` — generic-PHP проект без фреймворка. `frameworks/laravel/*.md` не подгружаются. Worker работает только с core checklists.
+`none` — generic PHP project without a framework. `frameworks/laravel/*.md` are not loaded. Worker operates only with core checklists.
 
-`unknown` — detect не сработал (возможно, нестандартная установка). recon-агент пишет `recon_confidence: low`, plan_waves не активирует framework-секции.
+`unknown` — detect did not fire (possibly non-standard installation). The recon agent writes `recon_confidence: low`, plan_waves does not activate framework sections.

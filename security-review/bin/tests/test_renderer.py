@@ -59,8 +59,8 @@ class DedupQualityStatTests(unittest.TestCase):
     """Aggregated dedup-quality stat in Executive Summary."""
 
     def test_summary_includes_dedup_quality_when_nonzero(self):
-        """Один merged finding с FLAG_MERGED_DESPITE_HASH_MISMATCH → стат-строка
-        присутствует и содержит правильные count'ы."""
+        """One merged finding with FLAG_MERGED_DESPITE_HASH_MISMATCH -> stat
+        line present and contains the correct counts."""
         merged = [_mk_merged(FLAG_MERGED_DESPITE_HASH_MISMATCH)]
         manual: list[MergedFinding] = []
         summary = render_summary(merged, manual)
@@ -71,14 +71,14 @@ class DedupQualityStatTests(unittest.TestCase):
         )
 
     def test_summary_omits_dedup_quality_when_clean(self):
-        """Нет flag'ов → строка отсутствует (избегаем noise на чистых прогонах)."""
+        """No flags -> line absent (avoid noise on clean runs)."""
         merged = [_mk_merged()]
         manual: list[MergedFinding] = []
         summary = render_summary(merged, manual)
         self.assertNotIn("Dedup quality:", summary)
 
     def test_summary_includes_dedup_quality_with_only_parse_failures(self):
-        """Только FLAG_PARSE_FAILED (manual) → стат-строка всё равно показана."""
+        """Only FLAG_PARSE_FAILED (manual) -> stat line still shown."""
         merged: list[MergedFinding] = []
         manual = [_mk_merged(FLAG_PARSE_FAILED, sink_file="", sink_line=0)]
         summary = render_summary(merged, manual)
@@ -89,7 +89,7 @@ class DedupQualityStatTests(unittest.TestCase):
         )
 
     def test_summary_dedup_quality_aggregates_across_merged_and_manual(self):
-        """Флаги в merged и manual должны учитываться вместе."""
+        """Flags in merged and manual must be counted together."""
         merged = [
             _mk_merged(FLAG_MERGED_DESPITE_HASH_MISMATCH),
             _mk_merged(FLAG_CROSS_SINK_MERGE, sink_file="src/B.php"),
@@ -103,12 +103,12 @@ class DedupQualityStatTests(unittest.TestCase):
         )
 
     def test_summary_dedup_quality_empty_inputs(self):
-        """Пустой merged + пустой manual → секции не должно быть."""
+        """Empty merged + empty manual -> section must be absent."""
         summary = render_summary([], [])
         self.assertNotIn("Dedup quality:", summary)
 
     def test_summary_dedup_quality_only_cross_sink(self):
-        """Только cross-sink merges → строка показана с другими count'ами = 0."""
+        """Only cross-sink merges -> line shown with other counts = 0."""
         merged = [_mk_merged(FLAG_CROSS_SINK_MERGE)]
         summary = render_summary(merged, [])
         self.assertIn(
@@ -203,7 +203,7 @@ class ChecklistCoverageBlockTests(unittest.TestCase):
         )
         self.assertIn("## Checklist coverage", summary)
         self.assertIn(
-            "`checklists/core/auth.md` (W1): активирован, 2 findings",
+            "`checklists/core/auth.md` (W1): activated, 2 findings",
             summary,
         )
 
@@ -222,12 +222,12 @@ class ChecklistCoverageBlockTests(unittest.TestCase):
             plugin_root=self.PLUGIN_ROOT,
         )
         self.assertIn(
-            "`checklists/core/crypto.md` (W4): активирован, 0 findings ← was empty",
+            "`checklists/core/crypto.md` (W4): activated, 0 findings ← was empty",
             summary,
         )
 
     def test_inactive_checklist_tagged_with_stack(self):
-        """Frameworks checklists not in waves_plan → marked '(стэк: <stack>)'."""
+        """Frameworks checklists not in waves_plan -> marked '(stack: <stack>)'."""
         # Active: only core/auth. All other on-disk checklists report as
         # inactive — at minimum we expect frameworks/symfony/auth tagged.
         cl_active = self.PLUGIN_ROOT / "checklists" / "core" / "auth.md"
@@ -242,9 +242,9 @@ class ChecklistCoverageBlockTests(unittest.TestCase):
             plugin_root=self.PLUGIN_ROOT,
         )
         self.assertIn("## Checklist coverage", summary)
-        # Symfony auth is frameworks/symfony/auth.md → stack inferred = symfony.
+        # Symfony auth is frameworks/symfony/auth.md -> stack inferred = symfony.
         self.assertIn(
-            "`checklists/frameworks/symfony/auth.md`: не активирован (стэк: symfony)",
+            "`checklists/frameworks/symfony/auth.md`: not activated (stack: symfony)",
             summary,
         )
 

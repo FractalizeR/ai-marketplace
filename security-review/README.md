@@ -1,86 +1,86 @@
 # fr-security-review
 
-Framework-aware static-first security audit для Claude Code: recipe-driven recon, фокусные волны воркеров, детерминированная дедупликация.
+Framework-aware static-first security audit for Claude Code: recipe-driven recon, focused worker waves, deterministic deduplication.
 
-Поддерживаемые стеки: Symfony, Laravel, generic PHP. GraphQL-слой (lighthouse, rebing-laravel, api-platform, webonyx) детектируется автоматически в Symfony и Laravel.
+Supported stacks: Symfony, Laravel, generic PHP. The GraphQL layer (lighthouse, rebing-laravel, api-platform, webonyx) is detected automatically in Symfony and Laravel.
 
 ## Quick start
 
-После установки плагина из marketplace используй две slash-команды:
+After installing the plugin from the marketplace, use two slash commands:
 
-| Команда | Назначение |
+| Command | Purpose |
 | --- | --- |
-| `/fr-security-review:security-project` | Security audit всего проекта |
-| `/fr-security-review:security-changes` | Security audit diff'а текущей ветки относительно master |
+| `/fr-security-review:security-project` | Security audit of the whole project |
+| `/fr-security-review:security-changes` | Security audit of the current branch diff against master |
 
-Минимальный прогон:
+Minimum run:
 
 ```
 /fr-security-review:security-project
 ```
 
-Артефакты записываются в `security-review-<label>/` в текущей рабочей директории. Папка автоматически добавляется в локальный `.gitignore` (`<review_root>/.gitignore` с содержимым `*`), проектный `.gitignore` не модифицируется.
+Artifacts are written to `security-review-<label>/` in the current working directory. The folder is automatically added to a local `.gitignore` (`<review_root>/.gitignore` with the content `*`); the project-level `.gitignore` is not modified.
 
 ## Pipeline
 
-1. **Recon.** Recipe (Symfony / Laravel / generic PHP) собирает structured inventory проекта без LLM: routes, middleware, контроллеры, модели данных, voters, форм-классы, listeners, messenger handlers и т.п. Результат — `<review_root>/CONTEXT.md` (schema v2 с frontmatter и закрытыми shape-спеками).
-2. **Plan waves.** `plan_waves.py` режет inventory на тематические волны (auth+disclosure, injection+data-access, output-render, serialization+crypto, ssrf+fileops, fintech, exploratory) и закрепляет за каждой свой набор чек-листов и target-файлов.
-3. **Workers.** Параллельные воркеры по 6 за батч, balanced-profile моделей: opus для анализа trust boundaries (W1/W2/W6), sonnet для механического data-flow (W3/W4/W5/W∞).
-4. **Dedupe.** `dedupe_findings.py` сшивает per-wave findings в split-отчёт: `REPORT.md` (executive summary + index) + `REPORT/<root_cause_family>.md` (детали).
+1. **Recon.** A recipe (Symfony / Laravel / generic PHP) collects a structured inventory of the project without an LLM: routes, middleware, controllers, data models, voters, form classes, listeners, messenger handlers, etc. The result is `<review_root>/CONTEXT.md` (schema v2 with frontmatter and closed shape specs).
+2. **Plan waves.** `plan_waves.py` slices the inventory into thematic waves (auth+disclosure, injection+data-access, output-render, serialization+crypto, ssrf+fileops, fintech, exploratory) and assigns each one its own set of checklists and target files.
+3. **Workers.** Parallel workers, 6 per batch, balanced-profile models: opus for analysis of trust boundaries (W1/W2/W6), sonnet for mechanical data-flow (W3/W4/W5/W∞).
+4. **Dedupe.** `dedupe_findings.py` stitches per-wave findings into a split report: `REPORT.md` (executive summary + index) + `REPORT/<root_cause_family>.md` (details).
 
-### ⚠️ Расход токенов
+### ⚠️ Token consumption
 
-`/fr-security-review:security-project` запускает несколько параллельных Opus/Sonnet воркеров на каждом прогоне (W1–W6 + W∞ + adversarial pass). Стоимость зависит от модели и размера проекта.
+`/fr-security-review:security-project` launches several parallel Opus/Sonnet workers on each run (W1–W6 + W∞ + adversarial pass). Cost depends on the model and project size.
 
-**Флаги для CI / экономии:**
-- `--quick` — отключает W∞ (cross-layer chain analysis).
-- `--no-adversarial` — отключает refute pass.
-- `--ci` — alias для `--quick --no-adversarial`.
+**Flags for CI / cost saving:**
+- `--quick` — disables W∞ (cross-layer chain analysis).
+- `--no-adversarial` — disables the refute pass.
+- `--ci` — alias for `--quick --no-adversarial`.
 
-Для своего проекта — `bin/dedupe/cost.py estimate <review_root>` после первого прогона показывает фактические токены.
+For your own project, `bin/dedupe/cost.py estimate <review_root>` after the first run shows the actual tokens.
 
 ## Security model
 
-**Что плагин читает и исполняет:**
+**What the plugin reads and executes:**
 
-- **Read-only.** Recipe и чек-листы только читают исходный код проекта; никогда не модифицируют файлы вне `<review_root>/`.
-- **Console smoke по умолчанию.** Recon-утилита может запустить `bin/console list` (Symfony) или `php artisan list` (Laravel) для enrichment секций (доступные команды, зарегистрированные сервисы и т.п.). Таймаут 30 секунд, ограничения памяти — но **bootstrap-код проекта при этом исполняется**.
-- **PHP metadata extractor.** `bin/recon/extract_php_metadata.php` парсит PHP-файлы через `token_get_all` без require/include — не исполняет код проекта. Subprocess-sandbox: `timeout=60s`, `memory_limit=256M`, path traversal через `Path.resolve() + is_relative_to(project_root)`.
-- **Worker tools.** Воркеры — Read, Grep, Glob; никаких Write на проектные файлы, никаких git-команд кроме безопасных просмотровых, никакого исполнения кода.
+- **Read-only.** The recipe and checklists only read the project source code; they never modify files outside `<review_root>/`.
+- **Console smoke by default.** The recon utility may run `bin/console list` (Symfony) or `php artisan list` (Laravel) to enrich sections (available commands, registered services, etc.). Timeout 30 seconds, memory limits — but **the project's bootstrap code is executed in the process**.
+- **PHP metadata extractor.** `bin/recon/extract_php_metadata.php` parses PHP files via `token_get_all` without require/include — it does not execute project code. Subprocess sandbox: `timeout=60s`, `memory_limit=256M`, path traversal protection via `Path.resolve() + is_relative_to(project_root)`.
+- **Worker tools.** Workers use Read, Grep, Glob; no Write to project files, no git commands except safe read-only ones, no code execution.
 
-**Когда нужна изоляция:**
+**When isolation is needed:**
 
-- Аудит untrusted/hostile репозитория (composer post-install hooks, конструкторы сервисов с side-effects).
-- CI/CD без runtime credentials.
-- Sandbox-режим внутри корпоративной инфраструктуры.
+- Auditing an untrusted/hostile repository (composer post-install hooks, service constructors with side effects).
+- CI/CD without runtime credentials.
+- Sandbox mode inside corporate infrastructure.
 
-**Два варианта изоляции:**
+**Two isolation options:**
 
-### Вариант 1 — флаг `--no-console`
+### Option 1 — `--no-console` flag
 
-Полностью отключает console smoke. Recon работает только через статический парсинг файлов:
+Fully disables console smoke. Recon works only via static file parsing:
 
 ```
 /fr-security-review:security-project --no-console
 ```
 
-`recon_confidence.ceiling` принудительно понижается до `medium` (некоторые секции остаются на статической эвристике). Это намеренно — чтобы воркеры не строили выводы на полном инвентаре, которого нет.
+`recon_confidence.ceiling` is forcibly lowered to `medium` (some sections remain on static heuristics). This is intentional — so that workers do not draw conclusions from a full inventory that does not exist.
 
-`--no-console` не защищает от уязвимости в самом PHP metadata extractor (хоть он и не require'ит код), и от расширенных read-only утилит. Если репо реально hostile — добавь sandbox.
+`--no-console` does not protect against a vulnerability in the PHP metadata extractor itself (even though it does not require the code), or against extended read-only utilities. If the repo is truly hostile, add a sandbox.
 
-### Вариант 2 — sandbox через firejail (Linux)
+### Option 2 — sandbox via firejail (Linux)
 
-Идея: запустить Claude Code в песочнице без сети, с read-write доступом только к директории проекта. Конкретные флаги firejail зависят от версии и дистрибутива — отправная точка:
+The idea: run Claude Code in a sandbox without network access, with read-write access only to the project directory. Specific firejail flags depend on the version and distribution — a starting point:
 
 ```bash
 firejail --private="/path/to/project" --net=none claude code
 ```
 
-Адаптируй опции под свой стенд (см. `firejail --help` и `man firejail`). Для строгих сценариев Docker предсказуемее.
+Adapt options to your environment (see `firejail --help` and `man firejail`). For strict scenarios, Docker is more predictable.
 
-### Вариант 3 — sandbox через Docker
+### Option 3 — sandbox via Docker
 
-Минимальный Dockerfile:
+Minimal Dockerfile:
 
 ```dockerfile
 FROM node:20-slim
@@ -90,7 +90,7 @@ RUN npm install -g @anthropic-ai/claude-code
 WORKDIR /workspace
 ```
 
-Запуск с прокинутым review-root для сохранения артефактов и `--review-root` для явного пути:
+Run with a mounted review-root to persist artifacts and `--review-root` for an explicit path:
 
 ```bash
 docker run --rm -it \
@@ -101,55 +101,55 @@ docker run --rm -it \
   claude /fr-security-review:security-project --review-root=/review --no-console
 ```
 
-`--review-root` обязателен для override label-based пути; внутри контейнера cwd read-only, а review-root — read-write на хосте.
+`--review-root` is required to override the label-based path; inside the container the cwd is read-only, while review-root is read-write on the host.
 
 ## Project-specific exclusions
 
-Помимо встроенных безопасных дефолтов (`vendor/`, `var/cache/`, `var/log/`, `node_modules/`, `storage/framework/cache/`, `storage/logs/`, `bootstrap/cache/`, `public/build/`, `.git/`), которые PHP-extractor пропускает *до* парсинга, можно исключить дополнительные директории:
+In addition to the built-in safe defaults (`vendor/`, `var/cache/`, `var/log/`, `node_modules/`, `storage/framework/cache/`, `storage/logs/`, `bootstrap/cache/`, `public/build/`, `.git/`), which the PHP extractor skips *before* parsing, you can exclude additional directories:
 
-- **`<project_root>/CLAUDE.md`** — рекомендуемый способ для повторяющихся проектных условий. Оркестратор перед запуском recon читает CLAUDE.md и автоматически извлекает path-prefix'ы из секции `## Code review exclusions` (или эквивалентной). Не парсится regex'ом — Claude разбирает её естественно. Рекомендуемый формат:
+- **`<project_root>/CLAUDE.md`** — the recommended way for recurring project-level conditions. Before running recon, the orchestrator reads CLAUDE.md and automatically extracts path prefixes from the `## Code review exclusions` section (or its equivalent). It is not parsed by regex — Claude reads it naturally. Recommended format:
 
   ```markdown
   ## Code review exclusions
-  Не анализировать в security-ревью:
-  - legacy/                — устаревший код, будет удалён в Q4
-  - src/ThirdParty/        — vendored-код, не наш контракт
-  - generated/             — autogenerated, ревью не нужно
+  Do not analyze in security review:
+  - legacy/                — legacy code, will be removed in Q4
+  - src/ThirdParty/        — vendored code, not our contract
+  - generated/             — autogenerated, no review needed
   ```
 
-- **`--exclude=<csv>`** — флаг команды для разовых исключений:
+- **`--exclude=<csv>`** — command flag for one-off exclusions:
 
   ```
   /fr-security-review:security-project --exclude=legacy,src/ThirdParty
   ```
 
-Оба источника объединяются с встроенным `DEFAULT_EXCLUDE` (не заменяют его). Перед запуском recon оркестратор выводит итоговый список — пользователь видит, что не будет проанализировано. Применённые проектные exclude'ы записываются в `frontmatter.warnings` итогового `<review_root>/CONTEXT.md` как `exclude_paths_user: <list>` для аудита.
+Both sources are merged with the built-in `DEFAULT_EXCLUDE` (they do not replace it). Before running recon, the orchestrator prints the resulting list — the user sees what will not be analyzed. Applied project-level excludes are recorded in `frontmatter.warnings` of the final `<review_root>/CONTEXT.md` as `exclude_paths_user: <list>` for audit.
 
-**Когда добавлять exclude:** auto-generated код, vendored mirrors, legacy-код перед удалением, директории с фикстурами тестов, в которых заведомо есть «уязвимости» для проверки. Не добавляй директории, которые хочешь анализировать — это снижает recall security-ревью.
+**When to add an exclude:** auto-generated code, vendored mirrors, legacy code before removal, directories with test fixtures that knowingly contain "vulnerabilities" for testing. Do not add directories you want to analyze — this lowers the recall of the security review.
 
-**Per-file size cap.** Файлы крупнее 2 MiB (например, `vimeo/psalm/dictionaries/CallMap_*.php`) extractor пропускает с предупреждением в stderr. Это страховка от OOM, даже если файл попадает в анализируемое поддерево.
+**Per-file size cap.** Files larger than 2 MiB (for example, `vimeo/psalm/dictionaries/CallMap_*.php`) are skipped by the extractor with a warning in stderr. This is an OOM safeguard, even if the file falls inside the analyzed subtree.
 
-## Self-introspection и параллельные прогоны
+## Self-introspection and parallel runs
 
-Без `--label` команды делают self-introspection и выбирают label из словаря: `claude | codex | gemini | deepseek | qwen | other-<short>`. Review-root становится `security-review-<label>/` — параллельные прогоны разных моделей на одном проекте не конфликтуют.
+Without `--label`, commands perform self-introspection and pick a label from the dictionary: `claude | codex | gemini | deepseek | qwen | other-<short>`. Review-root becomes `security-review-<label>/` — parallel runs of different models on the same project do not conflict.
 
-**Известное ограничение:** open-weight fine-tunes (Qwen/DeepSeek) могут ошибочно идентифицировать себя как Claude. Для CI/Docker — передавай `--label` явно.
+**Known limitation:** open-weight fine-tunes (Qwen/DeepSeek) may incorrectly identify themselves as Claude. For CI/Docker, pass `--label` explicitly.
 
-## Версия и совместимость
+## Version and compatibility
 
-Текущая мажорная версия — 3.x. Полный changelog — в [CHANGELOG.md](CHANGELOG.md).
+Current major version is 3.x. Full changelog — in [CHANGELOG.md](CHANGELOG.md).
 
-- `schema_version: 2` для `<review_root>/CONTEXT.md`. Старые v1-артефакты (`<project_root>/SECURITY_CONTEXT.md`) не читаются — slash-команды детектируют их и выводят предупреждение.
-- Multi-stack monorepos — out of scope. Один основной стек на проект.
+- `schema_version: 2` for `<review_root>/CONTEXT.md`. Old v1 artifacts (`<project_root>/SECURITY_CONTEXT.md`) are not read — slash commands detect them and emit a warning.
+- Multi-stack monorepos — out of scope. One primary stack per project.
 
-## Принципы
+## Principles
 
-- **Никогда не коммитить артефакты ревью.** Локальный `<review_root>/.gitignore` уже игнорирует всё содержимое. Закоммитить можно через `git add -f` явно.
-- **Recon-агент — single writer на CONTEXT.md.** Никакие воркеры, slash-команды, MCP не должны его перезаписывать.
-- **Воркер failure ≠ abort всего ревью.** Продолжаем с оставшимися волнами.
+- **Never commit review artifacts.** The local `<review_root>/.gitignore` already ignores all content. You can commit explicitly via `git add -f`.
+- **The recon agent is the single writer to CONTEXT.md.** No workers, slash commands, or MCP should overwrite it.
+- **Worker failure ≠ abort of the whole review.** Continue with the remaining waves.
 
-## Лицензия
+## License
 
-Elastic License 2.0. Полный текст — в корне репозитория ([LICENSE](../LICENSE)).
+Elastic License 2.0. Full text — in the repository root ([LICENSE](../LICENSE)).
 
-Кратко: свободное использование (в том числе в коммерческих и проприетарных проектах) разрешено. Запрещено: предоставление плагина третьим лицам как hosted/managed service, обход лицензионных механизмов, удаление copyright/attribution.
+In short: free use (including in commercial and proprietary projects) is permitted. Prohibited: providing the plugin to third parties as a hosted/managed service, circumventing license mechanisms, removing copyright/attribution.

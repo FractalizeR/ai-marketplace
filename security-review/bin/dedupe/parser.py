@@ -39,7 +39,7 @@ def validate_sink_kind(kind: str) -> Literal["known", "custom_other", "unknown_t
 # Regexes.
 # ---------------------------------------------------------------------------
 
-FINDING_HEADER_RE = re.compile(r"^#\s+Уязвимость\s+\d+[^\n]*$", re.MULTILINE)
+FINDING_HEADER_RE = re.compile(r"^#\s+Vulnerability\s+\d+[^\n]*$", re.MULTILINE)
 
 FIELD_RE = re.compile(r"^\*\s+\*\*([^\*]+?)\*\*\s*:\s*(.*)$")
 
@@ -188,7 +188,7 @@ def _parse_finding_block(header: str, body: str, source_file: str = "", slice_id
             f.severity = _normalise_severity(value)
         elif key == "Confidence":
             f.confidence = _parse_confidence(value)
-        elif key in ("Категория", "Category"):
+        elif key == "Category":
             f.category = value
         elif key == "sink_kind":
             f.sink_kind = value.strip()
@@ -204,15 +204,15 @@ def _parse_finding_block(header: str, body: str, source_file: str = "", slice_id
             f.root_cause_family = value.strip()
         elif key == "enclosing_symbol":
             f.enclosing_symbol = value.strip() or "unknown"
-        elif key in ("Описание", "Description"):
+        elif key == "Description":
             f.description = value
-        elif key in ("Путь данных", "Data path"):
+        elif key == "Data path":
             f.data_path = value
-        elif key in ("Сценарий эксплуатации", "Exploitation scenario"):
+        elif key == "Exploitation scenario":
             f.exploit = value
-        elif key in ("Потенциальное влияние", "Impact"):
+        elif key == "Impact":
             f.impact = value
-        elif key in ("Рекомендация", "Recommendation"):
+        elif key == "Recommendation":
             f.recommendation = value
         elif key == "Discovered via":
             f.discovered_via = value

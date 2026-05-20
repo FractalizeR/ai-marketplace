@@ -1,39 +1,39 @@
 # Serialization / deserialization (Laravel)
 
-> Этот чек-лист дополняет `core/serialization.md` для проектов на laravel. При конфликте инструкций — приоритет за этим файлом, как более специфичным. Worker загружает оба файла одновременно.
+> This checklist complements `core/serialization.md` for laravel projects. On conflicting instructions, this file takes priority as the more specific one. Worker loads both files simultaneously.
 
-**Это типичные паттерны категории, не исчерпывающий список.** Если ты обнаружил эксплуатируемую уязвимость, проходящую методологию (источник входа → трансформации → sink + конкретный путь эксплуатации) — репортить **обязательно**, даже если она не подпадает ни под один пункт ниже. Чек-лист — указатель приоритета поиска, а не фильтр.
+**These are typical patterns of the category, not an exhaustive list.** If you discover an exploitable vulnerability that passes the methodology (input source → transformations → sink + a concrete exploit path) — reporting is **mandatory**, even if it does not fall under any item below. The checklist is a search-priority pointer, not a filter.
 
 ## Encrypted cookies / Crypt facade
 
-- `Crypt::decryptString($cookie)` на user-controlled cookie без `decrypt(serialize: true/false)` явно — Laravel по умолчанию `decrypt($value, $unserialize = true)` → попытка PHP unserialize на decrypted payload может привести к RCE если ключ известен/слаб
-- `Cookie::get('name')` где cookie исходно сериализован Laravel'ом — компрометация ключа = RCE через unserialize gadgets
-- Custom cipher через `Encrypter::class` без AEAD (`AES-256-CBC` без HMAC-проверки) — padding oracle
+- `Crypt::decryptString($cookie)` on a user-controlled cookie without `decrypt(serialize: true/false)` explicitly — Laravel by default `decrypt($value, $unserialize = true)` → an attempt at PHP unserialize on the decrypted payload may lead to RCE if the key is known/weak
+- `Cookie::get('name')` where the cookie was originally serialized by Laravel — key compromise = RCE via unserialize gadgets
+- Custom cipher via `Encrypter::class` without AEAD (`AES-256-CBC` without HMAC check) — padding oracle
 
 ## Queue serializers
 
-- `config/queue.php`: использование PHP serialization (default) на не-Redis transports — payload сериализован/десериализован между сервисами; если очередь shared (e.g. SQS) — атакующий с доступом к очереди может подсунуть gadget
-- Custom job serializer через `IlluminateQueueSerializesModels` trait — корректно для Eloquent моделей, но кастомные value objects могут полагаться на `__wakeup`
-- `Queue::push(new Job(...))` где Job хранит `Closure` (Closures сериализуются через `Opis\Closure` или `Laravel\SerializableClosure`) — закрытие может содержать privileged код, выполняющийся в worker'е без re-authz
+- `config/queue.php`: use of PHP serialization (default) on non-Redis transports — payload is serialized/deserialized between services; if the queue is shared (e.g., SQS) — an attacker with queue access can inject a gadget
+- Custom job serializer via the `IlluminateQueueSerializesModels` trait — correct for Eloquent models, but custom value objects may rely on `__wakeup`
+- `Queue::push(new Job(...))` where the Job stores a `Closure` (Closures are serialized via `Opis\Closure` or `Laravel\SerializableClosure`) — the closure may contain privileged code executed in the worker without re-authz
 
 ## Eloquent custom casts (`AsCustomCast`)
 
-- Custom cast класс `extends CastsAttributes` с `set/get`, выполняющим `unserialize()` на user-controlled значениях БД (если БД скомпрометирована) — propagation от SQL injection к RCE
-- `protected $casts = ['payload' => 'array']` где `payload` исходно сохранялся через `serialize()` (например, legacy import) — getter делает `unserialize` неявно
+- Custom cast class `extends CastsAttributes` with `set/get` performing `unserialize()` on user-controlled DB values (if DB is compromised) — propagation from SQL injection to RCE
+- `protected $casts = ['payload' => 'array']` where `payload` was originally stored via `serialize()` (e.g., legacy import) — getter performs `unserialize` implicitly
 
 ## API JSON deserialization
 
-- `json_decode($request->getContent(), true)` без size limit / depth limit — DoS через глубоко вложенный JSON
-- `Http::asJson()->post($url, $userData)` где `$userData` затем десериализуется чужим API — pivot
-- API resource fromArray($json) с типами: `Money::fromArray($req->money)` без валидации структуры — TypeError или Object Injection-like
+- `json_decode($request->getContent(), true)` without size limit / depth limit — DoS via deeply nested JSON
+- `Http::asJson()->post($url, $userData)` where `$userData` is then deserialized by a foreign API — pivot
+- API resource fromArray($json) with types: `Money::fromArray($req->money)` without structure validation — TypeError or Object Injection-like
 
 ## XML / SOAP
 
-- `simplexml_load_string($xml)` / `LIBXML_NOENT` без явного отключения внешних entities → XXE → SSRF / file read
-- SOAP: `SoapClient($wsdl, ['cache_wsdl' => 0])` где `$wsdl` user-controlled — SSRF
-- `DOMDocument::loadXML` без `LIBXML_NONET` → XXE с network fetching
+- `simplexml_load_string($xml)` / `LIBXML_NOENT` without explicit disabling of external entities → XXE → SSRF / file read
+- SOAP: `SoapClient($wsdl, ['cache_wsdl' => 0])` where `$wsdl` is user-controlled — SSRF
+- `DOMDocument::loadXML` without `LIBXML_NONET` → XXE with network fetching
 
 ## File-based session driver
 
-- `config/session.php`: `driver: 'file'` на shared host без proper directory permissions — session hijack через FS race
-- `config/session.php`: encrypt=false на cookie sessions — session id предсказуем + читается без ключа
+- `config/session.php`: `driver: 'file'` on a shared host without proper directory permissions — session hijack via FS race
+- `config/session.php`: encrypt=false on cookie sessions — session id is predictable + readable without a key

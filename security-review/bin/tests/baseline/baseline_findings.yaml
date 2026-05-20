@@ -55,7 +55,7 @@ findings:
     severity: high
     file: src/Admin/WebhookMappingCrudController.php
     line: 62
-    title: Admin bundle CRUD controllers / EasyAdmin / Identity + URL поля редактируемы
+    title: Admin bundle CRUD controllers / EasyAdmin / Identity + URL fields editable
     details: BASELINE_v2/business_logic.md
   - id: fddc6674aef8
     sink_kind: pii_in_logs
@@ -76,7 +76,7 @@ findings:
     severity: high
     file: src/Crm/Api/Integration/IntegrationController.php
     line: 29
-    title: OAuth callback без state-параметра
+    title: OAuth callback without state parameter
     details: BASELINE_v2/authz.md
   - id: 597ab882a2b5
     sink_kind: hardcoded_secret
@@ -139,7 +139,7 @@ findings:
     severity: medium
     file: src/Admin/CompanyIntegrationSettingsCrudController.php
     line: 45
-    title: Admin bundle CRUD controllers / EasyAdmin / Identity-поля редактируемы
+    title: Admin bundle CRUD controllers / EasyAdmin / Identity fields editable
     details: BASELINE_v2/business_logic.md
   - id: a8801029aa94
     sink_kind: mass_assignment

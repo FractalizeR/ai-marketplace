@@ -45,22 +45,22 @@ def _run(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
 # the seeded IDOR finding. Schema matches agents/security.md output spec.
 # -----------------------------------------------------------------------------
 
-SEEDED_IDOR_MD = """# Уязвимость 1: [missing_authz]: `src/Controller/PostController.php:39`
+SEEDED_IDOR_MD = """# Vulnerability 1: [missing_authz]: `src/Controller/PostController.php:39`
 
 * **Severity**: High
 * **Confidence**: 9/10
-* **Категория**: missing_authz
+* **Category**: missing_authz
 * **sink_kind**: idor_lookup
 * **root_cause_family**: authz
 * **enclosing_symbol**: PostController::show
 * **sink_snippet**: |
     $post = $repo->find($request->get('id'));
-* **Описание**: GET /posts/show reads `id` from request and returns the post
+* **Description**: GET /posts/show reads `id` from request and returns the post
     body without any authorization check on ownership/role.
-* **Путь данных**: $request->get('id') → PostRepository::find → response body
-* **Сценарий эксплуатации**: GET /posts/show?id=42 returns any post.
-* **Потенциальное влияние**: IDOR — disclosure of any Post by guessable id.
-* **Рекомендация**: add `denyAccessUnlessGranted(PostVoter::VIEW, $post)`
+* **Data path**: $request->get('id') -> PostRepository::find -> response body
+* **Exploitation scenario**: GET /posts/show?id=42 returns any post.
+* **Impact**: IDOR -- disclosure of any Post by guessable id.
+* **Recommendation**: add `denyAccessUnlessGranted(PostVoter::VIEW, $post)`
     or scope query by current user.
 * **Discovered via**: checklist:frameworks/symfony/auth.md
 """

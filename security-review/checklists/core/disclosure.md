@@ -1,79 +1,79 @@
 # Information disclosure / PII leaks / stacktrace exposure / debug info
 
-**Это типичные паттерны категории, не исчерпывающий список.** Если ты обнаружил эксплуатируемую уязвимость, проходящую методологию (источник входа → трансформации → sink + конкретный путь эксплуатации) — репортить **обязательно**, даже если она не подпадает ни под один пункт ниже. Чек-лист — указатель приоритета поиска, а не фильтр.
+**These are typical patterns of the category, not an exhaustive list.** If you discover an exploitable vulnerability that passes the methodology (input source → transformations → sink + concrete exploit path), reporting is **mandatory**, even if it does not fall under any of the items below. The checklist is a search priority pointer, not a filter.
 
 ## Recommended sink_kinds
 
-- `pii_in_logs` — логирование PII / токенов / паролей в plaintext
-- `stacktrace_exposed` — раскрытие stacktrace / debug в response
-- `hardcoded_secret` — кросс-ссылка на `crypto.md` / `auth.md`
+- `pii_in_logs` — logging PII / tokens / passwords in plaintext
+- `stacktrace_exposed` — stacktrace / debug disclosure in response
+- `hardcoded_secret` — cross-reference to `crypto.md` / `auth.md`
 
 ## Confidence floor rules
 
-- **Плейнтекст PII в логах** (`$logger->info(..., ['password' => $plain])`, `['email' => ..., 'passport' => ...]`) → **confidence ≥ 9** для pii_in_logs.
-- **`$exception->getTraceAsString()` в API response в production** (не в debug-ветке) → **confidence ≥ 9** для stacktrace_exposed.
-- **`$logger->debug($request->getContent())`** когда body содержит credentials/tokens/PII → **confidence ≥ 8**.
-- **Sequential ID в API** (`/user/1`, `/user/2`, ...) без rate-limit + без authz → **confidence ≥ 8** для idor_lookup (cross-ref `auth.md`).
+- **Plaintext PII in logs** (`$logger->info(..., ['password' => $plain])`, `['email' => ..., 'passport' => ...]`) → **confidence ≥ 9** for pii_in_logs.
+- **`$exception->getTraceAsString()` in API response in production** (not in a debug branch) → **confidence ≥ 9** for stacktrace_exposed.
+- **`$logger->debug($request->getContent())`** when the body contains credentials/tokens/PII → **confidence ≥ 8**.
+- **Sequential ID in API** (`/user/1`, `/user/2`, ...) without rate-limit + without authz → **confidence ≥ 8** for idor_lookup (cross-ref `auth.md`).
 
-## Логирование чувствительных данных
+## Logging sensitive data
 
 - `$logger->info('user login', ['password' => $plaintext])`
-- Password / token в request log middleware
-- `$logger->debug('payload', [$request->getContent()])` — body содержит credit card / password
-- Exception logging с `$exception->getTrace(true)` — trace может содержать параметры с секретами
-- PII (паспорт, ИНН, email, phone) в info/debug уровнях
-- Session ID в access logs
-- Database query logs со значениями параметров (любой ORM SQL logger в production)
+- Password / token in request log middleware
+- `$logger->debug('payload', [$request->getContent()])` — body contains credit card / password
+- Exception logging with `$exception->getTrace(true)` — trace may contain parameters with secrets
+- PII (passport, INN, email, phone) at info/debug levels
+- Session ID in access logs
+- Database query logs with parameter values (any ORM SQL logger in production)
 
-## PII handling (152-ФЗ / GDPR)
+## PII handling (152-FZ / GDPR)
 
-- Сохранение паспортных данных, ИНН, СНИЛС в plaintext колонках вместо шифрованных
-- Биометрические данные без явного согласия
-- Отсутствие audit log доступа к ПДН (кто и когда читал)
-- PII в URLs (`/user/vladimir.ivanov@example.com/profile`) — попадают в логи, referer, browser history
-- PII в GET параметрах (должны быть POST-only)
-- Отсутствие data retention policy: старые данные хранятся без срока
+- Storing passport data, INN, SNILS in plaintext columns instead of encrypted ones
+- Biometric data without explicit consent
+- Missing audit log of PII access (who and when read it)
+- PII in URLs (`/user/vladimir.ivanov@example.com/profile`) — ends up in logs, referer, browser history
+- PII in GET parameters (must be POST-only)
+- Missing data retention policy: old data stored without a term
 
 ## API response leaks
 
-- Сериализация без selective field whitelist → весь объект с internal полями отдаётся клиенту
-- `email`, `phone`, `hashedPassword`, `lastLoginIp` возвращаются клиентам, которым не нужны
-- Relationships сериализуются полностью (`user -> orders -> transactions`) — избыточное раскрытие
-- Error response с `$exception->getMessage()` в production — leak внутренних деталей (имя БД, путь файла)
-- `__debugInfo()` implementations, рендерящие в API response
+- Serialization without selective field whitelist → the entire object with internal fields goes to the client
+- `email`, `phone`, `hashedPassword`, `lastLoginIp` returned to clients that do not need them
+- Relationships are serialized in full (`user -> orders -> transactions`) — excessive disclosure
+- Error response with `$exception->getMessage()` in production — leaks internal details (DB name, file path)
+- `__debugInfo()` implementations rendered into API response
 
 ## Stacktrace / debug info
 
-- Custom error handler, возвращающий `$exception->getTraceAsString()` в body
-- PHP `display_errors=On` в production
-- Uncaught exception в JSON API → leak через default framework handler, если не зарегистрирован свой exception listener
+- Custom error handler returning `$exception->getTraceAsString()` in the body
+- PHP `display_errors=On` in production
+- Uncaught exception in a JSON API → leak via default framework handler if no exception listener is registered
 
 ## Source code exposure
 
-- `.git/` директория deployed в web-accessible location
-- `.env`, `.env.local` readable через web (неверная конфигурация Nginx/Apache)
-- `composer.json` / `package.json` доступны — leak dependencies (version info + CVE lookup)
-- Backup files: `config.php.bak`, `config.old` в web root
-- Source maps (`*.js.map`) в production — leak full original JS source
+- `.git/` directory deployed to a web-accessible location
+- `.env`, `.env.local` readable via the web (incorrect Nginx/Apache configuration)
+- `composer.json` / `package.json` accessible — leak of dependencies (version info + CVE lookup)
+- Backup files: `config.php.bak`, `config.old` in web root
+- Source maps (`*.js.map`) in production — leak full original JS source
 
 ## API enumeration
 
-- Разный timing ответа «user exists» vs «user doesn't exist» на login/reset — enumerate users
-- Разное HTTP status code (401 vs 404) для existing/non-existing resources
-- Error message: `"User already exists"` vs `"Invalid credentials"` — раскрывает наличие аккаунта
-- Pagination с precise counts → enumerate total records
-- Sequential IDs в API (`/user/1`, `/user/2`, ...) — enumerate через инкремент (cross-ref IDOR в `auth.md`)
+- Different response timing for "user exists" vs "user doesn't exist" on login/reset — enumerate users
+- Different HTTP status code (401 vs 404) for existing/non-existing resources
+- Error message: `"User already exists"` vs `"Invalid credentials"` — reveals account presence
+- Pagination with precise counts → enumerate total records
+- Sequential IDs in API (`/user/1`, `/user/2`, ...) — enumerate via increment (cross-ref IDOR in `auth.md`)
 
 ## Response headers
 
 - `Server: Apache/2.4.41 (Ubuntu)` — leak server version (CVE targeting)
 - `X-Powered-By: PHP/7.4.3` — leak PHP version
-- `Via:` headers, раскрывающие internal proxies
+- `Via:` headers revealing internal proxies
 - `X-AspNet-Version`, etc
 
 ## Session cookies
 
-- Session cookie без `HttpOnly` → доступна JS (XSS → session theft)
-- Без `Secure` → передаётся по HTTP (если MITM)
-- Без `SameSite=Lax/Strict` → CSRF vector
-- Long-lived session без idle timeout
+- Session cookie without `HttpOnly` → accessible to JS (XSS → session theft)
+- Without `Secure` → transmitted over HTTP (if MITM)
+- Without `SameSite=Lax/Strict` → CSRF vector
+- Long-lived session without idle timeout

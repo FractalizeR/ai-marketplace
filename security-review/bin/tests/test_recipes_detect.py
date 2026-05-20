@@ -1,11 +1,11 @@
 """Detect-formula tests for symfony / generic_php recipes (rev 3.5 G-Conf.1).
 
 Five canonical cases:
-  (а) полный Symfony 7        → score 1.0
-  (б) Symfony без symfony.lock → score 0.8
-  (в) только symfony/console   → score 0.4 (below threshold)
-  (г) Laravel + случайный symfony dep → score 0.4
-  (д) генерик-php без symfony  → score 0.0 (None)
+  (a) full Symfony 7              -> score 1.0
+  (b) Symfony without symfony.lock -> score 0.8
+  (c) only symfony/console         -> score 0.4 (below threshold)
+  (d) Laravel + random symfony dep -> score 0.4
+  (e) generic php without symfony  -> score 0.0 (None)
 
 Plus loader / detect_best behavior tests.
 """

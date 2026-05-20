@@ -1,70 +1,70 @@
 # Injection (generic) — command, code, XXE, path traversal
 
-**Это типичные паттерны категории, не исчерпывающий список.** Если ты обнаружил эксплуатируемую уязвимость, проходящую методологию (источник входа → трансформации → sink + конкретный путь эксплуатации) — репортить **обязательно**, даже если она не подпадает ни под один пункт ниже. Чек-лист — указатель приоритета поиска, а не фильтр.
+**These are typical patterns of the category, not an exhaustive list.** If you discover an exploitable vulnerability that passes the methodology (input source → transformations → sink + concrete exploit path), reporting is **mandatory**, even if it does not fall under any of the items below. The checklist is a search priority pointer, not a filter.
 
 ## Recommended sink_kinds
 
-- `command_exec` — `exec`/`shell_exec`/`Process` с пользовательским вводом
-- `file_include_dynamic` — `include`/`require` с динамическим путём
-- `path_traversal` — file operations с непроверенным пользовательским путём
-- `ssti` — Server-Side Template Injection (динамический template name / source)
+- `command_exec` — `exec`/`shell_exec`/`Process` with user input
+- `file_include_dynamic` — `include`/`require` with a dynamic path
+- `path_traversal` — file operations with an unchecked user path
+- `ssti` — Server-Side Template Injection (dynamic template name / source)
 - `xxe` — XML External Entity
-- `mass_assignment` — неограниченное разворачивание данных в объекты (см. также `data-access.md`)
+- `mass_assignment` — unrestricted unfolding of data into objects (see also `data-access.md`)
 
 ## Confidence floor rules
 
-- **`exec()`/`shell_exec()`/`system()` с user input** (путь от `$request` / `$_GET` / `$_POST` до sink прослежен) → **confidence ≥ 9** для command_exec.
-- **`eval()` с user-controlled данными** → **confidence ≥ 10** для ssti/command_exec.
-- **`include(<dynamic>)` / `require(<dynamic>)`** с частью пути от user input без whitelist → **confidence ≥ 9** для file_include_dynamic.
-- **`unserialize($userData)`** без `['allowed_classes' => false]` → **confidence ≥ 9** для unserialize_untrusted.
+- **`exec()`/`shell_exec()`/`system()` with user input** (path traced from `$request` / `$_GET` / `$_POST` to the sink) → **confidence ≥ 9** for command_exec.
+- **`eval()` with user-controlled data** → **confidence ≥ 10** for ssti/command_exec.
+- **`include(<dynamic>)` / `require(<dynamic>)`** with part of the path from user input without a whitelist → **confidence ≥ 9** for file_include_dynamic.
+- **`unserialize($userData)`** without `['allowed_classes' => false]` → **confidence ≥ 9** for unserialize_untrusted.
 
 ## Command injection
 
-- `exec()`, `shell_exec()`, `system()`, `passthru()`, `popen()`, `` ` ` `` (backticks) с user input без `escapeshellarg`/`escapeshellcmd`
-- Process abstraction с shell-string mode (например `Process::fromShellCommandline($str)`) с user input — опасно. Версия с массивом аргументов — безопасно
-- `proc_open()` с user-controlled cmd
-- Параметры, попадающие в shell через environment variables, если приложение использует их в shell-exec
+- `exec()`, `shell_exec()`, `system()`, `passthru()`, `popen()`, `` ` ` `` (backticks) with user input without `escapeshellarg`/`escapeshellcmd`
+- Process abstraction with shell-string mode (e.g. `Process::fromShellCommandline($str)`) with user input — dangerous. The array-arguments version is safe
+- `proc_open()` with a user-controlled cmd
+- Parameters that reach the shell via environment variables if the application uses them in shell-exec
 
 ## Code injection / dynamic execution
 
-- `eval()` с user input — RCE
-- `assert($user_string)` — legacy RCE (в старых версиях PHP)
-- `create_function()` (удалён в 8.0, но legacy)
-- `preg_replace()` с модификатором `/e` — RCE (до 7.0)
-- Динамическое выполнение:
-  - `$$variable` — variable variables с user-controlled name
+- `eval()` with user input — RCE
+- `assert($user_string)` — legacy RCE (in older PHP versions)
+- `create_function()` (removed in 8.0, but legacy)
+- `preg_replace()` with the `/e` modifier — RCE (up to 7.0)
+- Dynamic execution:
+  - `$$variable` — variable variables with user-controlled name
   - `$object->$method()` — dynamic method call
-  - `call_user_func($fn, ...)`, `call_user_func_array($fn, ...)` с user-controlled `$fn`
-  - `ReflectionClass::newInstanceArgs()` с user input
+  - `call_user_func($fn, ...)`, `call_user_func_array($fn, ...)` with user-controlled `$fn`
+  - `ReflectionClass::newInstanceArgs()` with user input
 
 ## File include / path traversal
 
-- `include($_GET['page'] . '.php')`, `require($path)` с user-controlled путём — LFI/RFI
-- `file_get_contents()`, `fopen()`, `readfile()` с user-controlled путём без `realpath()` и whitelist
-- `basename()` недостаточен: не защищает от `../../../etc/passwd` (basename возвращает только последний сегмент)
-- Обход `open_basedir` через symbolic links и URL wrappers (`php://`, `phar://`)
-- Sanitization только от `..` без учёта абсолютных путей (`/etc/passwd`), URL-wrappers
+- `include($_GET['page'] . '.php')`, `require($path)` with a user-controlled path — LFI/RFI
+- `file_get_contents()`, `fopen()`, `readfile()` with a user-controlled path without `realpath()` and a whitelist
+- `basename()` is insufficient: it does not protect against `../../../etc/passwd` (basename returns only the last segment)
+- Bypassing `open_basedir` via symbolic links and URL wrappers (`php://`, `phar://`)
+- Sanitization only against `..` without accounting for absolute paths (`/etc/passwd`), URL wrappers
 
 ## SSTI (Server-Side Template Injection) — see also
 
-Anti-patterns по template engines живут в `output-render.md` (core) и framework-чек-листах. Здесь только sink_kind enum.
+Anti-patterns for template engines live in `output-render.md` (core) and framework checklists. Only the sink_kind enum is here.
 
 ## XXE
 
-- `simplexml_load_string($data)` без `LIBXML_NOENT = false` и без `libxml_disable_entity_loader(true)`
-- `DOMDocument::loadXML()` без `LIBXML_NONET` / `LIBXML_NOENT = false`
-- `XMLReader::xml()` с user input, когда внешние сущности не отключены
-- SOAP client с user-controlled WSDL
-- SAML ответы, XML-RPC без защиты от entity expansion
+- `simplexml_load_string($data)` without `LIBXML_NOENT = false` and without `libxml_disable_entity_loader(true)`
+- `DOMDocument::loadXML()` without `LIBXML_NONET` / `LIBXML_NOENT = false`
+- `XMLReader::xml()` with user input when external entities are not disabled
+- SOAP client with user-controlled WSDL
+- SAML responses, XML-RPC without protection against entity expansion
 
 ## LDAP / XPath / NoSQL
 
-- LDAP injection: `(&(uid=$user))` с user input без escape (`ldap_escape`)
-- XPath injection: `$xml->xpath("//user[name='$name']")` без escape
-- NoSQL injection (MongoDB, если используется): operator injection через JSON input (`{"$ne": null}` в поле password)
+- LDAP injection: `(&(uid=$user))` with user input without escape (`ldap_escape`)
+- XPath injection: `$xml->xpath("//user[name='$name']")` without escape
+- NoSQL injection (MongoDB, if used): operator injection via JSON input (`{"$ne": null}` in the password field)
 
 ## PHP Object Injection
 
-- `unserialize($_GET['data'])` с user-controlled input — RCE через магические методы `__wakeup()`, `__destruct()`, `__toString()`
-- Сохранение cookies как serialized данные и десериализация без `allowed_classes`
-- См. также `serialization.md`
+- `unserialize($_GET['data'])` with user-controlled input — RCE via magic methods `__wakeup()`, `__destruct()`, `__toString()`
+- Storing cookies as serialized data and deserializing without `allowed_classes`
+- See also `serialization.md`

@@ -13,7 +13,7 @@ behavior, but we can lint the markdown to ensure the contracts haven't drifted:
 - worker uses `<REVIEW_ROOT>/waves/<slice_id>.md` (not legacy SECURITY_REVIEW_RESULTS_*)
 - security-project supports `--quick` / `--scope=` / exploratory; security-changes does not
 
-Functional behavior of `recon_inventory.py --review-root` (S6 DoD #8 а/в/г —
+Functional behavior of `recon_inventory.py --review-root` (S6 DoD #8 a/c/d --
 review_root creation, idempotency, absolute path override) is covered in
 test_recon_inventory.py (CreateContext / UserGitignorePreserved / etc.).
 """
@@ -75,8 +75,8 @@ class CommonContract(unittest.TestCase):
                 lower = text.lower()
                 self.assertIn("--review-root", text, f"{name}: missing --review-root")
                 self.assertTrue(
-                    "--label` (если был) **игнорируется**" in text
-                    or "--label игнорируется" in lower,
+                    "--label` (if any) is **ignored**" in text
+                    or "--label ignored" in lower,
                     f"{name}: --review-root must explicitly override --label",
                 )
 
@@ -220,15 +220,15 @@ class ProjectOnly(unittest.TestCase):
         self.assertIn("--scope-glob", self.text, "plan_waves invocation must pass --scope-glob")
 
     def test_exploratory_default_on(self) -> None:
-        self.assertIn("Exploratory-волна W∞ включена по умолчанию", self.text)
+        self.assertIn("Exploratory wave W∞ is enabled by default", self.text)
 
     def test_no_console_flag_exposed_and_conditional(self) -> None:
         # Orchestrator exposes --no-console for hostile-repo audits but only
         # forwards it when the user explicitly passed it — recipe decides
         # console enrichment in the default flow.
         self.assertIn("--no-console", self.text)
-        self.assertIn("В обычном режиме `--no-console` не нужен", self.text)
-        self.assertIn("только если флаг был передан оркестратору", self.text)
+        self.assertIn("In normal mode `--no-console` is not needed", self.text)
+        self.assertIn("only if the flag was passed to the orchestrator", self.text)
 
     def test_worker_mode_project(self) -> None:
         # security-project must run workers in mode=project. Catches a refactor
@@ -281,7 +281,7 @@ class ChangesOnly(unittest.TestCase):
         )
 
     def test_changes_mode_disclaims_exploratory_and_scope(self) -> None:
-        self.assertIn("`--exploratory` и `--scope=` для diff-режима **не поддерживаются**",
+        self.assertIn("`--exploratory` and `--scope=` for diff mode are **not supported**",
                       self.text)
 
     def test_reverse_and_forward_grep_present(self) -> None:
@@ -322,7 +322,7 @@ class WorkerAgentContract(unittest.TestCase):
         # frontmatter — worker inherits the parent (slash-command) tool-set.
         # Permission gating lives at the harness layer in
         # `commands/security-{project,changes}.md` `allowed-tools:` blocks,
-        # not duplicated in the agent. See NEXT_RELEASE_PLAN.md §1.1, Принцип 2.
+        # not duplicated in the agent. See NEXT_RELEASE_PLAN.md §1.1, Principle 2.
         self.assertNotRegex(
             self.text,
             r"(?m)^tools:\s*$",
@@ -339,7 +339,7 @@ class WorkerAgentContract(unittest.TestCase):
         # tool-allowlist exclusion any more — it lives as an explicit textual
         # contract in the agent prompt. This test enforces that the textual
         # guard is preserved on every edit.
-        self.assertIn("Не грепай diff вручную", self.text)
+        self.assertIn("Do not grep the diff manually", self.text)
         self.assertIn("touched_by_diff", self.text)
         # No legacy CLI snippet teaching the worker to compute the file list itself.
         self.assertNotIn("git diff origin/main...HEAD --name-only", self.text)

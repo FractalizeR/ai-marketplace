@@ -1,103 +1,103 @@
 # Authentication / Authorization (Symfony)
 
-> Этот чек-лист дополняет `core/auth.md` для проектов на symfony. При конфликте инструкций — приоритет за этим файлом, как более специфичным. Worker загружает оба файла одновременно.
+> This checklist complements `core/auth.md` for symfony projects. On conflicting instructions, this file takes priority as the more specific one. Worker loads both files simultaneously.
 
-**Это типичные паттерны категории, не исчерпывающий список.** Если ты обнаружил эксплуатируемую уязвимость, проходящую методологию (источник входа → трансформации → sink + конкретный путь эксплуатации) — репортить **обязательно**, даже если она не подпадает ни под один пункт ниже. Чек-лист — указатель приоритета поиска, а не фильтр.
+**These are typical patterns of the category, not an exhaustive list.** If you discover an exploitable vulnerability that passes the methodology (input source → transformations → sink + a concrete exploit path) — reporting is **mandatory**, even if it does not fall under any item below. The checklist is a search-priority pointer, not a filter.
 
 ## Confidence floor rules
 
-- **`#[Route(..., methods: ['POST'])]`** без `#[IsGranted]` / `$this->denyAccessUnlessGranted` на неанонимном функционале → **confidence ≥ 8** для missing_authz.
-- **`framework_specific.symfony.admin_authz_coverage.crud_controllers_without_voter` non-empty** → для каждого такого контроллера зайти в `framework_specific.symfony.easyadmin_crud_controllers` items (или `framework_specific.symfony.sonata_admin_classes` для Sonata) по `class.endsWith(<short>)` и проверить editable identity-поля (см. ниже EasyAdmin / SonataAdmin секции). По умолчанию sink_kind=`mass_assignment`, root_cause_family=`authz`, **confidence ≥ 7** при наличии identity/role-полей без модификаторов (`setDisabled`/`onlyOnIndex`/`hideOnForm`).
+- **`#[Route(..., methods: ['POST'])]`** without `#[IsGranted]` / `$this->denyAccessUnlessGranted` on non-anonymous functionality → **confidence ≥ 8** for missing_authz.
+- **`framework_specific.symfony.admin_authz_coverage.crud_controllers_without_voter` non-empty** → for each such controller go into `framework_specific.symfony.easyadmin_crud_controllers` items (or `framework_specific.symfony.sonata_admin_classes` for Sonata) by `class.endsWith(<short>)` and check editable identity fields (see EasyAdmin / SonataAdmin sections below). By default sink_kind=`mass_assignment`, root_cause_family=`authz`, **confidence ≥ 7** when identity/role fields are present without modifiers (`setDisabled`/`onlyOnIndex`/`hideOnForm`).
 
 ## Symfony Security Bundle
 
-- Отсутствие `#[IsGranted(...)]` / `$this->denyAccessUnlessGranted(...)` на контроллерах, работающих с приватными ресурсами
-- Ошибки в `config/packages/security.yaml`: слишком широкие `access_control` паттерны (`^/admin` без регэкспа границы); `IS_AUTHENTICATED_ANONYMOUSLY` на мутирующих путях
-- Неправильная конфигурация voters: `supports()` возвращает `true` для слишком широких атрибутов; `voteOnAttribute()` пропускает когда должно отказать
-- `switch_user` без `role: ROLE_ALLOWED_TO_SWITCH`; возможность switch_user через GET-параметр без CSRF
-- `remember_me` с предсказуемым `secret` или без `httponly: true, secure: true`
-- Session fixation: отсутствие `session.migrate()` после login
-- Login throttling bypass: отсутствие `login_throttling` / rate limit на login firewall
+- Missing `#[IsGranted(...)]` / `$this->denyAccessUnlessGranted(...)` on controllers handling private resources
+- Errors in `config/packages/security.yaml`: overly broad `access_control` patterns (`^/admin` without regex boundary); `IS_AUTHENTICATED_ANONYMOUSLY` on mutating paths
+- Misconfigured voters: `supports()` returns `true` for too broad attributes; `voteOnAttribute()` lets through when it should deny
+- `switch_user` without `role: ROLE_ALLOWED_TO_SWITCH`; ability to switch_user via GET parameter without CSRF
+- `remember_me` with predictable `secret` or without `httponly: true, secure: true`
+- Session fixation: missing `session.migrate()` after login
+- Login throttling bypass: missing `login_throttling` / rate limit on login firewall
 
-### `IS_AUTHENTICATED_REMEMBERED` vs `FULLY` для sensitive операций
+### `IS_AUTHENTICATED_REMEMBERED` vs `FULLY` for sensitive operations
 
-- Контроллер sensitive операции (password change, email change, payment confirm, 2FA disable, API-key rotation) защищён через `#[IsGranted('IS_AUTHENTICATED_REMEMBERED')]` или `denyAccessUnlessGranted('IS_AUTHENTICATED_REMEMBERED')` — это **включает remember-me cookies** (нет proof of recent password). Должно быть `IS_AUTHENTICATED_FULLY` (или `IS_AUTHENTICATED_2FA_IN_PROGRESS` для post-2FA операций).
-- То же самое для `access_control` rules в `security.yaml`: `roles: IS_AUTHENTICATED_REMEMBERED` на путях с sensitive операциями. Sink_kind: `missing_authz` (root_cause_family: `authz`), confidence ≥ 7.
+- Controller for a sensitive operation (password change, email change, payment confirm, 2FA disable, API-key rotation) protected via `#[IsGranted('IS_AUTHENTICATED_REMEMBERED')]` or `denyAccessUnlessGranted('IS_AUTHENTICATED_REMEMBERED')` — this **includes remember-me cookies** (no proof of recent password). It should be `IS_AUTHENTICATED_FULLY` (or `IS_AUTHENTICATED_2FA_IN_PROGRESS` for post-2FA operations).
+- Same for `access_control` rules in `security.yaml`: `roles: IS_AUTHENTICATED_REMEMBERED` on paths with sensitive operations. Sink_kind: `missing_authz` (root_cause_family: `authz`), confidence ≥ 7.
 
 ### Voter anti-patterns
 
-- `VoterInterface::supports($attribute, $subject)` возвращает `true` для слишком широкого `$attribute` (`return true` без проверки списка, `return str_starts_with($attribute, 'POST_')` для voter, обрабатывающего только `POST_EDIT`/`POST_DELETE`, regex-match вида `'/^[A-Z_]+$/'`) → voter применяется к ситуациям, для которых не написан → false-positive grant из `voteOnAttribute()`.
-- `voteOnAttribute()` `default true` (case-block не нашёлся → `return true` или `return Voter::ACCESS_GRANTED`) вместо `return false` / `Voter::ACCESS_DENIED` → grant by default. Особенно опасно при добавлении новых attributes: они автоматически разрешаются без обновления voter'а.
-- `voteOnAttribute()` без проверки `$subject instanceof ExpectedClass` — если supports() слишком широкий, voter может быть вызван с чужой сущностью и проигнорирует ownership check.
+- `VoterInterface::supports($attribute, $subject)` returns `true` for too broad an `$attribute` (`return true` without checking a list, `return str_starts_with($attribute, 'POST_')` for a voter that handles only `POST_EDIT`/`POST_DELETE`, regex match like `'/^[A-Z_]+$/'`) → voter is applied to situations it was not written for → false-positive grant from `voteOnAttribute()`.
+- `voteOnAttribute()` `default true` (case-block not matched → `return true` or `return Voter::ACCESS_GRANTED`) instead of `return false` / `Voter::ACCESS_DENIED` → grant by default. Especially dangerous when new attributes are added: they are automatically allowed without updating the voter.
+- `voteOnAttribute()` without `$subject instanceof ExpectedClass` check — if supports() is too broad, the voter may be called with a foreign entity and will ignore the ownership check.
 
 ### `security.yaml` access_control regex precedence
 
-- access_control rules матчатся **по порядку** сверху вниз; первый совпавший — используется, остальные не проверяются. Если выше стоит широкий паттерн (`{ path: '^/admin', roles: ROLE_USER }`), а ниже — узкий с более строгой ролью (`{ path: '^/admin/users/edit', roles: ROLE_SUPER_ADMIN }`), узкий **никогда не сработает** → privilege escalation.
-- Ловить через ручной анализ порядка rules + сверку с `framework_specific.symfony.routes_authz_matrix` (если секция есть — см. data-access.md). Sink_kind: `missing_authz`, confidence ≥ 7 при наличии узкого правила, перекрытого широким.
+- access_control rules match **in order** top-to-bottom; the first matching one is used, the rest are not checked. If a broad pattern stands above (`{ path: '^/admin', roles: ROLE_USER }`) and a narrow one with a stricter role stands below (`{ path: '^/admin/users/edit', roles: ROLE_SUPER_ADMIN }`), the narrow one **will never fire** → privilege escalation.
+- Catch via manual analysis of rule ordering + cross-check with `framework_specific.symfony.routes_authz_matrix` (if the section is present — see data-access.md). Sink_kind: `missing_authz`, confidence ≥ 7 when a narrow rule is overridden by a broad one.
 
 ## OAuth/OIDC (Symfony — KnpUOAuth2ClientBundle, league/oauth2-client)
 
-См. `core/auth.md` → OAuth/OIDC для generic-паттернов (state validation, PKCE, redirect_uri exact-match). Ниже — Symfony-уточнения.
+See `core/auth.md` → OAuth/OIDC for generic patterns (state validation, PKCE, redirect_uri exact-match). Below are Symfony-specific notes.
 
-- **KnpUOAuth2ClientBundle**: callback-контроллер, который не вызывает `$client->retrieveAccessToken($state)` или эквивалентный state-check сразу после получения authorization code → state→token race / отсутствует валидация state. Sink_kind: `oauth_state_missing`.
-- **`league/oauth2-client` `Provider::getAuthorizationUrl()` без явной опции `state`**: библиотека сгенерирует случайный state в `$provider->getState()`, но если разработчик не сохранил его в session (`$_SESSION['oauth2state'] = $provider->getState()`) и не сравнил при callback — state по факту не валидируется. Типичный код-смелл: вызов `getAuthorizationUrl()` без последующей записи `getState()` в session.
-- **`redirect_uri` whitelist через `services.yaml` config**: substring match (`str_contains($redirect, $allowedDomain)`) вместо exact match → bypass через `https://attacker.com/?evil=allowed.com`. Должен быть exact compare всей URI (включая path) или strict host whitelist через `parse_url()` + `in_array()`.
-- **OAuth login через KnpU Authenticator (`SocialAuthenticator`)** без verified-email check провайдера → account takeover при провайдере, не верифицирующем email (некоторые self-hosted OAuth servers).
+- **KnpUOAuth2ClientBundle**: a callback controller that does not call `$client->retrieveAccessToken($state)` or an equivalent state-check immediately after receiving the authorization code → state→token race / state validation is missing. Sink_kind: `oauth_state_missing`.
+- **`league/oauth2-client` `Provider::getAuthorizationUrl()` without an explicit `state` option**: the library will generate a random state in `$provider->getState()`, but if the developer did not save it in the session (`$_SESSION['oauth2state'] = $provider->getState()`) and did not compare on callback — state is effectively not validated. Typical code smell: a call to `getAuthorizationUrl()` without subsequently writing `getState()` into the session.
+- **`redirect_uri` whitelist via `services.yaml` config**: substring match (`str_contains($redirect, $allowedDomain)`) instead of exact match → bypass via `https://attacker.com/?evil=allowed.com`. Must be an exact compare of the entire URI (including path) or a strict host whitelist via `parse_url()` + `in_array()`.
+- **OAuth login via KnpU Authenticator (`SocialAuthenticator`)** without a verified-email check from the provider → account takeover when the provider does not verify email (some self-hosted OAuth servers).
 
 ## MFA (scheb/2fa-bundle)
 
-См. `core/auth.md` → MFA для generic-паттернов. Ниже — Symfony-уточнения.
+See `core/auth.md` → MFA for generic patterns. Below are Symfony-specific notes.
 
-- **`scheb/2fa-bundle` с `enabled: false`** в `config/packages/scheb_2fa.yaml` — bundle загружен, но 2FA выключен глобально → IS_AUTHENTICATED_2FA_IN_PROGRESS не срабатывает, sensitive routes не защищены.
-- **Voter `IS_AUTHENTICATED_2FA_IN_PROGRESS` отсутствует в `access_control` для protected routes**, при этом 2FA включён для пользователя. Маршрут `^/account/sensitive` без `roles: IS_AUTHENTICATED_2FA_IN_PROGRESS` → пользователь с включённым 2FA может попасть на route после первичного логина без второго фактора.
-- **Recovery codes хранятся через `scheb/2fa-bundle` (TwoFactorTrait::getBackupCodes()`)**, но `User::eraseRecoveryCode($code)` не реализован или реализован как no-op → коды переиспользуемы (single-use enforcement отсутствует). Sink_kind: `missing_authz`.
-- **TOTP secret в `User` entity без encryption-at-rest** (`#[ORM\Column(type: 'string')] $totpSecret`) — DB compromise → атакующий восстанавливает TOTP коды всех пользователей. Cross-link: `crypto.md` → persistent secrets в plain columns.
+- **`scheb/2fa-bundle` with `enabled: false`** in `config/packages/scheb_2fa.yaml` — the bundle is loaded but 2FA is disabled globally → IS_AUTHENTICATED_2FA_IN_PROGRESS does not fire, sensitive routes are unprotected.
+- **Voter `IS_AUTHENTICATED_2FA_IN_PROGRESS` missing in `access_control` for protected routes**, while 2FA is enabled for the user. The route `^/account/sensitive` without `roles: IS_AUTHENTICATED_2FA_IN_PROGRESS` → a user with 2FA enabled can reach the route after initial login without the second factor.
+- **Recovery codes are stored via `scheb/2fa-bundle` (`TwoFactorTrait::getBackupCodes()`)**, but `User::eraseRecoveryCode($code)` is not implemented or is implemented as a no-op → codes are reusable (single-use enforcement is missing). Sink_kind: `missing_authz`.
+- **TOTP secret in `User` entity without encryption-at-rest** (`#[ORM\Column(type: 'string')] $totpSecret`) — DB compromise → attacker recovers TOTP codes for all users. Cross-link: `crypto.md` → persistent secrets in plain columns.
 
 ## JWT (lexik/jwt-authentication-bundle)
 
-См. `core/crypto.md` → JWT advanced (kid/jwk header injection, algorithm confusion RS256→HS256, aud/iss mismatch, nbf/iat skew). Symfony реализация одинакова — здесь только bundle-specifics.
+See `core/crypto.md` → JWT advanced (kid/jwk header injection, algorithm confusion RS256→HS256, aud/iss mismatch, nbf/iat skew). The Symfony implementation is identical — only bundle-specifics here.
 
-- **`JWT_PASSPHRASE` / `JWT_PRIVATE_KEY` в коммитнутом `.env`** (без `.env.local` override) → атакующий ре-подписывает токены любого пользователя. Sink_kind: `hardcoded_secret`. См. также `crypto.md` → APP_SECRET.
-- **`token_extractors.query_parameter.enabled: true` при cookie/header auth** — токен попадает в URL → утечка через browser history, server access logs, `Referer` header при переходе на внешний ресурс.
-- **`kid` / `jwk` passthrough**: если в проекте есть **custom Authenticator** (не дефолтный из bundle), который передаёт `kid` header в `JwtEncoderInterface` без whitelist → возможен kid header injection (см. core).
-- **`Lcobucci\JWT\Configuration` напрямую (без bundle)**: validation constraints (`SignedWith`, `IssuedBy`, `PermittedFor`) опциональны — если разработчик создал `Configuration::forSymmetricSigner(...)` и забыл `setValidationConstraints([...])`, любая подпись/iss/aud принимается. Грепать на `Configuration::forSymmetricSigner` / `forAsymmetricSigner` без последующего `setValidationConstraints`.
+- **`JWT_PASSPHRASE` / `JWT_PRIVATE_KEY` in a committed `.env`** (without `.env.local` override) → attacker re-signs tokens of any user. Sink_kind: `hardcoded_secret`. See also `crypto.md` → APP_SECRET.
+- **`token_extractors.query_parameter.enabled: true` with cookie/header auth** — token ends up in the URL → leak via browser history, server access logs, `Referer` header when navigating to an external resource.
+- **`kid` / `jwk` passthrough**: if the project has a **custom Authenticator** (not the bundle default) that passes the `kid` header into `JwtEncoderInterface` without a whitelist → kid header injection is possible (see core).
+- **`Lcobucci\JWT\Configuration` directly (without the bundle)**: validation constraints (`SignedWith`, `IssuedBy`, `PermittedFor`) are optional — if the developer created `Configuration::forSymmetricSigner(...)` and forgot `setValidationConstraints([...])`, any signature/iss/aud is accepted. Grep for `Configuration::forSymmetricSigner` / `forAsymmetricSigner` without a subsequent `setValidationConstraints`.
 
 ## GraphQL field authz (api-platform / overblog/graphql-bundle / webonyx)
 
-- **api-platform `#[ApiResource]` без `security` / `securityPostDenormalize`**: `#[ApiResource(operations: [new Get(), new GetCollection(), new Post()])]` без `security: "is_granted('ROLE_USER')"` (или `securityPostDenormalize` для проверки после denormalization) → query/mutation доступны всем, поля Entity сериализуются по `#[Groups]` без owner-check. Sink_kind: `missing_authz`.
-- **api-platform per-operation security отсутствует**: `Post`/`Patch`/`Delete` operation без `security: "is_granted(...)"` или с `security: "is_granted('PUBLIC_ACCESS')"` на mutating endpoint → write без authz.
-- **overblog/graphql-bundle resolver без `#[Security('is_granted(...)')]`**: resolver-метод (`#[GraphQL\Field]`, `#[GraphQL\Mutation]`) или поле в schema YAML без `accessControl: "is_granted('ROLE_USER')"` / `access: "is_granted(...)"` → field/resolver доступен анонимам. Также `accessControl: "true"` (literal `true` без выражения) — pseudo-check.
-- **webonyx native (`webonyx/graphql-php`)**: resolver function (`'resolve' => fn($root, $args, $context) => ...`) не проверяет `$context['user']` / не вызывает voter → field-level authz отсутствует. Особенно опасно для resolver'ов, возвращающих entity напрямую без проекции.
-- **Introspection в prod**: api-platform / overblog по умолчанию включают `query Introspection { __schema { types { name fields { name } } } }`. Если bundle config не отключает introspection в prod (`overblog_graphql.definitions.introspection.enabled: false` для overblog или отсутствие `enable_graphiql: false` + `enable_docs: false` + `enable_swagger_ui: false` для api-platform) → confidence floor **≥ 8** (information disclosure: attacker маппит всю schema, включая admin-only поля и mutations). Sink_kind: `stacktrace_exposed` или `other:graphql_introspection_enabled` (root_cause_family: `disclosure`).
+- **api-platform `#[ApiResource]` without `security` / `securityPostDenormalize`**: `#[ApiResource(operations: [new Get(), new GetCollection(), new Post()])]` without `security: "is_granted('ROLE_USER')"` (or `securityPostDenormalize` for a check after denormalization) → query/mutation accessible to everyone, Entity fields are serialized by `#[Groups]` without an owner check. Sink_kind: `missing_authz`.
+- **api-platform per-operation security missing**: `Post`/`Patch`/`Delete` operation without `security: "is_granted(...)"` or with `security: "is_granted('PUBLIC_ACCESS')"` on a mutating endpoint → write without authz.
+- **overblog/graphql-bundle resolver without `#[Security('is_granted(...)')]`**: a resolver method (`#[GraphQL\Field]`, `#[GraphQL\Mutation]`) or a field in the schema YAML without `accessControl: "is_granted('ROLE_USER')"` / `access: "is_granted(...)"` → field/resolver accessible to anonymous users. Also `accessControl: "true"` (literal `true` without an expression) — pseudo-check.
+- **webonyx native (`webonyx/graphql-php`)**: a resolver function (`'resolve' => fn($root, $args, $context) => ...`) does not check `$context['user']` / does not invoke a voter → field-level authz is missing. Especially dangerous for resolvers returning the entity directly without projection.
+- **Introspection in prod**: api-platform / overblog enable `query Introspection { __schema { types { name fields { name } } } }` by default. If bundle config does not disable introspection in prod (`overblog_graphql.definitions.introspection.enabled: false` for overblog, or absence of `enable_graphiql: false` + `enable_docs: false` + `enable_swagger_ui: false` for api-platform) → confidence floor **≥ 8** (information disclosure: attacker maps the entire schema, including admin-only fields and mutations). Sink_kind: `stacktrace_exposed` or `other:graphql_introspection_enabled` (root_cause_family: `disclosure`).
 
 ## Symfony Form CSRF
 
-- Формы без `csrf_protection: true` и без CSRF токена в теле — Symfony Form по умолчанию включает CSRF для `data_class` форм, но при `csrf_protection: false` или standalone-controllers без Form компонента — пропадает
+- Forms without `csrf_protection: true` and without a CSRF token in the body — Symfony Form enables CSRF by default for `data_class` forms, but with `csrf_protection: false` or standalone controllers without the Form component — it disappears
 
-## Admin bundle CRUD controllers (tenancy / mass_assignment) — cross-theme c data-access
+## Admin bundle CRUD controllers (tenancy / mass_assignment) — cross-theme with data-access
 
-Admin-бандлы (EasyAdmin, SonataAdmin) автогенерируют формы из конфигурации полей. Без защит любое поле Entity становится editable через admin UI — классический mass-assignment для admin-surface. Угроза реальна даже для admin-only URL: admin surface достижима через XSS, CSRF, скомпрометированный аккаунт, а также между арендаторами в мульти-тенант системах.
+Admin bundles (EasyAdmin, SonataAdmin) auto-generate forms from field configuration. Without defenses, any Entity field becomes editable via admin UI — a classic mass-assignment on the admin surface. The threat is real even for admin-only URLs: the admin surface is reachable via XSS, CSRF, a compromised account, and also across tenants in multi-tenant systems.
 
 ### EasyAdmin
 
-Формы генерируются из `configureFields()`. **Recipe-driven recall:** воркер получает уже готовый список CRUD-контроллеров и их полей в `framework_specific.symfony.easyadmin_crud_controllers.items[*].configure_fields` — каждое поле помечено `modifiers: []` (например `[setDisabled, hideOnForm, formatValue, onlyOnIndex]`). Идти прямо по этим items и фильтровать по правилам ниже **до** grep'а по исходникам.
+Forms are generated from `configureFields()`. **Recipe-driven recall:** the worker receives a ready list of CRUD controllers and their fields in `framework_specific.symfony.easyadmin_crud_controllers.items[*].configure_fields` — each field is tagged with `modifiers: []` (e.g., `[setDisabled, hideOnForm, formatValue, onlyOnIndex]`). Walk these items directly and filter by the rules below **before** grepping the source.
 
-- **Identity-поля редактируемы в форме**: поля tenant-owner / external identifier / shared secret (например `tenantId`, `ownerId`, `apiKey`, `domain` — реальные имена берутся из Entity проекта) в `configureFields()` без `->setDisabled()` / `->onlyOnIndex()` / `->hideOnForm()` → admin одной компании меняет owner → breaks tenant isolation. Recipe-driven hint: `configure_fields[].modifiers` пустой ⇔ поле редактируемо.
-- **Role/permission поля редактируемы**: поля типа `roles`, `permissions`, `isAdmin`, `isActive` в форме без guard через voter → privilege escalation.
-- **Отсутствует `createIndexQueryBuilder()` override в per-tenant admin'ах**: admin видит Entity всех tenant'ов, а не только своего. Должен быть `andWhere` по tenant-ключу текущего пользователя.
-- **Отсутствует `createEditFormBuilder()` / `createNewFormBuilder()` override** — разрешает редактирование любой сущности по id из URL (IDOR на admin-surface).
-- **`AssociationField` без query-filter**: выпадающий список связанной сущности показывает объекты всех tenant'ов. Нужен `->setQueryBuilder(fn($qb) => $qb->andWhere(...))`.
-- **Actions без `createEntityActions` / voter**: `delete`/`edit`/`impersonate` доступны всем admin'ам вне зависимости от владельца ресурса.
-- **Batch actions**: массовые операции без per-entity authz check — ломают IDOR-защиту, даже если single-action её делает.
+- **Identity fields editable in the form**: tenant-owner / external identifier / shared secret fields (e.g., `tenantId`, `ownerId`, `apiKey`, `domain` — actual names taken from the project Entity) in `configureFields()` without `->setDisabled()` / `->onlyOnIndex()` / `->hideOnForm()` → admin of one company changes owner → breaks tenant isolation. Recipe-driven hint: empty `configure_fields[].modifiers` ⇔ field is editable.
+- **Role/permission fields editable**: fields like `roles`, `permissions`, `isAdmin`, `isActive` in the form without a voter guard → privilege escalation.
+- **Missing `createIndexQueryBuilder()` override in per-tenant admins**: admin sees Entity of all tenants, not just their own. Must be `andWhere` by the tenant key of the current user.
+- **Missing `createEditFormBuilder()` / `createNewFormBuilder()` override** — allows editing of any entity by id from URL (IDOR on the admin surface).
+- **`AssociationField` without query-filter**: dropdown of related entity shows objects of all tenants. Needs `->setQueryBuilder(fn($qb) => $qb->andWhere(...))`.
+- **Actions without `createEntityActions` / voter**: `delete`/`edit`/`impersonate` accessible to all admins regardless of resource owner.
+- **Batch actions**: bulk operations without per-entity authz check — break IDOR protection, even if single-action enforces it.
 
 ### SonataAdmin
 
-Формы генерируются из `configureFormFields()` в классах `extends AbstractAdmin`. **Recipe-driven recall:** воркер получает уже готовый список admin-классов и их полей в `framework_specific.symfony.sonata_admin_classes.items[*].form_fields` — это массив имён полей из `$form->add('name', ...)`. Идти прямо по этим items и фильтровать по правилам ниже **до** grep'а по исходникам. Если `sonata_admin_classes.status == none` — Sonata в проекте отсутствует.
+Forms are generated from `configureFormFields()` in classes `extends AbstractAdmin`. **Recipe-driven recall:** the worker receives a ready list of admin classes and their fields in `framework_specific.symfony.sonata_admin_classes.items[*].form_fields` — this is an array of field names from `$form->add('name', ...)`. Walk these items directly and filter by the rules below **before** grepping the source. If `sonata_admin_classes.status == none` — Sonata is not present in the project.
 
-- **Identity-поля редактируемы в форме**: поля tenant-owner / external identifier / shared secret в `configureFormFields()` без `->setDisabled(true)` / удаления из формы → admin одной компании меняет owner → breaks tenant isolation.
-- **Role/permission поля редактируемы**: поля типа `roles`, `permissions`, `isAdmin`, `isActive` добавлены через `->add()` без ограничений → privilege escalation.
-- **Отсутствует `createQuery()` override в per-tenant admin'ах**: `configureQuery()` (Sonata 4+) / `createQuery()` не фильтрует по tenant-ключу → admin видит Entity всех tenant'ов.
-- **Отсутствует `preUpdate()` / `prePersist()` guard** — нет проверки, что сущность принадлежит текущему tenant'у перед сохранением (IDOR на admin-surface).
-- **`ModelAutocompleteType` / `ModelListType` без `callback` фильтра**: выпадающие и автокомплит списки показывают объекты всех tenant'ов. Нужен `'callback' => function($admin, $property, $value) { ... }` с фильтром по tenant.
-- **Custom actions без `isGranted()` check**: actions в `configureDashboardAction()` / `configureRoutes()` доступны всем admin'ам без проверки ownership.
-- **Batch actions**: `configureBatchActions()` без per-entity authz check в `batchAction*()` методах.
+- **Identity fields editable in the form**: tenant-owner / external identifier / shared secret fields in `configureFormFields()` without `->setDisabled(true)` / removal from the form → admin of one company changes owner → breaks tenant isolation.
+- **Role/permission fields editable**: fields like `roles`, `permissions`, `isAdmin`, `isActive` added via `->add()` without restrictions → privilege escalation.
+- **Missing `createQuery()` override in per-tenant admins**: `configureQuery()` (Sonata 4+) / `createQuery()` does not filter by tenant key → admin sees Entity of all tenants.
+- **Missing `preUpdate()` / `prePersist()` guard** — no check that the entity belongs to the current tenant before saving (IDOR on the admin surface).
+- **`ModelAutocompleteType` / `ModelListType` without `callback` filter**: dropdown and autocomplete lists show objects of all tenants. Needs `'callback' => function($admin, $property, $value) { ... }` with a tenant filter.
+- **Custom actions without `isGranted()` check**: actions in `configureDashboardAction()` / `configureRoutes()` accessible to all admins without ownership check.
+- **Batch actions**: `configureBatchActions()` without per-entity authz check in `batchAction*()` methods.

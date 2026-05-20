@@ -131,7 +131,7 @@ KNOWN_ROOT_CAUSE_FAMILIES: frozenset[str] = frozenset(SINK_KIND_TO_FAMILY.values
 
 @dataclass
 class Finding:
-    title_line: str           # original `# Уязвимость ...` header
+    title_line: str           # original `# Vulnerability ...` header
     sink_file: str = ""
     sink_line: int = 0
     severity: str = "Medium"

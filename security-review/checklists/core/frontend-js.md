@@ -1,62 +1,62 @@
 # Frontend JavaScript (Ember / Vue / Stimulus / plain JS)
 
-**Это типичные паттерны категории, не исчерпывающий список.** Если ты обнаружил эксплуатируемую уязвимость, проходящую методологию (источник входа → трансформации → sink + конкретный путь эксплуатации) — репортить **обязательно**, даже если она не подпадает ни под один пункт ниже. Чек-лист — указатель приоритета поиска, а не фильтр.
+**These are typical patterns of the category, not an exhaustive list.** If you discover an exploitable vulnerability that passes the methodology (input source → transformations → sink + concrete exploit path), reporting is **mandatory**, even if it does not fall under any of the items below. The checklist is a search priority pointer, not a filter.
 
 ## Recommended sink_kinds
 
-- `unsafe_html_render` — `innerHTML` / `v-html` / `{{{...}}}` с пользовательским вводом
-- `cors_misconfig` — `Access-Control-Allow-Origin: *` с credentials
-- `hardcoded_secret` — токены в localStorage / sessionStorage
+- `unsafe_html_render` — `innerHTML` / `v-html` / `{{{...}}}` with user input
+- `cors_misconfig` — `Access-Control-Allow-Origin: *` with credentials
+- `hardcoded_secret` — tokens in localStorage / sessionStorage
 
-## Общий JavaScript
+## General JavaScript
 
-- `innerHTML`, `outerHTML`, `insertAdjacentHTML` с user input — XSS
-- `eval(str)`, `new Function(str)`, `setTimeout(str, ...)`, `setInterval(str, ...)` с user input — RCE в браузере
-- `document.write()`, `document.writeln()` с user input
-- Prototype pollution: `Object.assign(target, userInput)` где userInput содержит `__proto__`
-- CORS misconfiguration: `Access-Control-Allow-Origin: *` одновременно с `Access-Control-Allow-Credentials: true`
-- `postMessage`: обработчик без проверки `event.origin`
-- WebSocket: подключение к user-controlled URL без whitelist
-- JWT в `localStorage` вместо httpOnly cookie
-- Credentials в query params (logs, referer leak)
-- Client-side routing: чувствительные данные (токен, email) в URL/query без redacting
+- `innerHTML`, `outerHTML`, `insertAdjacentHTML` with user input — XSS
+- `eval(str)`, `new Function(str)`, `setTimeout(str, ...)`, `setInterval(str, ...)` with user input — RCE in the browser
+- `document.write()`, `document.writeln()` with user input
+- Prototype pollution: `Object.assign(target, userInput)` where userInput contains `__proto__`
+- CORS misconfiguration: `Access-Control-Allow-Origin: *` together with `Access-Control-Allow-Credentials: true`
+- `postMessage`: handler without `event.origin` check
+- WebSocket: connection to a user-controlled URL without a whitelist
+- JWT in `localStorage` instead of an httpOnly cookie
+- Credentials in query params (logs, referer leak)
+- Client-side routing: sensitive data (token, email) in URL/query without redacting
 
 ## Ember.js
 
-- Handlebars: `{{{unescaped}}}` (triple-stash) с user input — XSS
-- `htmlSafe()`, `Ember.String.htmlSafe()` с недоверенными данными
-- DOM manipulation через `this.$()` с конкатенацией
-- Computed properties: race conditions при async с критичными данными
-- Ember Data: утечка чувствительных атрибутов в JSON API responses
-- Небезопасная сериализация relationships
-- Services: хранение токенов в localStorage
-- Actions: обработка user input без валидации перед отправкой на backend
+- Handlebars: `{{{unescaped}}}` (triple-stash) with user input — XSS
+- `htmlSafe()`, `Ember.String.htmlSafe()` with untrusted data
+- DOM manipulation via `this.$()` with concatenation
+- Computed properties: race conditions on async with critical data
+- Ember Data: leak of sensitive attributes into JSON API responses
+- Unsafe relationship serialization
+- Services: storing tokens in localStorage
+- Actions: handling user input without validation before sending to the backend
 
 ## Vue.js
 
-- `v-html="userInput"` — прямой XSS
-- `:is="userInput"` (dynamic components) с недоверенным вводом
+- `v-html="userInput"` — direct XSS
+- `:is="userInput"` (dynamic components) with untrusted input
 - `v-bind:innerHTML`, `domProps.innerHTML`
-- Небезопасное биндинг в `href`, `src`: проверка на `javascript:` и `data:` URIs обязательна
-- Vuex: хранение токенов/паролей в state (утечка через Vue DevTools в prod)
-- `mounted()`, `created()` с user-controlled операциями без валидации
+- Unsafe binding in `href`, `src`: a check for `javascript:` and `data:` URIs is mandatory
+- Vuex: storing tokens/passwords in state (leak via Vue DevTools in prod)
+- `mounted()`, `created()` with user-controlled operations without validation
 
 ## Stimulus / asset pipelines
 
-- Stimulus controllers, принимающие data attributes без валидации → DOM XSS если попадают в `innerHTML`
-- `importmap.php`: import URL с user-controlled fragments
-- Webpack entries с user-controlled параметрами в build config (редко, но возможно в dev-server)
-- `HtmlWebpackPlugin` templates с небезопасной inject логикой
+- Stimulus controllers accepting data attributes without validation → DOM XSS if they reach `innerHTML`
+- `importmap.php`: import URL with user-controlled fragments
+- Webpack entries with user-controlled parameters in build config (rare, but possible in dev-server)
+- `HtmlWebpackPlugin` templates with unsafe inject logic
 
 ## API / AJAX calls
 
-- Отсутствие CSRF токенов при мутирующих операциях через cookie auth
-- Credentials (токены, API ключи) в query parameters
-- User-controlled URL в `fetch()` / `XMLHttpRequest` без валидации (SSRF, открытый редирект во внешние URL)
-- Отсутствие проверки `Content-Type` ответа перед разбором как JSON (MIME sniffing attacks)
+- Missing CSRF tokens on mutating operations via cookie auth
+- Credentials (tokens, API keys) in query parameters
+- User-controlled URL in `fetch()` / `XMLHttpRequest` without validation (SSRF, open redirect to external URLs)
+- Missing check of response `Content-Type` before parsing as JSON (MIME sniffing attacks)
 
 ## LocalStorage / SessionStorage
 
-- Хранение паролей, JWT, secrets в plaintext
-- Хранение user email/PII с XSS-риском (любой XSS → exfiltration)
-- `localStorage.setItem('token', ...)` — токен доступен любому JS на странице
+- Storing passwords, JWT, secrets in plaintext
+- Storing user email/PII with XSS risk (any XSS → exfiltration)
+- `localStorage.setItem('token', ...)` — token is accessible to any JS on the page

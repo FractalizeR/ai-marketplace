@@ -1,34 +1,34 @@
 # ai-marketplace
 
-Маркетплейс плагинов для Claude Code и совместимых ИИ-агентов.
+Marketplace of plugins for Claude Code and compatible AI agents.
 
-## Доступные плагины
+## Available plugins
 
-| Плагин | Назначение |
+| Plugin | Purpose |
 | --- | --- |
-| [`fr-security-review`](./security-review/) | Framework-aware static-first security audit для PHP/Symfony/Laravel: recon, фокусные волны воркеров, детерминированная дедупликация. |
+| [`fr-security-review`](./security-review/) | Framework-aware static-first security audit for PHP/Symfony/Laravel: recon, focused worker waves, deterministic deduplication. |
 
-## Установка marketplace в Claude Code
+## Installing the marketplace in Claude Code
 
 ```bash
 claude /plugin marketplace add github:FractalizeR/ai-marketplace
 ```
 
-После этого плагины из marketplace становятся доступны для установки:
+After that, plugins from the marketplace become available for installation:
 
 ```bash
 claude /plugin install fr-security-review@fractalizer-marketplace
 ```
 
-## Лицензия
+## License
 
-Все плагины в этом маркетплейсе распространяются под [Elastic License 2.0](./LICENSE).
+All plugins in this marketplace are distributed under the [Elastic License 2.0](./LICENSE).
 
-**Кратко:** свободное использование разрешено, в том числе в коммерческих и проприетарных проектах. Запрещено: предоставление плагина третьим лицам как hosted/managed service, обход лицензионных механизмов, удаление copyright/attribution.
+**In short:** free use is permitted, including in commercial and proprietary projects. Prohibited: providing the plugin to third parties as a hosted/managed service, circumventing license mechanisms, removing copyright/attribution.
 
-## Разработка
+## Development
 
-Pre-commit hook валидирует marketplace через `claude plugin validate .`. После клонирования один раз настрой хук:
+A pre-commit hook validates the marketplace via `claude plugin validate .`. After cloning, set up the hook once:
 
 ```bash
 git config core.hooksPath .githooks

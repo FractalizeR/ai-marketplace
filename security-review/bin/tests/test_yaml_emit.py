@@ -59,9 +59,9 @@ class RoundTripScalars(unittest.TestCase):
         self.assertEqual(out, {"k": 'say "hi"'})
 
     def test_unicode_string_with_colon(self):
-        # Regression: previously parser used unicode_escape which mangled Cyrillic.
-        out, _ = _round_trip({"k": "Привет: мир"})
-        self.assertEqual(out, {"k": "Привет: мир"})
+        # Regression: previously parser used unicode_escape which mangled non-ASCII.
+        out, _ = _round_trip({"k": "こんにちは: 世界"})
+        self.assertEqual(out, {"k": "こんにちは: 世界"})
 
     def test_unicode_emoji(self):
         out, _ = _round_trip({"emoji": "🦀 crab"})

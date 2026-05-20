@@ -1,47 +1,47 @@
-# Уязвимость 1: [sql_injection]: `src/Repo.php:42`
+# Vulnerability 1: [sql_injection]: `src/Repo.php:42`
 
 * **Severity**: Critical
 * **Confidence**: 10/10
-* **Категория**: sql_injection_via_sort_param
+* **Category**: sql_injection_via_sort_param
 * **sink_kind**: dql_concat
 * **root_cause_family**: injection
 * **enclosing_symbol**: Repo::findByName
 * **sink_snippet**: |
     $dql = "SELECT u FROM User u WHERE u.name = " . $name;
-* **Описание**: SQL injection в Repo::findByName (same as W1 but different severity; quotes differ → hash mismatch).
-* **Сценарий эксплуатации**: exfiltrate all users
-* **Потенциальное влияние**: full DB read
-* **Рекомендация**: parametrize
+* **Description**: SQL injection in Repo::findByName (same as W1 but different severity; quotes differ -> hash mismatch).
+* **Exploitation scenario**: exfiltrate all users
+* **Impact**: full DB read
+* **Recommendation**: parametrize
 * **Discovered via**: checklist:injection.md
 
-# Уязвимость 2: [plaintext_token_variant]: `src/Token.php:33`
+# Vulnerability 2: [plaintext_token_variant]: `src/Token.php:33`
 
 * **Severity**: High
 * **Confidence**: 8/10
-* **Категория**: plaintext_storage_variant
+* **Category**: plaintext_storage_variant
 * **sink_kind**: other:secret-plaintext-storage
 * **root_cause_family**: crypto
 * **enclosing_symbol**: Token
 * **sink_snippet**: |
     different snippet here
-* **Описание**: same vuln, different classification (tests cross-sink + normalizer).
-* **Сценарий эксплуатации**: DB dump
-* **Потенциальное влияние**: token theft
-* **Рекомендация**: encrypt
+* **Description**: same vuln, different classification (tests cross-sink + normalizer).
+* **Exploitation scenario**: DB dump
+* **Impact**: token theft
+* **Recommendation**: encrypt
 * **Discovered via**: checklist:crypto.md
 
-# Уязвимость 3: [low_confidence_custom]: `src/Misc.php:10`
+# Vulnerability 3: [low_confidence_custom]: `src/Misc.php:10`
 
 * **Severity**: Medium
 * **Confidence**: 6/10
-* **Категория**: speculative_custom_sink
+* **Category**: speculative_custom_sink
 * **sink_kind**: other:some-weird-pattern
 * **root_cause_family**: business_logic
 * **enclosing_symbol**: Misc::speculate
 * **sink_snippet**: |
     $x = rand();
-* **Описание**: custom sink low confidence — goes to manual review.
-* **Сценарий эксплуатации**: n/a
-* **Потенциальное влияние**: unclear
-* **Рекомендация**: review
+* **Description**: custom sink low confidence -- goes to manual review.
+* **Exploitation scenario**: n/a
+* **Impact**: unclear
+* **Recommendation**: review
 * **Discovered via**: checklist:other.md

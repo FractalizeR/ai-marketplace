@@ -1,118 +1,118 @@
 # Authentication / Authorization (Laravel)
 
-> Этот чек-лист дополняет `core/auth.md` для проектов на laravel. При конфликте инструкций — приоритет за этим файлом, как более специфичным. Worker загружает оба файла одновременно.
+> This checklist complements `core/auth.md` for laravel projects. On conflicting instructions, this file takes priority as the more specific one. Worker loads both files simultaneously.
 
-**Это типичные паттерны категории, не исчерпывающий список.** Если ты обнаружил эксплуатируемую уязвимость, проходящую методологию (источник входа → трансформации → sink + конкретный путь эксплуатации) — репортить **обязательно**, даже если она не подпадает ни под один пункт ниже. Чек-лист — указатель приоритета поиска, а не фильтр.
+**These are typical patterns of the category, not an exhaustive list.** If you discover an exploitable vulnerability that passes the methodology (input source → transformations → sink + a concrete exploit path) — reporting is **mandatory**, even if it does not fall under any item below. The checklist is a search-priority pointer, not a filter.
 
 ## Confidence floor rules
 
-- **POST/PUT/PATCH/DELETE route без `auth`/`auth:sanctum`/`auth:api` middleware** на эндпоинте, работающем с приватными данными → **confidence ≥ 8** для missing_authz.
-- **Контроллер обращается к `Model::find($request->id)` без `Gate::authorize` / `$this->authorize` / Policy** → **confidence ≥ 8** для IDOR.
+- **POST/PUT/PATCH/DELETE route without `auth`/`auth:sanctum`/`auth:api` middleware** on an endpoint dealing with private data → **confidence ≥ 8** for missing_authz.
+- **Controller calls `Model::find($request->id)` without `Gate::authorize` / `$this->authorize` / Policy** → **confidence ≥ 8** for IDOR.
 
-## Middleware и guards
+## Middleware and guards
 
-- Маршрут без middleware `auth`, `auth:sanctum`, `auth:api`, `auth:web` на приватной операции — публичный доступ к ресурсу
-- `Route::middleware` группа без `auth.basic`/`auth.session` для админ-панели
-- `config/auth.php`: множественные guards с пересекающимися providers — атакующий может авторизоваться через слабый guard и использовать токен в более защищённом
-- Custom guards/providers без `validateCredentials` или с обходимой логикой
-- `auth:sanctum` на routes/api.php но Sanctum не сконфигурирован (`SANCTUM_STATEFUL_DOMAINS` / abilities) → токены принимаются без проверки scope
+- Route without `auth`, `auth:sanctum`, `auth:api`, `auth:web` middleware on a private operation — public access to the resource
+- `Route::middleware` group without `auth.basic`/`auth.session` for the admin panel
+- `config/auth.php`: multiple guards with overlapping providers — attacker can authorize via the weak guard and use the token in a more protected one
+- Custom guards/providers without `validateCredentials` or with bypassable logic
+- `auth:sanctum` on routes/api.php but Sanctum is not configured (`SANCTUM_STATEFUL_DOMAINS` / abilities) → tokens are accepted without scope check
 
 ## Policies / Gates
 
-- Контроллер: `Model::find($id)->update(...)` без `$this->authorize('update', $model)` / `Gate::authorize('update', $model)` → IDOR
-- `Gate::define('admin', fn($user) => $user->isAdmin)` без проверки активности/блокировки пользователя
-- Policy-метод возвращает `true` слишком широко: `return $user->id === $model->user_id || $user->isAdmin` — но `isAdmin` false для всех
-- `@can('update', $post)` в Blade без проверки в контроллере (Blade — defence-in-depth, не primary authz)
-- `Gate::before(fn($user) => $user->isAdmin ? true : null)` — короткое замыкание для admin без аудита
+- Controller: `Model::find($id)->update(...)` without `$this->authorize('update', $model)` / `Gate::authorize('update', $model)` → IDOR
+- `Gate::define('admin', fn($user) => $user->isAdmin)` without checking user activity/blocking
+- Policy method returns `true` too broadly: `return $user->id === $model->user_id || $user->isAdmin` — but `isAdmin` is false for everyone
+- `@can('update', $post)` in Blade without a controller check (Blade is defense-in-depth, not primary authz)
+- `Gate::before(fn($user) => $user->isAdmin ? true : null)` — short-circuit for admin without audit
 
 ## Sanctum / Passport / Personal access tokens
 
-- Создание PAT (`$user->createToken(...)`) без указания `abilities` → токен с * scope
-- API endpoint, проверяющий только `auth()->check()` без `tokenCan('ability')` → bypass abilities
-- `personal_access_tokens` в БД хранятся как plaintext (Sanctum hashes их по умолчанию, но custom code может ломать инвариант)
-- Refresh-token rotation: отсутствие revoke старого токена при выдаче нового — replay
-- Passport: weak `Passport::tokensExpireIn` (бесконечный срок); `personalAccessTokensExpireIn` — слишком долгий срок
+- Creating a PAT (`$user->createToken(...)`) without specifying `abilities` → token with * scope
+- API endpoint checking only `auth()->check()` without `tokenCan('ability')` → bypass of abilities
+- `personal_access_tokens` stored in DB as plaintext (Sanctum hashes them by default, but custom code can break the invariant)
+- Refresh-token rotation: missing revoke of the old token when issuing a new one — replay
+- Passport: weak `Passport::tokensExpireIn` (infinite term); `personalAccessTokensExpireIn` — too long term
 
 ## Sessions / cookies
 
-- `config/session.php`: `secure: false` на prod (cookies через HTTP); `same_site: 'none'` без `secure: true`; `http_only: false`
-- Session fixation: отсутствие `auth()->logoutOtherDevices($password)` после смены пароля
-- Custom `Auth::login($user, $remember=true)` без regenerate session id
-- Remember-me токен в `users.remember_token` без TTL — компрометация = бессрочный доступ
-- `cookie('name', $value)` без `httpOnly`, `secure`, `sameSite` parameters
+- `config/session.php`: `secure: false` on prod (cookies over HTTP); `same_site: 'none'` without `secure: true`; `http_only: false`
+- Session fixation: missing `auth()->logoutOtherDevices($password)` after password change
+- Custom `Auth::login($user, $remember=true)` without regenerating session id
+- Remember-me token in `users.remember_token` without TTL — compromise = indefinite access
+- `cookie('name', $value)` without `httpOnly`, `secure`, `sameSite` parameters
 
 ## CSRF
 
-- `VerifyCsrfToken::$except = ['*']` — отключает CSRF глобально
-- POST/PUT/PATCH/DELETE на routes/web.php без CSRF middleware (web group у Laravel включает его по умолчанию — отсутствие группы критично)
-- API endpoints на routes/api.php без `auth:sanctum` SPA flow (Sanctum CSRF cookie) — но и без token-based auth → CSRF
-- `meta name="csrf-token"` рендерится, но JavaScript-fetch не добавляет заголовок
+- `VerifyCsrfToken::$except = ['*']` — disables CSRF globally
+- POST/PUT/PATCH/DELETE on routes/web.php without CSRF middleware (Laravel's web group includes it by default — absence of the group is critical)
+- API endpoints on routes/api.php without `auth:sanctum` SPA flow (Sanctum CSRF cookie) — and also without token-based auth → CSRF
+- `meta name="csrf-token"` is rendered, but JavaScript fetch does not add the header
 
 ## Login throttling / rate limiting
 
-- Login route без `throttle:5,1` или RateLimiter::for('login') → brute-force
-- Password reset endpoint без throttle → email flood / token brute
-- `throttle:60,1` глобально — слишком высокий лимит для sensitive endpoints (login/2FA)
+- Login route without `throttle:5,1` or RateLimiter::for('login') → brute-force
+- Password reset endpoint without throttle → email flood / token brute
+- `throttle:60,1` globally — too high a limit for sensitive endpoints (login/2FA)
 
 ## Multi-tenancy
 
-- Eloquent global scope `addGlobalScope` для tenant filtering — но handler/job/listener вызывает `Model::withoutGlobalScopes()` без явной authz проверки
-- `Model::find($id)` в tenant-scoped контроллере без `where('tenant_id', auth()->user()->tenant_id)` — IDOR через предсказуемый id
-- `belongsToMany` через pivot без `wherePivot('tenant_id', ...)` фильтра
+- Eloquent global scope `addGlobalScope` for tenant filtering — but handler/job/listener calls `Model::withoutGlobalScopes()` without an explicit authz check
+- `Model::find($id)` in a tenant-scoped controller without `where('tenant_id', auth()->user()->tenant_id)` — IDOR via predictable id
+- `belongsToMany` through a pivot without a `wherePivot('tenant_id', ...)` filter
 
-## Auth::loginUsingId / login без validate
+## Auth::loginUsingId / login without validate
 
-- `Auth::loginUsingId($request->input('user_id'))` / `Auth::loginUsingId(request()->id)` — атакующий контролирует user_id → impersonation любого user'а. **confidence ≥ 9** для подтверждённого паттерна (sink — direct user-controlled ID в `loginUsingId`), `sink_kind=missing_authz` / `idor` в зависимости от контекста.
-- `Auth::login(User::find(request()->id))` / `Auth::login(User::findOrFail($req->user_id))` — то же самое: `find()` от user-controlled id, затем `login()`. **confidence ≥ 9**.
-- `Auth::onceUsingId($req->id)` — стейтлесс-вариант, но если используется в endpoint с side-effects (создание заказа, генерация токена) — тот же impersonation.
-- `Auth::guard('api')->loginUsingId($req->id)` — guard не меняет суть, всё равно user-controlled id.
+- `Auth::loginUsingId($request->input('user_id'))` / `Auth::loginUsingId(request()->id)` — attacker controls user_id → impersonation of any user. **confidence ≥ 9** for a confirmed pattern (sink — direct user-controlled ID in `loginUsingId`), `sink_kind=missing_authz` / `idor` depending on context.
+- `Auth::login(User::find(request()->id))` / `Auth::login(User::findOrFail($req->user_id))` — same thing: `find()` from a user-controlled id, then `login()`. **confidence ≥ 9**.
+- `Auth::onceUsingId($req->id)` — stateless variant, but if used in an endpoint with side effects (order creation, token generation) — the same impersonation.
+- `Auth::guard('api')->loginUsingId($req->id)` — guard does not change the essence, still a user-controlled id.
 
 ## OAuth/OIDC (Passport / Sanctum / Socialite)
 
-> См. `core/auth.md → OAuth/OIDC` для generic-описания. Ниже — Laravel-уточнения.
+> See `core/auth.md → OAuth/OIDC` for the generic description. Below are Laravel-specific notes.
 
-- **Socialite stateless** — `Socialite::driver('google')->stateless()->user()` явно отключает state-проверку → CSRF атаку на OAuth callback нельзя задетектить → `oauth_state_missing` (confidence ≥ 9). Иногда оправдано (mobile callback), но требует объяснения и compensating control (PKCE / nonce).
-- **Sanctum SPA-mode без CSRF cookie** — клиент опускает запрос `/sanctum/csrf-cookie` перед stateful-запросами → cookie-based CSRF protection теряется. Признак: `EnsureFrontendRequestsAreStateful` middleware применяется, но фронт не использует `withCredentials: true` или не дёргает csrf-cookie endpoint.
-- **Sanctum personal access token с `tokenCan('*')`** — токен = full account control без revocation strategy (нет TTL, нет per-feature scope). Если в `createToken('name', ['*'])` используется wildcard — рискованный default.
-- **Passport Authorization Code grant без PKCE для public clients** — `Passport::enableImplicitGrant()` всё ещё используется (deprecated в OAuth 2.1); public clients (SPA, mobile) без `Passport::client()->confidential = false` + PKCE обязательного → token interception на redirect.
-- **Socialite без redirect URL allowlist** — `Socialite::driver(request()->provider)->redirect()` где `provider` user-controlled → drive arbitrary external OAuth provider.
+- **Socialite stateless** — `Socialite::driver('google')->stateless()->user()` explicitly disables state check → CSRF attack on the OAuth callback cannot be detected → `oauth_state_missing` (confidence ≥ 9). Sometimes justified (mobile callback), but requires explanation and a compensating control (PKCE / nonce).
+- **Sanctum SPA-mode without CSRF cookie** — client skips the `/sanctum/csrf-cookie` request before stateful requests → cookie-based CSRF protection is lost. Signal: `EnsureFrontendRequestsAreStateful` middleware is applied, but the frontend does not use `withCredentials: true` or does not hit the csrf-cookie endpoint.
+- **Sanctum personal access token with `tokenCan('*')`** — token = full account control with no revocation strategy (no TTL, no per-feature scope). If `createToken('name', ['*'])` uses wildcard — a risky default.
+- **Passport Authorization Code grant without PKCE for public clients** — `Passport::enableImplicitGrant()` is still used (deprecated in OAuth 2.1); public clients (SPA, mobile) without `Passport::client()->confidential = false` + mandatory PKCE → token interception on redirect.
+- **Socialite without redirect URL allowlist** — `Socialite::driver(request()->provider)->redirect()` where `provider` is user-controlled → drive an arbitrary external OAuth provider.
 
 ## MFA (Fortify / Jetstream / pragmarx/google2fa)
 
-> См. `core/auth.md → MFA` для generic-описания. Ниже — Laravel-уточнения.
+> See `core/auth.md → MFA` for the generic description. Below are Laravel-specific notes.
 
-- **Fortify two-factor disabled in config** — `config/fortify.php`: `Features::twoFactorAuthentication(['confirm' => true, 'enable' => false])` или features array без `Features::twoFactorAuthentication()` → 2FA доступен в UI, но реально не enforce-ится. Если в session уже стоит `'login.id'` (промежуточное состояние pre-2FA) — bypass через прямой POST на `/two-factor-challenge`.
-- **Recovery codes race** — Fortify хранит `two_factor_recovery_codes` как encrypted JSON. `RecoveryCodes::useCode()` помечает код как использованный, но без `lockForUpdate()` / row-level lock — параллельные запросы с одним recovery code могут оба пройти.
-- **`pragmarx/google2fa` window > 1** — `Google2FA::setWindow(N)` принимает TOTP в окне ±N×30s. Без drift-tracking (история использованных кодов в БД) — replay предыдущего TOTP в этом же окне.
-- **Jetstream `confirmsTwoFactorAuthentication`** не вызван — `Features::twoFactorAuthentication(['confirm' => false])` → атакующий, имеющий доступ к session, активирует 2FA на свой device без подтверждения паролем.
+- **Fortify two-factor disabled in config** — `config/fortify.php`: `Features::twoFactorAuthentication(['confirm' => true, 'enable' => false])` or features array without `Features::twoFactorAuthentication()` → 2FA is available in the UI but is not actually enforced. If session already has `'login.id'` (intermediate pre-2FA state) — bypass via direct POST to `/two-factor-challenge`.
+- **Recovery codes race** — Fortify stores `two_factor_recovery_codes` as encrypted JSON. `RecoveryCodes::useCode()` marks a code as used, but without `lockForUpdate()` / row-level lock — parallel requests with one recovery code may both pass.
+- **`pragmarx/google2fa` window > 1** — `Google2FA::setWindow(N)` accepts TOTP in a window of ±N×30s. Without drift tracking (history of used codes in DB) — replay of a previous TOTP in the same window.
+- **Jetstream `confirmsTwoFactorAuthentication`** is not called — `Features::twoFactorAuthentication(['confirm' => false])` → attacker with access to the session activates 2FA on their device without password confirmation.
 
 ## JWT (`tymon/jwt-auth`, `php-open-source-saver/jwt-auth`)
 
-> См. `core/crypto.md → JWT advanced` для generic-описания (alg confusion / kid injection / jku). Ниже — Laravel-уточнения.
+> See `core/crypto.md → JWT advanced` for the generic description (alg confusion / kid injection / jku). Below are Laravel-specific notes.
 
-- `JWT_SECRET` в коммите `.env` (не `.env.example`) — leak ключа = forge произвольных токенов.
-- Custom `JWTGuard`/`JWTValidator` обрабатывает `kid` claim из header и формирует путь к публичному ключу из user-controlled значения → path traversal или substitute attacker-controlled key. См. `core/crypto.md → JWT advanced`.
-- Algorithm confusion (RS256 → HS256) при custom `Tymon\JWTAuth\Providers\JWT\Provider::decode()` без enforce алгоритма. См. `core/crypto.md → JWT advanced`.
-- `tymon/jwt-auth` `JWT_BLACKLIST_ENABLED=false` — logout не invalidate токен → stolen token usable до natural expiry.
-- `php-open-source-saver/jwt-auth` (форк tymon) — те же риски (общая кодовая база); проверяй обе библиотеки идентично.
+- `JWT_SECRET` in a committed `.env` (not `.env.example`) — key leak = forging arbitrary tokens.
+- Custom `JWTGuard`/`JWTValidator` handles the `kid` claim from the header and forms a path to the public key from a user-controlled value → path traversal or substitute attacker-controlled key. See `core/crypto.md → JWT advanced`.
+- Algorithm confusion (RS256 → HS256) in custom `Tymon\JWTAuth\Providers\JWT\Provider::decode()` without enforcing the algorithm. See `core/crypto.md → JWT advanced`.
+- `tymon/jwt-auth` `JWT_BLACKLIST_ENABLED=false` — logout does not invalidate the token → stolen token usable until natural expiry.
+- `php-open-source-saver/jwt-auth` (tymon fork) — same risks (shared codebase); check both libraries identically.
 
 ## GraphQL field authz (`nuwave/lighthouse`, `rebing/graphql-laravel`)
 
-- **Lighthouse `@guard` только на root mutation** — но не на nested field → атакующий может query nested без auth: `mutation { updateUser(id: 1) { secrets { token } } }` где `secrets` — отдельный type без своего `@guard`.
-- **Lighthouse `@can('action', model: User)` без определённой policy method** — если `viewAny`/`view`/`update` не определён в Policy для модели — Laravel Gate fall-through → policy возвращает `null` → ABAC short-circuit интерпретирует как allow в зависимости от `Gate::before()`. **confidence ≥ 7** для recall.
-- **Rebing field permissions `'permissions' => null`** или unset в field-definition → public access. Проверь `app/GraphQL/Type/*.php` и `app/GraphQL/Mutation/*.php`.
-- **Persisted-queries-only mode bypass** — даже если `lighthouse.persisted_queries=true`, alias `__schema { types { name } }` может пройти как валидная operation в зависимости от middleware ordering. Проверь, что introspection отключён (`lighthouse.security.disable_introspection=true`) на prod.
-- **Lighthouse `@inject(context: "user.id")` для tenant scoping** — но resolver получает `$args['user_id']` напрямую из client → tenant bypass.
+- **Lighthouse `@guard` only on root mutation** — but not on a nested field → attacker can query nested without auth: `mutation { updateUser(id: 1) { secrets { token } } }` where `secrets` is a separate type without its own `@guard`.
+- **Lighthouse `@can('action', model: User)` without a defined policy method** — if `viewAny`/`view`/`update` is not defined in the Policy for the model — Laravel Gate fall-through → policy returns `null` → ABAC short-circuit interprets as allow depending on `Gate::before()`. **confidence ≥ 7** for recall.
+- **Rebing field permissions `'permissions' => null`** or unset in field-definition → public access. Check `app/GraphQL/Type/*.php` and `app/GraphQL/Mutation/*.php`.
+- **Persisted-queries-only mode bypass** — even if `lighthouse.persisted_queries=true`, alias `__schema { types { name } }` may pass as a valid operation depending on middleware ordering. Verify that introspection is disabled (`lighthouse.security.disable_introspection=true`) on prod.
+- **Lighthouse `@inject(context: "user.id")` for tenant scoping** — but resolver gets `$args['user_id']` directly from the client → tenant bypass.
 
 ## Octane singleton-bleed (gate: `framework_specific.laravel.runtime.octane=true`)
 
-> **Применяй эту подсекцию только если** `framework_specific.laravel.runtime.status == ok` **и** `runtime.data.octane == true`. Иначе — пропусти всю секцию (Symfony+FrankenPHP/Roadrunner аналогичны, но не покрыты этой версией плагина — accepted limitation).
+> **Apply this subsection only if** `framework_specific.laravel.runtime.status == ok` **and** `runtime.data.octane == true`. Otherwise skip the entire section (Symfony+FrankenPHP/Roadrunner are analogous, but not covered by this plugin version — accepted limitation).
 >
-> **Graceful fallback:** если секция отсутствует/`status != ok` — пропускай Octane-пункты целиком. Не пытайся угадать по `composer.json` — false positive дороже false negative.
+> **Graceful fallback:** if the section is missing/`status != ok` — skip Octane items entirely. Do not try to guess from `composer.json` — a false positive is more expensive than a false negative.
 
-- **Singleton с request-scoped state** — `$this->app->singleton(UserContext::class, ...)` (вместо `bind`/`scoped`) → instance переиспользуется между запросами → cross-tenant leak.
-- **`auth()->user()` / `RequestStack` cached в constructor** — `public function __construct() { $this->user = auth()->user(); }` фиксируется на первом запросе → последующие запросы видят первого пользователя.
-- **`Cache::tags(['user.'.auth()->id()])`** в singleton service — tag-key вычисляется при первом вызове, остаётся прежним → cache misses/hits пересекаются между tenant'ами.
-- **Static class state** — `User::$cachedRole`, `static $loaded = []` в моделях/сервисах накапливается между запросами → накопление tenant data в одном process.
-- **Container `instance()` binding** — `$this->app->instance(Foo::class, $foo)` живёт до перезапуска worker'а; если `$foo` содержит request data — leak.
-- **Eloquent `boot()` hooks** регистрируются в singleton — `Model::saving(fn($m) => $m->user_id = auth()->id())` срабатывает для всех запросов с user_id первого тенанта (если `auth()->id()` зафиксирован в closure через captured variable).
+- **Singleton with request-scoped state** — `$this->app->singleton(UserContext::class, ...)` (instead of `bind`/`scoped`) → instance is reused between requests → cross-tenant leak.
+- **`auth()->user()` / `RequestStack` cached in constructor** — `public function __construct() { $this->user = auth()->user(); }` is fixed on the first request → subsequent requests see the first user.
+- **`Cache::tags(['user.'.auth()->id()])`** in a singleton service — tag-key is computed on the first call and stays the same → cache misses/hits intersect between tenants.
+- **Static class state** — `User::$cachedRole`, `static $loaded = []` in models/services accumulates between requests → accumulation of tenant data in one process.
+- **Container `instance()` binding** — `$this->app->instance(Foo::class, $foo)` lives until worker restart; if `$foo` contains request data — leak.
+- **Eloquent `boot()` hooks** registered in a singleton — `Model::saving(fn($m) => $m->user_id = auth()->id())` fires for all requests with the user_id of the first tenant (if `auth()->id()` is fixed in the closure via a captured variable).

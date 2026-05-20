@@ -1,5 +1,5 @@
 ---
-description: "Security review изменений в текущей ветке относительно master — с reverse-grep и forward-grep эвристиками для выявления регрессий. Артефакты — в `security-review-{label}/`."
+description: "Security review of changes in the current branch relative to master — with reverse-grep and forward-grep heuristics to surface regressions. Artifacts go to `security-review-{label}/`."
 argument-hint: "[--label=<x>] [--review-root=<path>] [--interactive] [--skip-recon] [--force-skip-recon] [--all-opus] [--no-console] [--exclude=<csv>]"
 allowed-tools:
   - Read
@@ -29,38 +29,38 @@ allowed-tools:
   - AskUserQuestion
 ---
 
-Ты — оркестратор security-ревью для diff-а текущей ветки. Recon, reverse-grep, forward-grep, параллельные воркеры в `mode=changes`, детерминированный дедуп.
+You are the orchestrator of a security review for the current branch diff. Recon, reverse-grep, forward-grep, parallel workers in `mode=changes`, deterministic dedup.
 
-## АРГУМЕНТЫ
+## ARGUMENTS
 
-Разобрать флаги из `$ARGUMENTS`:
+Parse flags from `$ARGUMENTS`:
 
-- `--label=<x>` — ярлык оркестратора, формирует `<review_root> = security-review-{label}` относительно cwd. Если флаг не передан — сделай **self-introspection** (см. шаг 0).
-- `--review-root=<path>` — переопределение пути review-root (для Docker/CI/firejail). Принимается относительный (резолвится от cwd) или абсолютный путь. Если задан — `--label` игнорируется.
-- `--interactive`, `--skip-recon`, `--force-skip-recon`, `--all-opus` — как в `security-project`. По умолчанию W4/W5 на sonnet (balanced profile); `--all-opus` форсирует opus везде.
-- `--no-console` — static-only recon: утилита НЕ запускает `bin/console` проекта. Используй при аудите hostile/untrusted-репо, при отсутствии runtime credentials или в CI-сценариях. Ceiling=medium (намеренно). Альтернатива — изоляция через firejail/Docker без флага.
-- `--exclude=<csv>` — дополнительные path-prefix'ы (относительно `<project_root>`), которые НЕ будут парситься PHP-extractor'ом (см. семантику в `security-project.md`). Объединяется с тем, что найдётся в `<project_root>/CLAUDE.md` на шаге 4a.
-- `--no-adversarial` — отключить adversarial refute pass (по умолчанию ВКЛ). Семантика и контракт — как в `security-project.md` (см. шаг 12.5 ниже).
-- `--exploratory` и `--scope=` для diff-режима **не поддерживаются** — диф сам по себе ограничивает scope.
+- `--label=<x>` — orchestrator label, forms `<review_root> = security-review-{label}` relative to cwd. If the flag is not passed — do **self-introspection** (see step 0).
+- `--review-root=<path>` — override of the review-root path (for Docker/CI/firejail). Accepts a relative path (resolved from cwd) or absolute. If set — `--label` is ignored.
+- `--interactive`, `--skip-recon`, `--force-skip-recon`, `--all-opus` — as in `security-project`. By default W4/W5 on sonnet (balanced profile); `--all-opus` forces opus everywhere.
+- `--no-console` — static-only recon: the utility does NOT run the project's `bin/console`. Use when auditing hostile/untrusted repos, when runtime credentials are absent, or in CI scenarios. Ceiling=medium (intentionally). Alternative — isolation via firejail/Docker without the flag.
+- `--exclude=<csv>` — additional path prefixes (relative to `<project_root>`) that will NOT be parsed by the PHP extractor (see semantics in `security-project.md`). Combined with whatever is found in `<project_root>/CLAUDE.md` in step 4a.
+- `--no-adversarial` — disable the adversarial refute pass (ON by default). Semantics and contract — as in `security-project.md` (see step 12.5 below).
+- `--exploratory` and `--scope=` for diff mode are **not supported** — the diff itself limits the scope.
 
-## ШАГИ
+## STEPS
 
 ### 0. Resolve label & review_root
 
-**Если задан `--review-root=<path>`** (абсолютный или относительный):
+**If `--review-root=<path>` is set** (absolute or relative):
 
-1. Резолви путь относительно cwd, если он относительный.
-2. Установи `REVIEW_ROOT = <resolved path>`.
-3. `--label` (если был) **игнорируется** — путь явный.
+1. Resolve the path relative to cwd, if it is relative.
+2. Set `REVIEW_ROOT = <resolved path>`.
+3. `--label` (if any) is **ignored** — the path is explicit.
 
-**Иначе**, если задан `--label=<x>`:
+**Otherwise**, if `--label=<x>` is set:
 
-1. Нормализуй `<x>` к словарю `claude | codex | gemini | deepseek | qwen | other-<short>` (kebab-case, ≤ 16 символов).
-2. `REVIEW_ROOT = security-review-<x>` (относительно cwd).
+1. Normalize `<x>` to the dictionary `claude | codex | gemini | deepseek | qwen | other-<short>` (kebab-case, ≤ 16 characters).
+2. `REVIEW_ROOT = security-review-<x>` (relative to cwd).
 
-**Иначе** (ни `--review-root`, ни `--label`):
+**Otherwise** (neither `--review-root` nor `--label`):
 
-Сделай **self-introspection**: определи свою модель и harness, в котором ты запущен, и выбери `{label}` из словаря:
+Do **self-introspection**: determine your model and the harness you are running in, and pick `{label}` from the dictionary:
 
 | Harness / CLI       | label      |
 |---------------------|------------|
@@ -69,23 +69,23 @@ allowed-tools:
 | Gemini CLI (Google)                 | `gemini`     |
 | DeepSeek CLI                        | `deepseek`   |
 | Qwen CLI (Alibaba)                  | `qwen`       |
-| Любая нераспознанная модель/CLI     | `other-<short>` (≤ 16 символов, kebab-case) |
+| Any unrecognized model/CLI          | `other-<short>` (≤ 16 characters, kebab-case) |
 
-Уровень — **harness/CLI**, не точная модель. `claude-opus-4-7` vs `claude-sonnet-4-6` нас не интересует — важна только защита от коллизий между параллельными прогонами **разных** моделей на одном проекте.
+Level — **harness/CLI**, not the exact model. `claude-opus-4-7` vs `claude-sonnet-4-6` is not our concern — what matters is only protection against collisions between parallel runs of **different** models on the same project.
 
-`REVIEW_ROOT = security-review-<label>` относительно cwd.
+`REVIEW_ROOT = security-review-<label>` relative to cwd.
 
-**Известное ограничение.** Open-weight fine-tunes могут ошибочно сообщать о себе как Claude (артефакт SFT). Если уверенность низкая — пользователю придётся передать `--label` явно.
+**Known limitation.** Open-weight fine-tunes may erroneously report themselves as Claude (SFT artifact). If confidence is low — the user will have to pass `--label` explicitly.
 
-После резолюции **выведи строку пользователю**:
+After resolution **print a line to the user**:
 
 ```
-review_root: <REVIEW_ROOT> (label: <label или "explicit override">)
+review_root: <REVIEW_ROOT> (label: <label or "explicit override">)
 ```
 
 ### 1. Ensure review_root layout
 
-Создай директорию и локальный `.gitignore` (содержимое: одна строка `*`) идемпотентно:
+Create the directory and local `.gitignore` (content: a single line `*`) idempotently:
 
 ```bash
 mkdir -p "<REVIEW_ROOT>"
@@ -93,39 +93,39 @@ test -f "<REVIEW_ROOT>/.gitignore" || printf '*\n' > "<REVIEW_ROOT>/.gitignore"
 mkdir -p "<REVIEW_ROOT>/waves"
 ```
 
-### 2. Legacy v1 detection (warning, не abort)
+### 2. Legacy v1 detection (warning, not abort)
 
-Если в корне проекта (cwd) обнаружен **старый** `SECURITY_CONTEXT.md`:
+If in the project root (cwd) an **old** `SECURITY_CONTEXT.md` is detected:
 
 ```bash
 test -f SECURITY_CONTEXT.md && echo "found"
 ```
 
-→ Выведи предупреждение, **не трогай файл**:
+→ Print a warning, **do not touch the file**:
 
 ```
-⚠️  Legacy v1 detected: SECURITY_CONTEXT.md в корне проекта (schema v1)
-    Файл не модифицируется. Свежий recon запишется в <REVIEW_ROOT>/CONTEXT.md.
+⚠️  Legacy v1 detected: SECURITY_CONTEXT.md in project root (schema v1)
+    The file is not modified. Fresh recon will be written to <REVIEW_ROOT>/CONTEXT.md.
 ```
 
-### 3. Определить базовую ветку и diff
+### 3. Determine base branch and diff
 
 ```bash
-# Попробовать origin/master, потом origin/main, потом master, main
+# Try origin/master, then origin/main, then master, main
 BASE_BRANCH=$(git rev-parse --verify origin/master 2>/dev/null \
   || git rev-parse --verify origin/main 2>/dev/null \
   || git rev-parse --verify master 2>/dev/null \
   || git rev-parse --verify main 2>/dev/null)
 ```
 
-Получи список изменённых файлов:
+Get the list of changed files:
 ```bash
 git diff ${BASE_BRANCH}...HEAD --name-only > "<REVIEW_ROOT>/diff_files.txt"
 ```
 
-Если diff пустой — abort с сообщением «Изменений относительно base ветки нет».
+If the diff is empty — abort with the message "No changes relative to the base branch".
 
-### 4. Чистка артефактов
+### 4. Clean up artifacts
 
 ```bash
 rm -f "<REVIEW_ROOT>/waves/"*.md
@@ -135,33 +135,33 @@ fi
 rm -f "<REVIEW_ROOT>/waves/"*.pre-retry.md
 ```
 
-`<REVIEW_ROOT>/.findings_state.json` (snapshot предыдущего прогона для cross-run diff) **не чистим** — dedupe прочитает его перед записью REPORT.md и перезапишет в конце. Diff (New / Recurring / Closed) появится в Executive Summary автоматически.
+`<REVIEW_ROOT>/.findings_state.json` (snapshot of the previous run for cross-run diff) is **not cleaned** — dedupe will read it before writing REPORT.md and overwrite it at the end. The diff (New / Recurring / Closed) appears in the Executive Summary automatically.
 
-### 4a. Сбор exclude-списка (CLAUDE.md + флаг)
+### 4a. Collecting the exclude list (CLAUDE.md + flag)
 
-Аналогично `security-project.md` шаг 3a: прочитай `<project_root>/CLAUDE.md`, найди секцию вида `## Code review exclusions` (или эквивалент), извлеки относительные path-prefix'ы. Объедини с `--exclude=<csv>` оркестратора. Результат — `EXCLUDE_CSV`. Встроенный `DEFAULT_EXCLUDE` утилита применит сама.
+Same as `security-project.md` step 3a: read `<project_root>/CLAUDE.md`, find a section of the form `## Code review exclusions` (or equivalent), extract relative path prefixes. Combine with the orchestrator's `--exclude=<csv>`. The result — `EXCLUDE_CSV`. The built-in `DEFAULT_EXCLUDE` is applied by the utility itself.
 
-Если что-то взяли из CLAUDE.md или флага — выведи строку:
+If something was taken from CLAUDE.md or the flag — print a line:
 
 ```
 Exclude (CLAUDE.md): <list>
-Exclude (--exclude flag): <list или "none">
+Exclude (--exclude flag): <list or "none">
 ```
 
 ### 4b. Detect removed defenses in diff
 
-Цель — найти в diff удалённые строки, которые были `denyAccessUnlessGranted`, `#[IsGranted]`, `middleware('auth')`, CSRF включения и подобные защитные конструкции. Если защиту удалили — security-review должен уделить особое внимание контроллеру / роуту / методу, теряющему защиту, и его консьюмерам.
+The goal — find in the diff removed lines that were `denyAccessUnlessGranted`, `#[IsGranted]`, `middleware('auth')`, CSRF enables, and similar defensive constructs. If a defense was removed — the security review should pay special attention to the controller / route / method losing the defense, and its consumers.
 
-#### 4b.1. Сбор полного diff
+#### 4b.1. Collect the full diff
 
 ```bash
 git diff "${BASE_BRANCH}...HEAD" -- '*.php' '*.yaml' '*.yml' '*.blade.php' \
   > "<REVIEW_ROOT>/full_diff.patch"
 ```
 
-#### 4b.2. Regex-сканирование удалённых защит
+#### 4b.2. Regex scan of removed defenses
 
-Запусти утилиту `diff_removed_defenses.py` — она применяет tightened regex к удалённым строкам (префикс `-`) и пишет JSON с категорией, файлом, номером строки в OLD-версии и pair-detection меткой:
+Run the `diff_removed_defenses.py` utility — it applies tightened regex to removed lines (prefix `-`) and writes JSON with category, file, line number in the OLD version, and pair-detection label:
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/bin/diff_removed_defenses.py \
@@ -169,50 +169,50 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/diff_removed_defenses.py \
   > "<REVIEW_ROOT>/removed_defenses.json"
 ```
 
-Покрываемые категории (источник истины — `bin/diff_removed_defenses.py::REMOVED_DEFENSE_PATTERNS`):
+Covered categories (source of truth — `bin/diff_removed_defenses.py::REMOVED_DEFENSE_PATTERNS`):
 
-| Категория (`pattern_matched`) | Что детектится |
+| Category (`pattern_matched`) | What is detected |
 |---|---|
-| `symfony_attr_isgranted` | `#[IsGranted(...)]` атрибут |
-| `symfony_call_denyaccess` | `denyAccessUnlessGranted(...)` вызов |
-| `laravel_blade_can` | блейд-директива `@can(...)` |
-| `laravel_can_with_string` | `->can('строка')` (отсев `$collection->can()` без аргумента) |
+| `symfony_attr_isgranted` | `#[IsGranted(...)]` attribute |
+| `symfony_call_denyaccess` | `denyAccessUnlessGranted(...)` call |
+| `laravel_blade_can` | blade directive `@can(...)` |
+| `laravel_can_with_string` | `->can('string')` (filters out `$collection->can()` without argument) |
 | `laravel_authorize` | `->authorize(...)` / `Gate::authorize(...)` |
-| `laravel_gate_define` | `Gate::define(...)` / `Gate::before(...)` (удаление политики) |
-| `middleware_auth_single` | `->middleware('auth')` (строковый аргумент) |
-| `middleware_auth_array` | `->middleware([..., 'auth', ...])` (массивный) |
+| `laravel_gate_define` | `Gate::define(...)` / `Gate::before(...)` (policy removal) |
+| `middleware_auth_single` | `->middleware('auth')` (string argument) |
+| `middleware_auth_array` | `->middleware([..., 'auth', ...])` (array) |
 | `middleware_throttle_single` / `_array` | `throttle:N,M` (rate limit) |
-| `symfony_csrf_protection` | `'csrf_protection' => true` (включение CSRF) |
+| `symfony_csrf_protection` | `'csrf_protection' => true` (CSRF enable) |
 | `hash_equals` | timing-safe compare |
 | `random_secure` | `random_bytes` / `random_int` |
 
-**Pair detection** (рефакторинг, не удаление). Утилита автоматически проставляет `added_equivalent_detected: true`, если в радиусе ±10 строк ТОГО ЖЕ файла найдена добавленная (`+`) строка с эквивалентной защитой (см. `_EQUIVALENCE_BUCKETS` в модуле). Такие entries оркестратор НЕ должен включать в `--extra-target-files` — это рефакторинг, контроллер по-прежнему защищён.
+**Pair detection** (refactor, not removal). The utility automatically sets `added_equivalent_detected: true` if within a ±10-line radius of THE SAME file an added (`+`) line with an equivalent defense is found (see `_EQUIVALENCE_BUCKETS` in the module). Such entries the orchestrator must NOT include in `--extra-target-files` — this is a refactor; the controller is still protected.
 
-#### 4b.3. Structural detection: удалённые Voter/Policy/Middleware файлы целиком
+#### 4b.3. Structural detection: Voter/Policy/Middleware files removed entirely
 
-Найди файлы, удалённые целиком этим diff'ом:
+Find files removed entirely by this diff:
 
 ```bash
 git diff --diff-filter=D --name-only "${BASE_BRANCH}...HEAD" \
   > "<REVIEW_ROOT>/deleted_files.txt"
 ```
 
-Для каждого удалённого файла:
+For each removed file:
 
-1. **Классифицируй kind**: voter / policy / middleware. Источник истины:
-   - **Если** существует `<REVIEW_ROOT>/CONTEXT.md` от **base ветки** (например, прошлый прогон сохранил `CONTEXT.prev.md`) — посмотри секции `framework_specific.symfony.voters`, `framework_specific.laravel.policies`, `framework_specific.laravel.middleware_groups` и сматчи путь.
-   - **Иначе** (CONTEXT base недоступен) — fallback по naming heuristic: `*Voter.php`, `*Policy.php`, `*Middleware.php`. Документируй в выводе, что сработал fallback.
+1. **Classify kind**: voter / policy / middleware. Source of truth:
+   - **If** `<REVIEW_ROOT>/CONTEXT.md` from the **base branch** exists (for example, a past run saved `CONTEXT.prev.md`) — look at the sections `framework_specific.symfony.voters`, `framework_specific.laravel.policies`, `framework_specific.laravel.middleware_groups` and match the path.
+   - **Otherwise** (CONTEXT base unavailable) — fallback by naming heuristic: `*Voter.php`, `*Policy.php`, `*Middleware.php`. Document in the output that the fallback fired.
 
-2. **Собери consumers** этих классов через встроенный `Grep` tool:
+2. **Collect consumers** of these classes through the built-in `Grep` tool:
 
    ```
    Grep(pattern="use App\\\\Security\\\\<ClassName>;", path=".", glob="*.php", output_mode="files_with_matches")
    Grep(pattern="<ClassName>::", path=".", glob="*.php", output_mode="files_with_matches")
    ```
 
-   (Не используй shell `grep -rn` — `Bash(grep:*)` не входит в allowed-tools.)
+   (Do not use shell `grep -rn` — `Bash(grep:*)` is not in allowed-tools.)
 
-3. Дополни `<REVIEW_ROOT>/removed_defenses.json` блоком `removed_files`:
+3. Augment `<REVIEW_ROOT>/removed_defenses.json` with a `removed_files` block:
 
 ```json
 {
@@ -227,20 +227,20 @@ git diff --diff-filter=D --name-only "${BASE_BRANCH}...HEAD" \
 }
 ```
 
-(Утилита из 4b.2 пишет только `removed_defenses`. Блок `removed_files` оркестратор добавляет вручную поверх.)
+(The utility from 4b.2 writes only `removed_defenses`. The `removed_files` block is added by the orchestrator manually on top.)
 
-#### 4b.4. Пробрасывание в plan_waves
+#### 4b.4. Forwarding to plan_waves
 
-Собери список файлов-кандидатов в `--extra-target-files`:
+Assemble the candidate file list for `--extra-target-files`:
 
-- из `removed_defenses[]` — поле `file` каждого entry, **где `added_equivalent_detected != true`** (пары рефакторинга пропускаем);
-- из `removed_files[].consumers` — все consumer-файлы.
+- from `removed_defenses[]` — the `file` field of each entry **where `added_equivalent_detected != true`** (refactor pairs are skipped);
+- from `removed_files[].consumers` — all consumer files.
 
-Дедуплицируй, передай как CSV в `plan_waves.py` на шаге 9.
+Deduplicate, pass as CSV to `plan_waves.py` in step 9.
 
-`plan_waves.py --extra-target-files=<csv>` добавит эти файлы в `target_files` всех волн (включая WINF, если запрошен `--exploratory`). Это гарантирует, что воркеры посмотрят на консьюмеров удалённой защиты, даже если сами consumer-файлы в diff не входят.
+`plan_waves.py --extra-target-files=<csv>` will add these files to `target_files` of all waves (including WINF, if `--exploratory` is requested). This guarantees that workers look at the consumers of the removed defense, even if the consumer files themselves are not in the diff.
 
-Выведи пользователю сводку:
+Print a summary to the user:
 
 ```
 Removed defenses: <N entries>
@@ -250,46 +250,46 @@ Removed defense files (whole-file deletes): <N>
 Extra target files for waves: <N> (will be merged into every wave's target_files)
 ```
 
-### 5. Recon фаза
+### 5. Recon phase
 
-Recon собирает инвентарь **по проекту целиком** (для полного контекста), но recipe помечает `touched_by_diff: true/false` в применимых items по списку изменённых файлов.
+Recon collects the inventory **across the whole project** (for full context), but the recipe marks `touched_by_diff: true/false` on applicable items per the list of changed files.
 
-**Если `--skip-recon` И `<REVIEW_ROOT>/CONTEXT.md` существует:** валидация fingerprints как в `security-project` (см. шаг 4 там).
+**If `--skip-recon` AND `<REVIEW_ROOT>/CONTEXT.md` exists:** fingerprint validation as in `security-project` (see step 4 there).
 
-**Иначе:**
+**Otherwise:**
 
-Прокинь `--diff-files=` recon-агенту (он передаст утилите as-is — см. контракт `agents/security-recon.md`). Если оркестратор получил `--no-console` — добавь и его. Если шаг 4a собрал непустой `EXCLUDE_CSV` — добавь `--exclude=<EXCLUDE_CSV>`:
+Forward `--diff-files=` to the recon agent (it forwards to the utility as-is — see contract in `agents/security-recon.md`). If the orchestrator received `--no-console` — add it too. If step 4a collected a non-empty `EXCLUDE_CSV` — add `--exclude=<EXCLUDE_CSV>`:
 
 ```
 Task(subagent_type="security-recon", prompt="""
   project_root: <cwd>
   review_root: <REVIEW_ROOT>
   --diff-files=<REVIEW_ROOT>/diff_files.txt
-  [--no-console]            # только если флаг был передан оркестратору
-  [--exclude=<EXCLUDE_CSV>] # только если 4a собрал непустой список
+  [--no-console]            # only if the flag was passed to the orchestrator
+  [--exclude=<EXCLUDE_CSV>] # only if 4a collected a non-empty list
 """)
 ```
 
-Поле `--diff-files=` — единственный сигнал для recon-агента, что нужен `scope=changes`. Если поле передано как `diff_files:` без `--`, recon молча отработает в project-режиме и `touched_by_diff` НЕ будет проставлен — весь mode=changes pipeline сломается.
+The `--diff-files=` field is the only signal to the recon agent that `scope=changes` is needed. If the field is passed as `diff_files:` without `--`, recon will silently run in project mode and `touched_by_diff` will NOT be set — the entire mode=changes pipeline will break.
 
-После возврата — проверь `RECON_OK`. Если получено `RECON_*_FAILED` — abort с понятной ошибкой.
+After return — check `RECON_OK`. If `RECON_*_FAILED` is received — abort with a clear error.
 
-Прогон sanity-check filesystem coverage:
+Run filesystem coverage sanity-check:
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>" --sanity
 ```
 
-Для `changes`-режима sanity информативный: если recon пропустил >20% контроллеров/handlers/voters/listeners от filesystem, reverse/forward-grep может не найти consumers для изменённых сервисов. Поведение по threshold ladder — как в `security-project` (warning 5–20 %, error >20 %).
+For `changes` mode the sanity is informational: if recon skipped >20% of controllers/handlers/voters/listeners from the filesystem, reverse/forward-grep may not find consumers for changed services. Behavior by threshold ladder — as in `security-project` (warning 5–20 %, error >20 %).
 
-### 6. Резюме и опциональный чекпоинт
+### 6. Summary and optional checkpoint
 
-Выведи пользователю резюме с акцентом на touched items (имена секций — те, что есть в данном CONTEXT.md):
+Print a summary to the user with emphasis on touched items (section names — those present in this CONTEXT.md):
 
 ```
-Recon завершён (recon_confidence: <level>, ceiling: <level>).
+Recon complete (recon_confidence: <level>, ceiling: <level>).
 Stack: <framework>
-Diff затронул:
+Diff touched:
   - attack_surface: <N touched of M total>
   - data_access: <N touched>
   - authz_usage / framework_specific.<stack>.<authz key>: <touched listing>
@@ -297,51 +297,51 @@ Diff затронул:
   - secrets / fintech_markers / framework_specific.<stack>.* config: <touched|untouched>
 ```
 
-Если `--interactive` — чекпоинт как в `security-project`.
+If `--interactive` — checkpoint as in `security-project`.
 
 ### 7. Reverse-grep (changed service → consumers)
 
-Для каждого изменённого файла в `<REVIEW_ROOT>/diff_files.txt`, который **не является** entry point (controller/command/handler/listener/voter/route-config/security config):
+For each changed file in `<REVIEW_ROOT>/diff_files.txt` that **is not** an entry point (controller/command/handler/listener/voter/route-config/security config):
 
-1. Определи FQN класса из пути файла (PSR-4: `src/Service/PaymentService.php` → `App\Service\PaymentService`).
-2. Найди использования FQN через **встроенный `Grep` tool** (он есть в allowed-tools оркестратора, не shell):
+1. Determine the FQN of the class from the file path (PSR-4: `src/Service/PaymentService.php` → `App\Service\PaymentService`).
+2. Find FQN usages through the **built-in `Grep` tool** (it is in the orchestrator's allowed-tools, not shell):
 
    ```
    Grep(pattern="PaymentService", path="src", glob="*.php", output_mode="files_with_matches")
    ```
 
-3. Дополнительно — для публичных методов этого класса (если имя длиннее 6 символов ИЛИ CamelCase, например `findByDynamicCriteria`, но не `find`, `get`, `save`):
+3. Additionally — for this class's public methods (if the name is longer than 6 characters OR CamelCase, for example `findByDynamicCriteria`, but not `find`, `get`, `save`):
 
    ```
    Grep(pattern="->findByDynamicCriteria\\(", path="src", glob="*.php", output_mode="files_with_matches")
    ```
 
-4. Если доступен `mcp__phpstorm__search_symbol` — верифицируй результаты через `{type: "method_call"}` (точнее, чем regex по PHP).
-5. Найденных потребителей (Controllers, Handlers, Commands) добавь в `entry_points_in_scope` соответствующих волн.
+4. If `mcp__phpstorm__search_symbol` is available — verify results via `{type: "method_call"}` (more accurate than regex over PHP).
+5. Found consumers (Controllers, Handlers, Commands) — add to `entry_points_in_scope` of the corresponding waves.
 
-**Важно:** не используй shell `grep -rn` — `Bash(grep:*)` не входит в allowed-tools этой команды. Только встроенный `Grep` tool.
+**Important:** do not use shell `grep -rn` — `Bash(grep:*)` is not in this command's allowed-tools. Only the built-in `Grep` tool.
 
-### 8. Forward-grep (changed entry → downstream) — строго 1 уровень
+### 8. Forward-grep (changed entry → downstream) — strictly 1 level
 
-Для каждого изменённого файла, **который является PHP entry point** (controller с route-атрибутом, message handler, command, voter, listener):
+For each changed file that **is a PHP entry point** (controller with route attribute, message handler, command, voter, listener):
 
-**Алгоритм (4 шага, глубина = 1):**
+**Algorithm (4 steps, depth = 1):**
 
-1. **Парс constructor injected types** изменённого файла: найди `public function __construct(` и извлеки типы параметров (включая constructor promotion: `public function __construct(private readonly FooService $foo)`). Карта: `property_name → FQN`.
+1. **Parse constructor injected types** of the changed file: find `public function __construct(` and extract parameter types (including constructor promotion: `public function __construct(private readonly FooService $foo)`). Map: `property_name → FQN`.
 
-2. **Найди в изменённом файле** через `Grep` tool паттерн `\$this->([a-zA-Z_]+)->([a-zA-Z_]+)\(` → извлеки пары `(field_name, method_name)`. Не используй shell grep — `Bash(grep:*)` не в allowed-tools.
+2. **Find in the changed file** via `Grep` tool the pattern `\$this->([a-zA-Z_]+)->([a-zA-Z_]+)\(` → extract pairs `(field_name, method_name)`. Do not use shell grep — `Bash(grep:*)` not in allowed-tools.
 
-3. **Резолв field_name → FQN** через карту из шага 1.
+3. **Resolve field_name → FQN** via the map from step 1.
 
-4. **Добавь FQN в `entry_points_in_scope`** соответствующих волн. Если MCP доступен — верифицируй через `mcp__phpstorm__search_symbol`.
+4. **Add FQN to `entry_points_in_scope`** of the corresponding waves. If MCP is available — verify via `mcp__phpstorm__search_symbol`.
 
-**Config-файлы (yaml/xml) — forward-grep не делается.** При изменении централизованных конфигов (например `config/packages/security.yaml`, `config/routes/*` для Symfony) recipe уже проставит `touched_by_diff: true` на соответствующих items секций (`framework_specific.<stack>.firewalls` / `attack_surface` / `authz_usage` / etc.) во время recon. Worker mode=changes возьмёт их из CONTEXT.md по контракту и трассирует data flow от них.
+**Config files (yaml/xml) — forward-grep is not done.** When centralized configs change (for example `config/packages/security.yaml`, `config/routes/*` for Symfony), the recipe will already set `touched_by_diff: true` on corresponding items of sections (`framework_specific.<stack>.firewalls` / `attack_surface` / `authz_usage` / etc.) during recon. The mode=changes worker will take them from CONTEXT.md by contract and trace data flow from them.
 
-**Known limitation (документировано в плане):** property injection, service locator, message bus dispatch (`MessageBusInterface` и аналоги), цепочки сервисов на 2+ шага, `__invoke`, динамические методы — не покрываются. Для критичных ревью рекомендуется `/security-project` целиком.
+**Known limitation (documented in plan):** property injection, service locator, message bus dispatch (`MessageBusInterface` and analogs), chains of services 2+ steps long, `__invoke`, dynamic methods — not covered. For critical reviews `/security-project` in full is recommended.
 
-### 8a. Распределение consumers по волнам (детерминированное)
+### 8a. Distribution of consumers across waves (deterministic)
 
-Reverse-grep (шаг 7) и forward-grep (шаг 8) дали список consumer-файлов, которые нужно добавить в `entry_points_in_scope` соответствующих волн. Чтобы убрать LLM-эвристику «угадай в какую волну добавить», вызови:
+Reverse-grep (step 7) and forward-grep (step 8) gave a list of consumer files to add to `entry_points_in_scope` of the corresponding waves. To remove the LLM heuristic "guess which wave to add to" — call:
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/bin/map_consumers_to_waves.py \
@@ -349,7 +349,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/map_consumers_to_waves.py \
   --consumer <path1> --consumer <path2> ...
 ```
 
-Или через файл (удобно при большом количестве):
+Or via file (convenient with many items):
 
 ```bash
 printf '%s\n' <path1> <path2> > /tmp/consumers.txt
@@ -358,7 +358,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/map_consumers_to_waves.py \
   --consumers-file /tmp/consumers.txt
 ```
 
-Утилита читает CONTEXT.md, ищет каждый consumer в `attack_surface` (и framework_specific.<stack>.* секциях с `kind`), маппит kind → wave_ids через статический inverse-index из WAVES. Output:
+The utility reads CONTEXT.md, looks for each consumer in `attack_surface` (and framework_specific.<stack>.* sections with `kind`), maps kind → wave_ids via the static inverse index from WAVES. Output:
 
 ```json
 {
@@ -367,9 +367,9 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/map_consumers_to_waves.py \
 }
 ```
 
-При запуске воркеров (шаг 10) каждому consumer'у с непустым `waves` добавь его файл в `entry_points_in_scope` ТОЛЬКО для перечисленных волн. Consumers с `kind: null / waves: []` (не нашлись в инвентаре) — добавь во ВСЕ волны как fallback (раньше так делали для всех). Это сохраняет recall при unknown-kind и убирает шум для known-kind.
+When launching workers (step 10) — for each consumer with non-empty `waves`, add its file to `entry_points_in_scope` ONLY for the listed waves. Consumers with `kind: null / waves: []` (not found in inventory) — add to ALL waves as fallback (used to do so for all). This preserves recall on unknown-kind and removes noise for known-kind.
 
-### 9. Генерация плана волн
+### 9. Wave plan generation
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/bin/plan_waves.py "<REVIEW_ROOT>/CONTEXT.md" \
@@ -380,57 +380,57 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/plan_waves.py "<REVIEW_ROOT>/CONTEXT.md" \
   [--extra-target-files="<csv from step 4b.4>"]
 ```
 
-`--save-plan` сохраняет JSON-план для coverage-блока в REPORT.md (шаги 12 / 12.5.2).
+`--save-plan` saves the JSON plan for the coverage block in REPORT.md (steps 12 / 12.5.2).
 
-**`--plugin-root` обязателен** — иначе воркеры не найдут checklists (путь резолвится к cwd проекта, не плагина).
+**`--plugin-root` is required** — otherwise workers will not find checklists (the path resolves to the project's cwd, not the plugin's).
 
-`--extra-target-files=<csv>` (опционально) — список consumer-файлов удалённых защит из шага 4b.4 (Voter / Policy / Middleware consumers + контроллеры с removed authz, у которых `added_equivalent_detected != true`). Утилита добавит эти пути в `target_files` каждой волны (включая WINF), даже если сами файлы не входят в diff. Это гарантирует ревью затронутых регрессией файлов.
+`--extra-target-files=<csv>` (optional) — list of consumer files of removed defenses from step 4b.4 (Voter / Policy / Middleware consumers + controllers with removed authz where `added_equivalent_detected != true`). The utility will add these paths to `target_files` of each wave (including WINF), even if the files themselves are not in the diff. This guarantees review of files affected by regression.
 
-Скрипт фильтрует волны (пропускает те, чей срез не пересекается с diff) и добавляет `_CHANGES` суффикс к slice_id. WINF (exploratory) в diff-режиме не запускается, если нет пересечения diff-а с relevant items.
+The script filters waves (skips those whose slice does not intersect the diff) and adds the `_CHANGES` suffix to slice_id. WINF (exploratory) in diff mode is not launched if there is no intersection of the diff with relevant items.
 
-Печать плана пользователю (см. аналогичный пункт в `security-project.md`).
+Print the plan to the user (see the analogous item in `security-project.md`).
 
-### 10. Параллельный запуск воркеров в `mode=changes`
+### 10. Parallel worker launch in `mode=changes`
 
-Для каждой волны из плана, дополнительно подать найденные reverse/forward-grep entry points:
+For each wave from the plan, additionally feed the reverse/forward-grep entry points found:
 
 ```
-Task(subagent_type="security", model=<из плана, поле "model">, prompt="""
+Task(subagent_type="security", model=<from plan, field "model">, prompt="""
   review_root: <REVIEW_ROOT>
-  relevant_section_paths: <из плана>
-  checklists: <из плана>
-  entry_points_in_scope: <из плана + reverse/forward-grep finds>
-  target_files: <из плана (только touched)>
-  slice_id: <из плана с _CHANGES>
+  relevant_section_paths: <from plan>
+  checklists: <from plan>
+  entry_points_in_scope: <from plan + reverse/forward-grep finds>
+  target_files: <from plan (only touched)>
+  slice_id: <from plan with _CHANGES>
   mode: changes
 """)
 ```
 
-**Важно:** параметр `model` передаётся как аргумент Task-вызова, а не в тексте промпта. Значение берётся из поля `"model"` JSON-плана.
+**Important:** the `model` parameter is passed as a Task call argument, not in the prompt text. The value is taken from the `"model"` field of the JSON plan.
 
-### 10a. Safety net + прогресс (КРИТИЧНО)
+### 10a. Safety net + progress (CRITICAL)
 
-Для каждого возврата Task воркера — такая же логика как в `security-project.md`:
+For each Task worker return — same logic as in `security-project.md`:
 
-1. `ls "<REVIEW_ROOT>/waves/<slice_id>.md"` — проверь существование.
-2. Если файла нет — извлеки markdown из ответа воркера (блоки `# Уязвимость ...`) и запиши сам через Write по абсолютному пути `<REVIEW_ROOT>/waves/<slice_id>.md`.
-3. Если markdown тоже нет — создай файл-заглушку с причиной.
-4. Выведи строку статуса `✓ <slice_id>: ...` или `⚠ recovered` или `✗ failed`.
+1. `ls "<REVIEW_ROOT>/waves/<slice_id>.md"` — check existence.
+2. If the file is missing — extract markdown from the worker's response (blocks `# Vulnerability ...`) and write it yourself via Write to the absolute path `<REVIEW_ROOT>/waves/<slice_id>.md`.
+3. If markdown is also missing — create a stub file with the reason.
+4. Print a status line `✓ <slice_id>: ...` or `⚠ recovered` or `✗ failed`.
 
-Это **всегда включённая** защита от случая, когда воркер вернул находки только в ответном сообщении и не выполнил Write.
+This is an **always-on** protection against the case where the worker returned findings only in the response message and did not execute Write.
 
-### 11. Критерий репортинга (встроен в контракт воркера)
+### 11. Reporting criterion (built into the worker's contract)
 
-Воркер репортит находку **только если exploit path содержит изменённый узел**:
-- sink в target_files
-- ИЛИ entry point с `touched_by_diff: true` (в items CONTEXT.md)
-- ИЛИ изменённый authz config / централизованный route config / event listener / voter
+The worker reports a finding **only if the exploit path contains a changed node**:
+- sink in target_files
+- OR entry point with `touched_by_diff: true` (in items of CONTEXT.md)
+- OR changed authz config / centralized route config / event listener / voter
 
-Жёстко прошитых проверок «security.yaml»/«voter» в воркере **нет** — это framework-agnostic worker, конкретику он берёт из `relevant_section_paths` и checklists.
+Hard-wired checks for "security.yaml"/"voter" in the worker **do not exist** — this is a framework-agnostic worker; it takes specifics from `relevant_section_paths` and checklists.
 
-### 11a. Merge pre-retry файлов (если есть)
+### 11a. Merge pre-retry files (if any)
 
-Если остались файлы `*.pre-retry.md` от предыдущих retry:
+If `*.pre-retry.md` files remain from previous retries:
 
 ```bash
 for pre in "<REVIEW_ROOT>/waves/"*.pre-retry.md; do
@@ -442,9 +442,9 @@ for pre in "<REVIEW_ROOT>/waves/"*.pre-retry.md; do
 done
 ```
 
-Дедуп разберётся с дубликатами.
+Dedup will handle duplicates.
 
-### 12. Дедупликация и свод
+### 12. Deduplication and summary
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/bin/dedupe_findings.py \
@@ -454,29 +454,29 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/dedupe_findings.py \
   --waves-plan "<REVIEW_ROOT>/waves_plan.json"
 ```
 
-Дедуп выдаёт split-отчёт: index `<REVIEW_ROOT>/REPORT.md` + папка `<REVIEW_ROOT>/REPORT/` с детальными файлами по `root_cause_family` и `manual_review.md` (включая parse-failed находки с флагом `[PARSE_FAILED]`). Index выводит callout «⚠️ Action required: N» при ненулевом manual count. Для single-file вывода — флаг `--single-file`.
+Dedup produces a split report: index `<REVIEW_ROOT>/REPORT.md` + folder `<REVIEW_ROOT>/REPORT/` with detail files by `root_cause_family` and `manual_review.md` (including parse-failed findings with the `[PARSE_FAILED]` flag). The index outputs a callout "⚠️ Action required: N" on non-zero manual count. For single-file output — flag `--single-file`.
 
-### 12.5. Adversarial refute pass (опционально, по умолчанию on)
+### 12.5. Adversarial refute pass (optional, on by default)
 
-Если оркестратор был запущен с флагом `--no-adversarial` — **пропусти этот шаг** (тогда сразу к шагу 13).
+If the orchestrator was launched with `--no-adversarial` — **skip this step** (then directly to step 13).
 
-#### 12.5.1. Запуск refute-волны
+#### 12.5.1. Launching the refute wave
 
-Прочитай `<REVIEW_ROOT>/REPORT.md` index-таблицу. Разбей строки на батчи по ≤20 findings (first 20 → batch_index=0, и т.д.).
+Read the `<REVIEW_ROOT>/REPORT.md` index table. Split rows into batches of ≤20 findings (first 20 → batch_index=0, etc.).
 
-Для каждого батча — sequential Task call (параллелить **запрещено** — refute-агент пишет в один файл `<REVIEW_ROOT>/refute.md` Append-режимом):
+For each batch — sequential Task call (parallelism is **forbidden** — the refute agent writes to a single file `<REVIEW_ROOT>/refute.md` in Append mode):
 
 ```
 Task subagent_type=security-refute prompt="
 review_root: <REVIEW_ROOT>
 batch_index: <0..N-1>
-findings_slice: <markdown срез index'а REPORT.md ≤ 20 finding строк>
+findings_slice: <markdown slice of REPORT.md index ≤ 20 finding rows>
 "
 ```
 
-Soft timeout 10 минут per call. Если Task не вернулся в timeout — оркестратор печатает warning «adversarial pass partial — N from M findings reviewed» и продолжает с partial refute.
+Soft timeout 10 minutes per call. If the Task did not return within timeout — the orchestrator prints a warning "adversarial pass partial — N from M findings reviewed" and continues with partial refute.
 
-#### 12.5.2. Применение refute результатов
+#### 12.5.2. Apply refute results
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/bin/dedupe_findings.py \
@@ -488,29 +488,29 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/dedupe_findings.py \
   --project-root "<PROJECT_ROOT>"
 ```
 
-Это перезапускает дедуп и применяет refute-теги. На выходе:
-- В `REPORT.md` каждый refute-помеченный finding получает `[REFUTE_CLAIMED]` маркер с `refute_file:refute_line` хвостом.
-- Новый файл `<REVIEW_ROOT>/REPORT/refute_invalid.md` — refute records, не прошедшие auto-validation.
-- Executive summary показывает счётчики `confirmed / refute_claimed / refute_invalid / manual_review / parse_failed`.
+This re-runs dedup and applies refute tags. On output:
+- In `REPORT.md`, each refute-marked finding receives a `[REFUTE_CLAIMED]` marker with a `refute_file:refute_line` tail.
+- A new file `<REVIEW_ROOT>/REPORT/refute_invalid.md` — refute records that did not pass auto-validation.
+- Executive summary shows counters `confirmed / refute_claimed / refute_invalid / manual_review / parse_failed`.
 
-### 13. Вывод пользователю
+### 13. Output to user
 
 ```
-Security review изменений завершён.
+Security review of changes complete.
   Index: <REVIEW_ROOT>/REPORT.md
-  Детали по категориям: <REVIEW_ROOT>/REPORT/<family>.md
-  Базовая ветка: <branch>
-  Изменённых файлов: <N>
-  Не покрытые срезы: [<list> или none]
+  Details by category: <REVIEW_ROOT>/REPORT/<family>.md
+  Base branch: <branch>
+  Changed files: <N>
+  Uncovered slices: [<list> or none]
 ```
 
-## ПРИНЦИПЫ
+## PRINCIPLES
 
-- reverse-grep и forward-grep — эвристики, дают ~80% покрытия в типичных проектах с DI по типу
-- Непрямая DI (property injection, service locator, message bus dispatch) — не покрывается
-- Для критичных ревью — периодически запускать `/security-project` целиком
+- reverse-grep and forward-grep are heuristics; they give ~80% coverage in typical projects with DI by type
+- Indirect DI (property injection, service locator, message bus dispatch) is not covered
+- For critical reviews — periodically run `/security-project` in full
 
-## Известные ограничения
+## Known limitations
 
-- Без полного call graph некоторые регрессии через старый код могут быть пропущены
-- Worker retry отсутствует — при падении воркера срез помечается «не покрыт»
+- Without a full call graph some regressions through old code may be missed
+- Worker retry is absent — on worker crash the slice is marked "not covered"

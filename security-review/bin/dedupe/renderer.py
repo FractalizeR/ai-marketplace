@@ -96,7 +96,7 @@ def render_finding(idx: int, mf: MergedFinding) -> str:
             visible_flags.append(fl)
     flag_suffix = f" {' '.join(visible_flags)}" if visible_flags else ""
     title = (
-        f"# Уязвимость {idx}: [{_title_category(mf)}]: "
+        f"# Vulnerability {idx}: [{_title_category(mf)}]: "
         f"`{f.sink_file}:{f.sink_line}`{flag_suffix}"
     )
 
@@ -104,7 +104,7 @@ def render_finding(idx: int, mf: MergedFinding) -> str:
     body = _replace_field(body, "Severity", mf.severity)
     body = _replace_field(body, "Confidence", f"{mf.confidence}/10")
     if mf.categories:
-        body = _replace_field(body, "Категория", ", ".join(mf.categories))
+        body = _replace_field(body, "Category", ", ".join(mf.categories))
     if "**sink_hash**" not in body:
         body = _append_field(body, "sink_hash", f.sink_hash)
     else:
@@ -129,9 +129,9 @@ def render_finding(idx: int, mf: MergedFinding) -> str:
     if mf.merged_from:
         sources = sorted({x.source_file for x in mf.merged_from if x.source_file})
         if sources:
-            out.append(f"**Также обнаружено в:** {', '.join(sources)}")
+            out.append(f"**Also detected in:** {', '.join(sources)}")
     if mf.related:
-        out.append(f"**Связана с:** {', '.join(mf.related)}")
+        out.append(f"**Related to:** {', '.join(mf.related)}")
     if FLAG_REFUTE_CLAIMED in mf.flags and mf.refute_rationale:
         out.append("")
         out.append(
@@ -269,7 +269,7 @@ def _render_checklist_coverage(
 
     finding_counts = _findings_per_checklist(merged)
 
-    # On-disk inventory minus activated → "не активирован" set.
+    # On-disk inventory minus activated → "not activated" set.
     on_disk = _list_all_on_disk_checklists(plugin_root)
     inactive = [rel for rel in on_disk if rel not in seen_active]
 
@@ -283,14 +283,14 @@ def _render_checklist_coverage(
         wave_label = f" ({', '.join(waves)})" if waves else ""
         n = finding_counts.get(rel, 0)
         if n > 0:
-            lines.append(f"- `{rel}`{wave_label}: активирован, {n} findings")
+            lines.append(f"- `{rel}`{wave_label}: activated, {n} findings")
         else:
-            lines.append(f"- `{rel}`{wave_label}: активирован, 0 findings ← was empty")
+            lines.append(f"- `{rel}`{wave_label}: activated, 0 findings ← was empty")
 
     for rel in inactive:
         stack = _checklist_stack(rel)
-        suffix = f" (стэк: {stack})" if stack else ""
-        lines.append(f"- `{rel}`: не активирован{suffix}")
+        suffix = f" (stack: {stack})" if stack else ""
+        lines.append(f"- `{rel}`: not activated{suffix}")
 
     lines.append("")
     return lines

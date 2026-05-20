@@ -1,29 +1,29 @@
 # Information disclosure (Symfony)
 
-> Этот чек-лист дополняет `core/disclosure.md` для проектов на symfony. При конфликте инструкций — приоритет за этим файлом, как более специфичным. Worker загружает оба файла одновременно.
+> This checklist complements `core/disclosure.md` for symfony projects. On conflicting instructions, this file takes priority as the more specific one. Worker loads both files simultaneously.
 
-**Это типичные паттерны категории, не исчерпывающий список.** Если ты обнаружил эксплуатируемую уязвимость, проходящую методологию (источник входа → трансформации → sink + конкретный путь эксплуатации) — репортить **обязательно**, даже если она не подпадает ни под один пункт ниже. Чек-лист — указатель приоритета поиска, а не фильтр.
+**These are typical patterns of the category, not an exhaustive list.** If you discover an exploitable vulnerability that passes the methodology (input source → transformations → sink + a concrete exploit path) — reporting is **mandatory**, even if it does not fall under any item below. The checklist is a search-priority pointer, not a filter.
 
 ## Symfony WDT / Profiler / Debug
 
-- Symfony в production с `APP_DEBUG=1` → полный Web Debug Toolbar и Profiler доступны (route `/_profiler`, `/_wdt/*`)
-- `framework.web_link.enabled: true` на prod
-- `render()` с `_debug_bar` / WebProfilerBundle включён в production composer install
+- Symfony in production with `APP_DEBUG=1` → full Web Debug Toolbar and Profiler are accessible (routes `/_profiler`, `/_wdt/*`)
+- `framework.web_link.enabled: true` on prod
+- `render()` with `_debug_bar` / WebProfilerBundle included in the production composer install
 
 ## API response leaks (Symfony Serializer)
 
-- Serializer без `#[Groups(['public'])]` фильтра → весь entity с internal полями (`hashedPassword`, `roles`, internal IDs) отдаётся через `$serializer->serialize($entity, 'json')`
+- Serializer without a `#[Groups(['public'])]` filter → the entire entity with internal fields (`hashedPassword`, `roles`, internal IDs) is emitted via `$serializer->serialize($entity, 'json')`
 
-## EasyAdmin / Sonata: sensitive fields exposed без mask
+## EasyAdmin / Sonata: sensitive fields exposed without mask
 
-**Recipe-driven recall (v3.2+).** Все EasyAdmin CRUD-контроллеры и их поля собраны recipe'ом в `framework_specific.symfony.easyadmin_crud_controllers.items[*].configure_fields`. Каждое поле — `{name, field_type, modifiers}`. Sonata-аналог — `framework_specific.symfony.sonata_admin_classes.items[*].form_fields` (массив имён полей; modifier'ы у Sonata не отслеживаются recipe'ом — fall back на grep тела `configureFormFields()` для проверки masking). Идти по этим спискам, не grep'ом — это даёт детерминированный recall на больших admin-секциях.
+**Recipe-driven recall (v3.2+).** All EasyAdmin CRUD controllers and their fields are collected by the recipe into `framework_specific.symfony.easyadmin_crud_controllers.items[*].configure_fields`. Each field is `{name, field_type, modifiers}`. Sonata analogue — `framework_specific.symfony.sonata_admin_classes.items[*].form_fields` (an array of field names; Sonata modifiers are not tracked by the recipe — fall back to grepping the body of `configureFormFields()` to verify masking). Walk these lists, not via grep — this gives deterministic recall on large admin sections.
 
-Триггер finding'а (EasyAdmin): `field.name` матчит чувствительный паттерн (`accessToken|refreshToken|secretKey|apiKey|botToken|clientSecret|password|privateKey|webhookSecret|pat|pwd`) **и** `field.modifiers` НЕ содержит хотя бы одного из защитных: `formatValue`, `onlyOnIndex`, `hideOnForm`, `hideOnIndex`. Plain `TextField` / `EmailField` / `TextareaField` без masking → finding.
+Finding trigger (EasyAdmin): `field.name` matches the sensitive pattern (`accessToken|refreshToken|secretKey|apiKey|botToken|clientSecret|password|privateKey|webhookSecret|pat|pwd`) **and** `field.modifiers` does NOT contain at least one of the defensive ones: `formatValue`, `onlyOnIndex`, `hideOnForm`, `hideOnIndex`. A plain `TextField` / `EmailField` / `TextareaField` without masking → finding.
 
-Триггер finding'а (Sonata): имя поля в `form_fields[]` матчит тот же чувствительный паттерн → grep тела `configureFormFields()` для проверки `->setDisabled(true)` / удаления из формы / masking при render — без них finding.
+Finding trigger (Sonata): field name in `form_fields[]` matches the same sensitive pattern → grep the body of `configureFormFields()` to verify `->setDisabled(true)` / removal from the form / masking on render — without these — finding.
 
-- `CrudController::configureFields()` возвращает `TextField::new('accessToken'|'refreshToken'|'secretKey'|'apiKey'|'botToken'|'clientSecret'|'password')` без `formatValue(fn ($v) => substr((string)$v, 0, 4) . '***')` или `->onlyOnIndex()/->hideOnForm()/->hideOnIndex()` → admin видит plaintext в index/detail/edit
+- `CrudController::configureFields()` returns `TextField::new('accessToken'|'refreshToken'|'secretKey'|'apiKey'|'botToken'|'clientSecret'|'password')` without `formatValue(fn ($v) => substr((string)$v, 0, 4) . '***')` or `->onlyOnIndex()/->hideOnForm()/->hideOnIndex()` → admin sees plaintext in index/detail/edit
 - Sink_kind: `sensitive_field_unmasked` (root_cause_family `disclosure`)
-- Threat: компрометация admin-аккаунта = массовый exfiltration tokens через UI; browser history / скриншоты в slack/jira / screen-recordings становятся векторами утечки
-- Fix: либо `formatValue()` с masked rendering, либо отдельный `ROLE_TOKEN_VIEW` voter с явным «Reveal token» action и audit-log
-- **Limitation:** если у контроллера `unresolved_fields: true` (configureFields/configureFormFields делегирует в parent), recipe не видит итоговый набор → fall back на grep по исходникам и BaseCrudController'у.
+- Threat: compromise of an admin account = mass exfiltration of tokens via UI; browser history / screenshots in slack/jira / screen recordings become leakage vectors
+- Fix: either `formatValue()` with masked rendering, or a dedicated `ROLE_TOKEN_VIEW` voter with an explicit "Reveal token" action and audit-log
+- **Limitation:** if the controller has `unresolved_fields: true` (configureFields/configureFormFields delegates to parent), the recipe does not see the final set → fall back to grepping the source and BaseCrudController.

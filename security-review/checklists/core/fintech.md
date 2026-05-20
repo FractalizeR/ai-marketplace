@@ -1,81 +1,81 @@
 # Fintech / business logic / concurrency / money handling
 
-**Это типичные паттерны категории, не исчерпывающий список.** Если ты обнаружил эксплуатируемую уязвимость, проходящую методологию (источник входа → трансформации → sink + конкретный путь эксплуатации) — репортить **обязательно**, даже если она не подпадает ни под один пункт ниже. Чек-лист — указатель приоритета поиска, а не фильтр.
+**These are typical patterns of the category, not an exhaustive list.** If you discover an exploitable vulnerability that passes the methodology (input source → transformations → sink + concrete exploit path), reporting is **mandatory**, even if it does not fall under any of the items below. The checklist is a search priority pointer, not a filter.
 
 ## Recommended sink_kinds
 
-- `race_condition` — race condition в критичной операции (баланс, промокоды)
-- `decimal_arith` — float/double для денежных операций
-- `idor_lookup` — IDOR на финансовых операциях (cross-ref `auth.md`)
-- `webhook_unverified` — webhook без подписи (cross-ref `auth.md`)
+- `race_condition` — race condition in a critical operation (balance, promo codes)
+- `decimal_arith` — float/double for monetary operations
+- `idor_lookup` — IDOR on financial operations (cross-ref `auth.md`)
+- `webhook_unverified` — webhook without signature (cross-ref `auth.md`)
 
 ## Concurrency / race conditions
 
-- Двойное списание / двойная зарядка карты: обработка без transactional lock
-- Множественное использование промокода / скидки через параллельные запросы
-- Check-then-act на балансе: `if (balance >= amount) { balance -= amount }` без transaction + row lock
-- Missing `SELECT ... FOR UPDATE` (pessimistic lock) для финансовых операций
-- Отсутствие optimistic locking (version-column / `@Version` или эквивалент в ORM) для entities, которые редактируются конкурентно
-- Transaction isolation level слишком слабый (READ COMMITTED на PostgreSQL — default, но для финансов иногда нужен SERIALIZABLE)
-- `DELETE + INSERT` вместо `UPSERT` в high-concurrency сценариях → race на уникальности
+- Double debit / double card charge: processing without a transactional lock
+- Multiple use of a promo code / discount via parallel requests
+- Check-then-act on balance: `if (balance >= amount) { balance -= amount }` without transaction + row lock
+- Missing `SELECT ... FOR UPDATE` (pessimistic lock) for financial operations
+- Missing optimistic locking (version column / `@Version` or ORM equivalent) for entities edited concurrently
+- Transaction isolation level too weak (READ COMMITTED on PostgreSQL — default, but for finance SERIALIZABLE is sometimes required)
+- `DELETE + INSERT` instead of `UPSERT` in high-concurrency scenarios → race on uniqueness
 
 ## Precision / rounding
 
-- `float` / `double` для денег: `0.1 + 0.2 !== 0.3`
-- Должно быть: `int` (cents), `string`, либо специализированная Money library (`brick/money`, `moneyphp/money`)
-- Database decimal column с недостаточной precision (scale < 2 для RUB/USD, < 8 для crypto)
-- Округление в неправильную сторону: `round($amount, 2)` (banker's rounding не используется там, где нужен)
-- Convertors валют с промежуточным `float`
-- `number_format($money, 2)` для хранения в БД (строковое представление, теряет precision)
+- `float` / `double` for money: `0.1 + 0.2 !== 0.3`
+- Should be: `int` (cents), `string`, or a specialized Money library (`brick/money`, `moneyphp/money`)
+- Database decimal column with insufficient precision (scale < 2 for RUB/USD, < 8 for crypto)
+- Rounding in the wrong direction: `round($amount, 2)` (banker's rounding is not used where required)
+- Currency converters with intermediate `float`
+- `number_format($money, 2)` for DB storage (string representation, loses precision)
 
 ## Business logic manipulation
 
-- Коэффициенты / ставки передаются через request: `$loan_rate = $request->...->get('rate')` — должны быть backend-only
-- Передача `price` через hidden form field — всегда должно вычисляться server-side
-- Negative values: quantity, amount могут быть отрицательными → возврат средств при «покупке»
-- Integer overflow в операциях с большими суммами (в языках со знаковыми int)
-- Bypass min/max validation через отсутствие server-side check (только frontend validation)
-- Mortgage/loan calculator с user-controlled параметрами, напрямую формирующими commitment
+- Coefficients / rates passed via request: `$loan_rate = $request->...->get('rate')` — must be backend-only
+- Passing `price` via a hidden form field — must always be computed server-side
+- Negative values: quantity, amount can be negative → refund on "purchase"
+- Integer overflow in operations with large amounts (in languages with signed int)
+- Bypass of min/max validation via missing server-side check (frontend-only validation)
+- Mortgage/loan calculator with user-controlled parameters that directly form a commitment
 
-## IDOR на деньгах
+## IDOR on money
 
-- `/transaction/{id}` без проверки владельца: any authenticated user видит чужие транзакции
-- `/invoice/{id}/download` без authz
-- Account balance endpoint: `/account/{id}/balance` принимает `id` из URL
-- Transfer endpoint: `from_account` передаётся клиентом без verify что текущий пользователь владеет им
+- `/transaction/{id}` without an owner check: any authenticated user sees other users' transactions
+- `/invoice/{id}/download` without authz
+- Account balance endpoint: `/account/{id}/balance` accepts `id` from URL
+- Transfer endpoint: `from_account` is passed by the client without verifying that the current user owns it
 
 ## Idempotency / duplicate processing
 
-- Отсутствие idempotency key на платёжных endpoints — retry от клиента вызывает double-charge
-- Webhook handler обрабатывает то же событие дважды (нет `processed_events` таблицы с уникальностью)
-- Async retry: handler не idempotent → при retry повторные side-effects (email send + баланс change)
-- DB unique constraint отсутствует на natural keys, которые должны быть уникальны
-- `Stripe-Signature` / webhook id не сохраняются как dedup key
+- Missing idempotency key on payment endpoints — client retry causes double-charge
+- Webhook handler processes the same event twice (no `processed_events` table with uniqueness)
+- Async retry: handler is not idempotent → on retry, duplicate side-effects (email send + balance change)
+- Missing DB unique constraint on natural keys that must be unique
+- `Stripe-Signature` / webhook id not stored as a dedup key
 
 ## Ledger invariants
 
-- `debit + credit != 0` (double-entry bookkeeping нарушен)
-- Отсутствие audit trail для balance mutations
-- Reconciliation не проверяет sum(transactions) == current_balance
-- Soft-delete не учитывается в balance calculation → можно восстановить удалённую транзакцию и сломать баланс
-- Rollback на частичной транзакции оставляет inconsistent state
+- `debit + credit != 0` (double-entry bookkeeping violated)
+- Missing audit trail for balance mutations
+- Reconciliation does not check sum(transactions) == current_balance
+- Soft-delete is not accounted for in balance calculation → a deleted transaction can be restored and break the balance
+- Rollback on a partial transaction leaves inconsistent state
 
 ## Payment gateway integration
 
-- Callback URL без signature verification (Stripe, Tinkoff, YooKassa) — attacker генерит фейковый success callback (cross-ref `auth.md`)
-- Callback обрабатывается до получения async confirmation → user видит paid, реально не списалось
-- Amount / currency берётся из callback, а не сверяется с локальным order record
-- Refund / void endpoints без authz-check на ownership
+- Callback URL without signature verification (Stripe, Tinkoff, YooKassa) — attacker generates a fake success callback (cross-ref `auth.md`)
+- Callback is processed before async confirmation is received → user sees paid, no actual debit
+- Amount / currency taken from callback rather than reconciled with local order record
+- Refund / void endpoints without authz check on ownership
 
 ## FX / currency conversion
 
-- Курс валют берётся из API на момент отображения, но используется при списании через минуты → arbitrage window
-- Сохранение amount в одной валюте, но хранение курса как `float` → потеря precision при reverse conversion
-- Source of truth для FX rate не зафиксирован (провайдер меняется, курс дёргается)
+- Currency rate taken from API at display time but used at debit time minutes later → arbitrage window
+- Amount stored in one currency but rate stored as `float` → precision loss on reverse conversion
+- Source of truth for FX rate not fixed (provider changes, rate jitters)
 
-## Async финансовые операции (queue/message handlers)
+## Async financial operations (queue/message handlers)
 
-- Сообщение содержит `amount` и `userId` без подписи / encryption → если transport скомпрометирован, фейковые сообщения меняют баланс
-- Handler без authz: полагается на то, что сообщение «откуда-то от доверенной системы»
-- Retry без idempotency → duplicate balance mutation
-- Отсутствие dead-letter queue / alerting на failures в финансовых handlers
+- Message contains `amount` and `userId` without signature / encryption → if transport is compromised, fake messages alter balance
+- Handler without authz: relies on the message being "from some trusted system"
+- Retry without idempotency → duplicate balance mutation
+- Missing dead-letter queue / alerting on failures in financial handlers

@@ -1,69 +1,69 @@
 # Twig / Output rendering / SSTI (Symfony)
 
-> Этот чек-лист дополняет `core/output-render.md` для проектов на symfony. При конфликте инструкций — приоритет за этим файлом, как более специфичным. Worker загружает оба файла одновременно.
+> This checklist complements `core/output-render.md` for symfony projects. On conflicting instructions, this file takes priority as the more specific one. Worker loads both files simultaneously.
 
-**Это типичные паттерны категории, не исчерпывающий список.** Если ты обнаружил эксплуатируемую уязвимость, проходящую методологию (источник входа → трансформации → sink + конкретный путь эксплуатации) — репортить **обязательно**, даже если она не подпадает ни под один пункт ниже. Чек-лист — указатель приоритета поиска, а не фильтр.
+**These are typical patterns of the category, not an exhaustive list.** If you discover an exploitable vulnerability that passes the methodology (input source → transformations → sink + a concrete exploit path) — reporting is **mandatory**, even if it does not fall under any item below. The checklist is a search-priority pointer, not a filter.
 
-## `|raw` фильтр
+## `|raw` filter
 
-- `{{ user_input|raw }}` — прямой XSS
-- `{{ content|striptags|raw }}` — `striptags` не спасает от всех векторов (`javascript:` URIs, CSS expressions)
-- User-controlled HTML, прошедший через HTMLPurifier — безопасно, но только если Purifier настроен правильно; без white-list — опасно
+- `{{ user_input|raw }}` — direct XSS
+- `{{ content|striptags|raw }}` — `striptags` does not protect against all vectors (`javascript:` URIs, CSS expressions)
+- User-controlled HTML passed through HTMLPurifier — safe, but only if Purifier is configured properly; without a white-list — dangerous
 
 ## Autoescape
 
-- `{% autoescape false %}` блок с user input внутри
-- `config/packages/twig.yaml` с `autoescape: false` глобально
-- Кастомные extensions, возвращающие `Twig\Markup` над user input — эквивалентно `|raw`
+- `{% autoescape false %}` block with user input inside
+- `config/packages/twig.yaml` with `autoescape: false` globally
+- Custom extensions returning `Twig\Markup` over user input — equivalent to `|raw`
 
 ## JavaScript context
 
-- `<script>var data = {{ user_data|json_encode }};</script>` — **не безопасно**: `</script>` в данных ломает context. Нужен `json_encode` + `html_safe(false)` или `|e('js')`
-- User input в `onclick="..."` без `|e('html_attr')`
-- User input внутри `<a href="{{ url }}">` — проверка на `javascript:` / `data:` URIs обязательна
+- `<script>var data = {{ user_data|json_encode }};</script>` — **not safe**: `</script>` in data breaks context. Use `|json_encode` with the `JSON_HEX_TAG` flag, or `|e('js')`
+- User input in `onclick="..."` without `|e('html_attr')`
+- User input inside `<a href="{{ url }}">` — checking against `javascript:` / `data:` URIs is mandatory
 
-## SSTI через динамический template
+## SSTI via dynamic template
 
-- `$twig->createTemplate($userInput)->render([...])` — прямой SSTI, RCE через `{{ ['id']|map('system') }}`
-- `$this->render($request->get('tpl') . '.html.twig')` — достижимость чужих шаблонов
+- `$twig->createTemplate($userInput)->render([...])` — direct SSTI, RCE via `{{ ['id']|map('system') }}`
+- `$this->render($request->get('tpl') . '.html.twig')` — reachability of foreign templates
 - `{% include template_from_string(user_input) %}`
 - `{{ include(user_input) }}`
-- Mailer: `$email->htmlTemplate($userControlledName)` без whitelist — динамическое имя Twig-шаблона
+- Mailer: `$email->htmlTemplate($userControlledName)` without a whitelist — dynamic Twig template name
 
 ## Mailer (Symfony Mailer)
 
-- `TemplatedEmail::htmlTemplate($name)` с user-controlled `$name`
-- `TemplatedEmail::textTemplate($name)` с user-controlled `$name`
-- Passing user data в context без санитизации, затем `|raw` в шаблоне письма
-- User-controlled subject, рендерящийся через Twig без escape
+- `TemplatedEmail::htmlTemplate($name)` with user-controlled `$name`
+- `TemplatedEmail::textTemplate($name)` with user-controlled `$name`
+- Passing user data into context without sanitization, then `|raw` in the email template
+- User-controlled subject rendered through Twig without escape
 
 ## Notifier (Symfony Notifier)
 
-- `Notification::content($userInput)` — если content рендерится через Twig в каком-то канале
-- Chat/SMS templates с `|raw` user input
-- `EmailMessage::fromNotification()` с user-controlled context
+- `Notification::content($userInput)` — if content is rendered through Twig in some channel
+- Chat/SMS templates with `|raw` user input
+- `EmailMessage::fromNotification()` with user-controlled context
 
 ## Error rendering
 
-- Custom `ErrorRenderer`, рендерящий stacktrace / exception message в HTML без escape
-- `KernelEvents::EXCEPTION` listener, возвращающий Response с user input в теле
-- Default Symfony error page в production mode (должна быть отключена через `framework.web_link.enabled: false` и `debug: false`)
+- Custom `ErrorRenderer` rendering stacktrace / exception message into HTML without escape
+- `KernelEvents::EXCEPTION` listener returning a Response with user input in the body
+- Default Symfony error page in production mode (must be disabled via `framework.web_link.enabled: false` and `debug: false`)
 
-## XSS через неочевидные каналы
+## XSS via non-obvious channels
 
-- User data в `<title>{{ user_title }}</title>` — Twig по умолчанию escape, но если `|raw` — XSS
-- `<meta name="description" content="{{ user_desc }}">` — `|e('html_attr')` обязателен для атрибутов
-- RSS/Atom feeds с user content без `|e` или CDATA
-- PDF/Document generators, принимающие user HTML (Dompdf, TCPDF) — custom HTML sanitization нужен
+- User data in `<title>{{ user_title }}</title>` — Twig escapes by default, but if `|raw` — XSS
+- `<meta name="description" content="{{ user_desc }}">` — `|e('html_attr')` is mandatory for attributes
+- RSS/Atom feeds with user content without `|e` or CDATA
+- PDF/Document generators accepting user HTML (Dompdf, TCPDF) — custom HTML sanitization is required
 
 ## GraphQL output filtering (api-platform / overblog/graphql-bundle / webonyx)
 
-GraphQL — это альтернативный output channel; те же правила disclosure / secret leakage, что и для REST/Twig. Field-level authz (кто видит) — в `auth.md`; здесь — что попадает в response payload.
+GraphQL is an alternative output channel; the same disclosure / secret leakage rules as for REST/Twig. Field-level authz (who sees) — in `auth.md`; here — what ends up in the response payload.
 
-- **api-platform Resource без `#[Groups]`** — все public-getter поля Entity сериализуются для каждой operation: `accessToken`, `refreshToken`, `passwordHash`, `mfaSecret`, `apiToken`, `webhookSecret` уезжают клиенту, если они существуют как property/getter Entity. Должны быть `#[Groups(['user:read'])]` на безопасных полях + `normalizationContext: ['groups' => ['user:read']]` на operation. Sink_kind: `secret_in_response` или `sensitive_field_unmasked` (root_cause_family: `disclosure`).
-- **overblog/graphql-bundle resolver возвращает `$entity` напрямую**: `'resolve' => fn($value, $args) => $em->getRepository(User::class)->find($args['id'])` без projection / без mapping в DTO → schema-объявленные поля сериализуются, но любые `Computed`/`@Expose` extras тоже могут утечь. Грепать на resolver, возвращающий Doctrine entity без `->toArray()` / `->toPublicView()`.
-- **webonyx native field resolver** не вызывает `->getPublicView()` / `->toArray()` фильтра, а возвращает `$entity` или `$entity->getRecord()` целиком → клиент через alias/fragment может выбрать любое объявленное в schema поле, включая чувствительные. Если в schema случайно объявлен secret-field — он доступен.
-- **`Type::nonNull($userType)` + поле `passwordHash` в `$userType`**: даже если field-level authz есть, само наличие поля в schema — information disclosure через introspection. Удалять чувствительные поля из schema, не ограничиваться access control.
-- **Error messages в response**: Doctrine exception (`UniqueConstraintViolationException`, `ForeignKeyConstraintViolationException`) пробрасывается до GraphQL response без обработки → клиент видит структуру таблиц / имена колонок. Sink_kind: `stacktrace_exposed`. В prod нужен ErrorHandler / formatter, маскирующий internal errors.
+- **api-platform Resource without `#[Groups]`** — all public-getter Entity fields are serialized for every operation: `accessToken`, `refreshToken`, `passwordHash`, `mfaSecret`, `apiToken`, `webhookSecret` leak to the client if they exist as Entity property/getter. Must be `#[Groups(['user:read'])]` on safe fields + `normalizationContext: ['groups' => ['user:read']]` on the operation. Sink_kind: `secret_in_response` or `sensitive_field_unmasked` (root_cause_family: `disclosure`).
+- **overblog/graphql-bundle resolver returns `$entity` directly**: `'resolve' => fn($value, $args) => $em->getRepository(User::class)->find($args['id'])` without projection / without mapping into a DTO → schema-declared fields are serialized, but any `Computed`/`@Expose` extras may also leak. Grep for a resolver that returns a Doctrine entity without `->toArray()` / `->toPublicView()`.
+- **webonyx native field resolver** does not call `->getPublicView()` / `->toArray()` filter and returns `$entity` or `$entity->getRecord()` entirely → the client via alias/fragment can select any field declared in the schema, including sensitive ones. If a secret field was accidentally declared in the schema — it is accessible.
+- **`Type::nonNull($userType)` + field `passwordHash` in `$userType`**: even if field-level authz exists, the very presence of the field in the schema is information disclosure via introspection. Remove sensitive fields from the schema, do not rely solely on access control.
+- **Error messages in response**: Doctrine exception (`UniqueConstraintViolationException`, `ForeignKeyConstraintViolationException`) propagates to the GraphQL response without handling → client sees table structure / column names. Sink_kind: `stacktrace_exposed`. In prod an ErrorHandler / formatter masking internal errors is required.
 
-**Cross-link**: `secret_in_response` для polluted output — см. `core/crypto.md`. `sensitive_field_unmasked` — см. `core/disclosure.md`.
+**Cross-link**: `secret_in_response` for polluted output — see `core/crypto.md`. `sensitive_field_unmasked` — see `core/disclosure.md`.

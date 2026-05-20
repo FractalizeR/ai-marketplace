@@ -1,42 +1,42 @@
 # Cryptography (Symfony)
 
-> Этот чек-лист дополняет `core/crypto.md` для проектов на symfony. При конфликте инструкций — приоритет за этим файлом, как более специфичным. Worker загружает оба файла одновременно.
+> This checklist complements `core/crypto.md` for symfony projects. On conflicting instructions, this file takes priority as the more specific one. Worker loads both files simultaneously.
 
-**Это типичные паттерны категории, не исчерпывающий список.** Если ты обнаружил эксплуатируемую уязвимость, проходящую методологию (источник входа → трансформации → sink + конкретный путь эксплуатации) — репортить **обязательно**, даже если она не подпадает ни под один пункт ниже. Чек-лист — указатель приоритета поиска, а не фильтр.
+**These are typical patterns of the category, not an exhaustive list.** If you discover an exploitable vulnerability that passes the methodology (input source → transformations → sink + a concrete exploit path) — reporting is **mandatory**, even if it does not fall under any item below. The checklist is a search-priority pointer, not a filter.
 
 ## APP_SECRET / Symfony secrets
 
-- `APP_SECRET` в `.env` без `.env.local` override (попадает в коммит) — компрометация = подделка signed cookies, signed URLs, CSRF tokens
-- Credentials в `services.yaml` / `services.xml` без параметризации через `%env(...)%` — секреты в коммите
+- `APP_SECRET` in `.env` without `.env.local` override (committed) — compromise = forging signed cookies, signed URLs, CSRF tokens
+- Credentials in `services.yaml` / `services.xml` without parameterization through `%env(...)%` — secrets in the commit
 
 ## PasswordHasher misuse
 
-- Symfony password hasher `plaintext` или `md5`/`sha1` для User entity (`config/packages/security.yaml::password_hashers`) — применяется при `UserPasswordHasherInterface::hashPassword()` → слабые хэши паролей в БД
+- Symfony password hasher `plaintext` or `md5`/`sha1` for User entity (`config/packages/security.yaml::password_hashers`) — applied at `UserPasswordHasherInterface::hashPassword()` → weak password hashes in DB
 
 ## Symfony JWT bundle pitfalls
 
-- `lexik/jwt-authentication-bundle`: weak / hardcoded `JWT_PASSPHRASE` в `.env` (попадает в коммит); short TTL не настроен; `token_extractors` принимает токен из несекьюрных источников (query param) при cookie-auth
+- `lexik/jwt-authentication-bundle`: weak / hardcoded `JWT_PASSPHRASE` in `.env` (committed); short TTL not configured; `token_extractors` accepts token from insecure sources (query param) with cookie-auth
 
-## JWT (lexik/jwt-authentication-bundle) — расширенно
+## JWT (lexik/jwt-authentication-bundle) — extended
 
-Дополняет одноимённую секцию выше; здесь — полный набор bundle-specific паттернов.
+Complements the section of the same name above; here — the full set of bundle-specific patterns.
 
-- **`JWT_PASSPHRASE` / `JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY` в `.env` без `.env.local` override** (попадает в коммит) → атакующий ре-подписывает токены любого пользователя → полный bypass authentication. Sink_kind: `hardcoded_secret`. Cross-link: `auth.md` → JWT bundle и `core/crypto.md` → APP_SECRET.
-- **`token_extractors.query_parameter.enabled: true`** в `config/packages/lexik_jwt_authentication.yaml` при cookie/header auth: токен попадает в URL → утечка через browser history, server access logs, `Referer` header. Если query — единственный extractor, оценить, не должен ли быть cookie/header.
-- **`kid` / `jwk` header passthrough**: только если в проекте есть **custom Authenticator** или прямой вызов `JWSLoader`/`JWTEncoderInterface::decode()`, передающий header `kid` в file-system path lookup без whitelist → kid header injection (path traversal к подконтрольному keyfile). См. `core/crypto.md` → JWT advanced.
-- **Token TTL не настроен или слишком велик** (`token_ttl: 3600` ок, `token_ttl: 31536000` — год — нет): отсутствие refresh-flow + долгий TTL → revocation невозможна.
+- **`JWT_PASSPHRASE` / `JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY` in `.env` without `.env.local` override** (committed) → attacker re-signs tokens of any user → full authentication bypass. Sink_kind: `hardcoded_secret`. Cross-link: `auth.md` → JWT bundle and `core/crypto.md` → APP_SECRET.
+- **`token_extractors.query_parameter.enabled: true`** in `config/packages/lexik_jwt_authentication.yaml` with cookie/header auth: token ends up in the URL → leak via browser history, server access logs, `Referer` header. If query is the only extractor, assess whether it should be cookie/header.
+- **`kid` / `jwk` header passthrough**: only if the project has a **custom Authenticator** or a direct call to `JWSLoader`/`JWTEncoderInterface::decode()` that passes the `kid` header into a file-system path lookup without a whitelist → kid header injection (path traversal to an attacker-controlled keyfile). See `core/crypto.md` → JWT advanced.
+- **Token TTL is not configured or is too long** (`token_ttl: 3600` ok, `token_ttl: 31536000` — a year — not ok): absence of a refresh flow + long TTL → revocation is impossible.
 
-## JWT advanced (общие паттерны)
+## JWT advanced (general patterns)
 
-Все паттерны из `core/crypto.md → JWT advanced` (kid header injection, jwk/x5u header injection, algorithm confusion RS256→HS256, aud/iss mismatch, nbf/iat skew без leeway) применимы к Symfony одинаково. Symfony specifics:
+All patterns from `core/crypto.md → JWT advanced` (kid header injection, jwk/x5u header injection, algorithm confusion RS256→HS256, aud/iss mismatch, nbf/iat skew without leeway) apply to Symfony identically. Symfony specifics:
 
-- **`Lcobucci\JWT\Configuration` напрямую (без bundle)**: при создании `Configuration::forSymmetricSigner(...)` / `forAsymmetricSigner(...)` validation constraints (`SignedWith`, `IssuedBy`, `PermittedFor`, `LooseValidAt`/`StrictValidAt`) **опциональны**. Если разработчик забыл `setValidationConstraints([...])` или вызвал `->validator()->validate($token)` без constraints → любая подпись/iss/aud принимается. Грепать `Lcobucci\JWT\Configuration` без последующего `setValidationConstraints`. Confidence ≥ 8 для проектов, использующих такие токены для authn.
-- **`web-token/jwt-framework` (если используется)**: `JWSLoader` без `signatureAlgorithms` whitelist → algorithm confusion возможен; `JWKSet::createFromKeyData()` принимающий untrusted JWK без `kid` whitelist.
+- **`Lcobucci\JWT\Configuration` directly (without the bundle)**: when creating `Configuration::forSymmetricSigner(...)` / `forAsymmetricSigner(...)`, validation constraints (`SignedWith`, `IssuedBy`, `PermittedFor`, `LooseValidAt`/`StrictValidAt`) are **optional**. If the developer forgot `setValidationConstraints([...])` or called `->validator()->validate($token)` without constraints → any signature/iss/aud is accepted. Grep `Lcobucci\JWT\Configuration` without a subsequent `setValidationConstraints`. Confidence ≥ 8 for projects using such tokens for authn.
+- **`web-token/jwt-framework` (if used)**: `JWSLoader` without a `signatureAlgorithms` whitelist → algorithm confusion possible; `JWKSet::createFromKeyData()` accepting an untrusted JWK without a `kid` whitelist.
 
-## Persistent OAuth credentials в plain `string` columns (Doctrine entity)
+## Persistent OAuth credentials in plain `string` columns (Doctrine entity)
 
-- `#[ORM\Column(type: 'string')] $accessToken | $refreshToken | $clientSecret | $apiKey | $botToken | $authToken | $webhookSecret` — без custom Doctrine Type / EncryptedStringType → encryption-at-rest gap
-- Также проверить JSON-конфиги: `#[ORM\Column(type: Types::JSON)] $config` где `$config` сериализует `botToken`/headers с `Authorization: Bearer ...` (типичный паттерн в notification channel / webhook mapping entities)
+- `#[ORM\Column(type: 'string')] $accessToken | $refreshToken | $clientSecret | $apiKey | $botToken | $authToken | $webhookSecret` — without a custom Doctrine Type / EncryptedStringType → encryption-at-rest gap
+- Also check JSON configs: `#[ORM\Column(type: Types::JSON)] $config` where `$config` serializes `botToken`/headers with `Authorization: Bearer ...` (typical pattern in notification channel / webhook mapping entities)
 - Sink_kind: `hardcoded_secret` (root_cause_family `crypto`)
-- Threat: DB compromise (snapshot/backup leak / SQL injection / DBA insider) даёт persistent доступ ко всем integrations всех tenant'ов; refresh tokens обычно живут месяцами и продлеваются автоматически
-- Fix: Doctrine custom type с AES-256-GCM (ключ из `framework.secrets:` или KMS), `doctrine-encrypt-bundle`/`halite`
+- Threat: DB compromise (snapshot/backup leak / SQL injection / DBA insider) gives persistent access to all integrations of all tenants; refresh tokens usually live for months and are auto-renewed
+- Fix: Doctrine custom type with AES-256-GCM (key from `framework.secrets:` or KMS), `doctrine-encrypt-bundle`/`halite`

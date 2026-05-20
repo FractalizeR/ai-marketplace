@@ -1,47 +1,47 @@
 # Injection (Laravel) — Form requests, Validator, Queue trust
 
-> Этот чек-лист дополняет `core/injection.md` для проектов на laravel. При конфликте инструкций — приоритет за этим файлом, как более специфичным. Worker загружает оба файла одновременно.
+> This checklist complements `core/injection.md` for laravel projects. On conflicting instructions, this file takes priority as the more specific one. Worker loads both files simultaneously.
 
-**Это типичные паттерны категории, не исчерпывающий список.** Если ты обнаружил эксплуатируемую уязвимость, проходящую методологию (источник входа → трансформации → sink + конкретный путь эксплуатации) — репортить **обязательно**, даже если она не подпадает ни под один пункт ниже. Чек-лист — указатель приоритета поиска, а не фильтр.
+**These are typical patterns of the category, not an exhaustive list.** If you discover an exploitable vulnerability that passes the methodology (input source → transformations → sink + a concrete exploit path) — reporting is **mandatory**, even if it does not fall under any item below. The checklist is a search-priority pointer, not a filter.
 
 ## Form Request mass-assignment
 
-- `class FooRequest extends FormRequest`: `rules()` валидирует только нужные поля, но контроллер вызывает `$model->update($request->all())` (а не `$request->validated()`) → mass assignment проходит мимо
-- `authorize()` возвращает `true` всегда — без проверки tenant/role/ownership
-- `validated()` без явного whitelist через `$this->only([...])` — все валидные поля идут в Eloquent независимо от `$fillable` если `$guarded = []`
-- `Request::merge([...])` в middleware/controller добавляет admin-флаг до validation → проходит rules
+- `class FooRequest extends FormRequest`: `rules()` validates only the needed fields, but the controller calls `$model->update($request->all())` (rather than `$request->validated()`) → mass assignment slips past
+- `authorize()` always returns `true` — without tenant/role/ownership check
+- `validated()` without an explicit whitelist via `$this->only([...])` — all valid fields go to Eloquent regardless of `$fillable` if `$guarded = []`
+- `Request::merge([...])` in middleware/controller adds an admin flag before validation → passes rules
 
-## Validator API мисюз
+## Validator API misuse
 
-- `Validator::make($data, $rules)->validated()` без `failsOnFirst` или с suppressed exceptions → невалидные данные доходят до DB
-- Custom rules через closures: `'role' => fn($attr, $value, $fail) => true` — пропускает любое значение
-- `'array'` rule без вложенных правил `'array.*' => 'string'` — позволяет вложенный mass assignment
-- `'sometimes'` rule на критичных полях (`role`, `is_admin`) — клиент может опустить или прислать
-- `bail` rule забыт на критичных полях → multiple errors но первая ошибка обходится через bypass
+- `Validator::make($data, $rules)->validated()` without `failsOnFirst` or with suppressed exceptions → invalid data reaches DB
+- Custom rules via closures: `'role' => fn($attr, $value, $fail) => true` — lets through any value
+- `'array'` rule without nested rules `'array.*' => 'string'` — allows nested mass assignment
+- `'sometimes'` rule on critical fields (`role`, `is_admin`) — client may omit or send
+- `bail` rule forgotten on critical fields → validation continues past the first failure, and the original error can be masked if later rules pass
 
 ## Inertia / livewire / API request injection
 
-- Inertia: `Inertia::render('Page', ['data' => $request->all()])` — серверное состояние из request body
-- Livewire: `public $editable = true;` без `#[Locked]` или без re-validation в `updated*` hook → клиент модифицирует свойство
-- Livewire `wire:model.lazy` на admin-полях без re-authz при `updated*`
-- API resource принимает `$request->json()->all()` без FormRequest и без validation → бесконтрольный mass assignment
+- Inertia: `Inertia::render('Page', ['data' => $request->all()])` — server state from request body
+- Livewire: `public $editable = true;` without `#[Locked]` or without re-validation in `updated*` hook → client modifies the property
+- Livewire `wire:model.lazy` on admin fields without re-authz on `updated*`
+- API resource accepts `$request->json()->all()` without FormRequest and without validation → uncontrolled mass assignment
 
 ## Queue job trust
 
-- Job constructor принимает `$userId` / `$tenantId` / `$amount` от вызывающего без cryptographic binding → job-payload подменим в Redis-транспорте
-- `dispatch(new Job($request->id))` где `$request->id` — id чужого ресурса, и handler не проверяет владельца → cross-tenant write через очередь
-- `ShouldQueue` job, который потом dispatches другие jobs (`Bus::chain([...])`) без re-authz внутри chain — privilege drift
-- Job `failed()` callback пишет user input в log — log injection / disclosure
-- Custom serializer на queue (e.g. PHP serialize) — см. `serialization.md`
+- Job constructor accepts `$userId` / `$tenantId` / `$amount` from the caller without cryptographic binding → job payload is substitutable in Redis transport
+- `dispatch(new Job($request->id))` where `$request->id` is the id of a foreign resource, and the handler does not check the owner → cross-tenant write via queue
+- `ShouldQueue` job that then dispatches other jobs (`Bus::chain([...])`) without re-authz inside the chain — privilege drift
+- Job `failed()` callback writes user input into log — log injection / disclosure
+- Custom serializer on queue (e.g., PHP serialize) — see `serialization.md`
 
 ## Console commands
 
-- Artisan command: `Artisan::call('db:seed', ['--class' => $userInput])` — выполняет произвольный seeder класс
-- `system($input)` / `exec($input)` / `shell_exec($input)` в command handler
-- `$this->call($subCommand, $request->input())` — клиент управляет аргументами CLI
+- Artisan command: `Artisan::call('db:seed', ['--class' => $userInput])` — executes an arbitrary seeder class
+- `system($input)` / `exec($input)` / `shell_exec($input)` in command handler
+- `$this->call($subCommand, $request->input())` — client controls CLI arguments
 
 ## Mail / notification template injection
 
-- `Mail::to($user)->send(new ApiUpdateMail($name))` где `$name` рендерится в Blade-mail template без `{{ }}` (escape) → HTML/email injection
-- Notification с `$this->line($userInput)` — auto-escape работает, но `$this->line(new HtmlString($userInput))` ломает
-- Mailable с `view($userInput, $data)` — динамическое имя view → доступ к чужим templates / рендеринг неожиданных данных
+- `Mail::to($user)->send(new ApiUpdateMail($name))` where `$name` is rendered in a Blade-mail template without `{{ }}` (escape) → HTML/email injection
+- Notification with `$this->line($userInput)` — auto-escape works, but `$this->line(new HtmlString($userInput))` breaks it
+- Mailable with `view($userInput, $data)` — dynamic view name → access to foreign templates / rendering of unexpected data

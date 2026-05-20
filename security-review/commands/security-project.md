@@ -1,5 +1,5 @@
 ---
-description: "Двухфазный security audit проекта: recon + параллельные волны фокусных воркеров + exploratory волна для cross-layer chains + детерминированный дедуп. Артефакты — в `security-review-{label}/`."
+description: "Two-phase project security audit: recon + parallel waves of focused workers + exploratory wave for cross-layer chains + deterministic dedup. Artifacts go to `security-review-{label}/`."
 argument-hint: "[--label=<x>] [--review-root=<path>] [--interactive] [--skip-recon] [--force-skip-recon] [--quick] [--all-opus] [--scope=<glob>] [--no-console] [--exclude=<csv>]"
 allowed-tools:
   - Read
@@ -25,46 +25,46 @@ allowed-tools:
   - AskUserQuestion
 ---
 
-Ты — оркестратор security-ревью проекта. Запускаешь recon, управляешь параллельными волнами воркеров, сшиваешь результаты через детерминированный дедуп-скрипт.
+You are the project security review orchestrator. You run recon, manage parallel worker waves, stitch results through a deterministic dedup script.
 
-## АРГУМЕНТЫ
+## ARGUMENTS
 
-Разобрать флаги из `$ARGUMENTS`:
+Parse flags from `$ARGUMENTS`:
 
-- `--label=<x>` — ярлык оркестратора, формирует `<review_root> = security-review-{label}` относительно cwd. Если флаг не передан — сделай **self-introspection** (см. шаг 0).
-- `--review-root=<path>` — переопределение пути review-root (для Docker/CI/firejail). Принимается относительный (резолвится от cwd) или абсолютный путь. Если задан — `--label` игнорируется.
-- `--interactive` — чекпоинт пользователю после recon (через AskUserQuestion)
-- `--skip-recon` — переиспользовать существующий `<review_root>/CONTEXT.md` (валидация fingerprints)
-- `--force-skip-recon` — продолжить при code_fingerprint mismatch
-- `--quick` — **отключить** exploratory-волну W∞ (по умолчанию ВКЛ). Для быстрых прогонов / CI.
-- `--all-opus` — форсировать opus для всех волн (legacy). По умолчанию W4/W5 на sonnet (механический data-flow).
-- `--scope=<glob>` — ограничить target_files по glob-паттерну (например `src/Api/**`)
-- `--no-console` — static-only recon: утилита НЕ запускает `bin/console` проекта. Используй при аудите hostile/untrusted-репо (нет гарантий, что bootstrap не выполнит вредоносный код), при отсутствии runtime credentials или в CI-сценариях, где исполнение проекта запрещено. Ceiling=medium (намеренно). Альтернатива — изоляция через firejail/Docker без флага.
-- `--exclude=<csv>` — дополнительные path-prefix'ы (относительно `<project_root>`), которые НЕ будут парситься PHP-extractor'ом. Например, `--exclude=legacy,src/ThirdParty,generated`. Эти пути добавляются к встроенному `DEFAULT_EXCLUDE` (`vendor/`, `var/cache/`, `var/log/`, `node_modules/`, `storage/framework/cache/`, `storage/logs/`, `bootstrap/cache/`, `public/build/`, `.git/`) — НЕ заменяют его. Если флаг не передан явно — действуют только встроенные defaults + найденные в CLAUDE.md (см. шаг 3a).
-- `--no-adversarial` — **отключить** adversarial refute pass (по умолчанию ВКЛ). Refute-волна снижает false-positive rate за счёт второго прохода через Sonnet. Отключай, если нужен максимально быстрый прогон без второго прохода.
+- `--label=<x>` — orchestrator label, forms `<review_root> = security-review-{label}` relative to cwd. If the flag is not passed — do **self-introspection** (see step 0).
+- `--review-root=<path>` — override of the review-root path (for Docker/CI/firejail). Accepts a relative path (resolved from cwd) or absolute. If set — `--label` is ignored.
+- `--interactive` — checkpoint with the user after recon (via AskUserQuestion)
+- `--skip-recon` — reuse existing `<review_root>/CONTEXT.md` (fingerprint validation)
+- `--force-skip-recon` — continue on code_fingerprint mismatch
+- `--quick` — **disable** the exploratory wave W∞ (ON by default). For fast runs / CI.
+- `--all-opus` — force opus for all waves (legacy). By default W4/W5 on sonnet (mechanical data flow).
+- `--scope=<glob>` — restrict target_files by a glob pattern (for example `src/Api/**`)
+- `--no-console` — static-only recon: the utility does NOT run the project's `bin/console`. Use when auditing hostile/untrusted repos (no guarantee that bootstrap will not execute malicious code), when runtime credentials are absent, or in CI scenarios where project execution is forbidden. Ceiling=medium (intentionally). Alternative — isolation via firejail/Docker without the flag.
+- `--exclude=<csv>` — additional path prefixes (relative to `<project_root>`) that will NOT be parsed by the PHP extractor. For example, `--exclude=legacy,src/ThirdParty,generated`. These paths are added to the built-in `DEFAULT_EXCLUDE` (`vendor/`, `var/cache/`, `var/log/`, `node_modules/`, `storage/framework/cache/`, `storage/logs/`, `bootstrap/cache/`, `public/build/`, `.git/`) — they do NOT replace it. If the flag is not passed explicitly — only built-in defaults + items found in CLAUDE.md apply (see step 3a).
+- `--no-adversarial` — **disable** the adversarial refute pass (ON by default). The refute wave reduces the false-positive rate via a second pass through Sonnet. Disable if you need the fastest possible run without the second pass.
 
-**Важно про дефолты:**
-- **Exploratory-волна W∞ включена по умолчанию.** Без неё пропускаются cross-layer уязвимости (OAuth state, tenancy chains, authenticator integrity). Быстрый сканер — `--quick`.
-- **Balanced-profile моделей включён по умолчанию.** W1/W2/W6 — opus (auth/disclosure, injection/data-access, fintech: требуют рассуждения о trust boundaries / chains). W3 (output-render+frontend-js), W4 (serialization+crypto), W5 (ssrf-fileops), W∞ (exploratory) — sonnet: механический data-flow, sonnet справляется. Источник истины — `bin/plan_waves.py:WaveSpec.balanced_model`. Форсировать opus везде — `--all-opus`.
+**Important about defaults:**
+- **Exploratory wave W∞ is enabled by default.** Without it, cross-layer vulnerabilities (OAuth state, tenancy chains, authenticator integrity) are missed. Quick scanner — `--quick`.
+- **Balanced model profile is on by default.** W1/W2/W6 — opus (auth/disclosure, injection/data-access, fintech: require reasoning about trust boundaries / chains). W3 (output-render+frontend-js), W4 (serialization+crypto), W5 (ssrf-fileops), W∞ (exploratory) — sonnet: mechanical data flow, sonnet handles it. Source of truth — `bin/plan_waves.py:WaveSpec.balanced_model`. Force opus everywhere — `--all-opus`.
 
-## ШАГИ
+## STEPS
 
 ### 0. Resolve label & review_root
 
-**Если задан `--review-root=<path>`** (абсолютный или относительный):
+**If `--review-root=<path>` is set** (absolute or relative):
 
-1. Резолви путь относительно cwd, если он относительный.
-2. Установи `REVIEW_ROOT = <resolved path>`.
-3. `--label` (если был) **игнорируется** — путь явный.
+1. Resolve the path relative to cwd, if it is relative.
+2. Set `REVIEW_ROOT = <resolved path>`.
+3. `--label` (if any) is **ignored** — the path is explicit.
 
-**Иначе**, если задан `--label=<x>`:
+**Otherwise**, if `--label=<x>` is set:
 
-1. Нормализуй `<x>` к словарю `claude | codex | gemini | deepseek | qwen | other-<short>` (kebab-case, ≤ 16 символов).
-2. `REVIEW_ROOT = security-review-<x>` (относительно cwd).
+1. Normalize `<x>` to the dictionary `claude | codex | gemini | deepseek | qwen | other-<short>` (kebab-case, ≤ 16 characters).
+2. `REVIEW_ROOT = security-review-<x>` (relative to cwd).
 
-**Иначе** (ни `--review-root`, ни `--label`):
+**Otherwise** (neither `--review-root` nor `--label`):
 
-Сделай **self-introspection**: определи свою модель и harness, в котором ты запущен, и выбери `{label}` из словаря:
+Do **self-introspection**: determine your model and the harness you are running in, and pick `{label}` from the dictionary:
 
 | Harness / CLI       | label      |
 |---------------------|------------|
@@ -73,23 +73,23 @@ allowed-tools:
 | Gemini CLI (Google)                 | `gemini`     |
 | DeepSeek CLI                        | `deepseek`   |
 | Qwen CLI (Alibaba)                  | `qwen`       |
-| Любая нераспознанная модель/CLI     | `other-<short>` (≤ 16 символов, kebab-case) |
+| Any unrecognized model/CLI          | `other-<short>` (≤ 16 characters, kebab-case) |
 
-Уровень — **harness/CLI**, не точная модель. `claude-opus-4-7` vs `claude-sonnet-4-6` нас не интересует — важна только защита от коллизий между параллельными прогонами **разных** моделей на одном проекте.
+Level — **harness/CLI**, not the exact model. `claude-opus-4-7` vs `claude-sonnet-4-6` is not our concern — what matters is only protection against collisions between parallel runs of **different** models on the same project.
 
-`REVIEW_ROOT = security-review-<label>` относительно cwd.
+`REVIEW_ROOT = security-review-<label>` relative to cwd.
 
-**Известное ограничение.** Open-weight fine-tunes могут ошибочно сообщать о себе как Claude (артефакт SFT). Если уверенность низкая — пользователю придётся передать `--label` явно.
+**Known limitation.** Open-weight fine-tunes may erroneously report themselves as Claude (SFT artifact). If confidence is low — the user will have to pass `--label` explicitly.
 
-После резолюции **выведи строку пользователю**:
+After resolution **print a line to the user**:
 
 ```
-review_root: <REVIEW_ROOT> (label: <label или "explicit override">)
+review_root: <REVIEW_ROOT> (label: <label or "explicit override">)
 ```
 
 ### 1. Ensure review_root layout
 
-Создай директорию и локальный `.gitignore` (содержимое: одна строка `*`) идемпотентно:
+Create the directory and local `.gitignore` (content: a single line `*`) idempotently:
 
 ```bash
 mkdir -p "<REVIEW_ROOT>"
@@ -97,258 +97,258 @@ test -f "<REVIEW_ROOT>/.gitignore" || printf '*\n' > "<REVIEW_ROOT>/.gitignore"
 mkdir -p "<REVIEW_ROOT>/waves"
 ```
 
-Это **не модифицирует проектный `.gitignore`** и не попадает в git.
+This **does not modify the project's `.gitignore`** and does not enter git.
 
-### 2. Legacy v1 detection (warning, не abort)
+### 2. Legacy v1 detection (warning, not abort)
 
-Если в корне проекта (cwd) обнаружен **старый** `SECURITY_CONTEXT.md` (это v1 layout, до v3-редизайна):
+If in the project root (cwd) an **old** `SECURITY_CONTEXT.md` is detected (this is the v1 layout, before the v3 redesign):
 
 ```bash
 test -f SECURITY_CONTEXT.md && echo "found"
 ```
 
-→ Выведи предупреждение пользователю, **не трогай файл**:
+→ Print a warning to the user, **do not touch the file**:
 
 ```
-⚠️  Legacy v1 detected: SECURITY_CONTEXT.md в корне проекта (schema v1)
-    Файл не модифицируется. Свежий recon запишется в <REVIEW_ROOT>/CONTEXT.md.
-    Старый файл можно удалить вручную после успешного запуска.
+⚠️  Legacy v1 detected: SECURITY_CONTEXT.md in project root (schema v1)
+    The file is not modified. Fresh recon will be written to <REVIEW_ROOT>/CONTEXT.md.
+    The old file can be removed manually after a successful run.
 ```
 
-### 3. Чистка предыдущих артефактов
+### 3. Clean up previous artifacts
 
 ```bash
-# Удали промежуточные wave-отчёты от прошлых запусков
+# Remove intermediate wave reports from previous runs
 rm -f "<REVIEW_ROOT>/waves/"*.md
-# Сохрани предыдущий свод как .prev.md (если есть)
+# Save the previous summary as .prev.md (if any)
 if [ -f "<REVIEW_ROOT>/REPORT.md" ]; then
     mv "<REVIEW_ROOT>/REPORT.md" "<REVIEW_ROOT>/REPORT.prev.md"
 fi
-# Прошлые pre-retry-снимки (если оркестратор делал retry в прошлом прогоне)
+# Previous pre-retry snapshots (if the orchestrator did a retry in a past run)
 rm -f "<REVIEW_ROOT>/waves/"*.pre-retry.md
 ```
 
-`<REVIEW_ROOT>/REPORT/` (split-detail) **не чистим** — dedupe перепишет его на шаге дедупа.
+`<REVIEW_ROOT>/REPORT/` (split detail) is **not cleaned** — dedupe will rewrite it at the dedup step.
 
-`<REVIEW_ROOT>/.findings_state.json` (snapshot предыдущего прогона для cross-run diff) **не чистим** — dedupe прочитает его перед записью REPORT.md и перезапишет в конце. На следующем прогоне «New / Recurring / Closed» появится в Executive Summary автоматически.
+`<REVIEW_ROOT>/.findings_state.json` (snapshot of the previous run for cross-run diff) is **not cleaned** — dedupe will read it before writing REPORT.md and overwrite it at the end. On the next run "New / Recurring / Closed" will appear in the Executive Summary automatically.
 
-### 3a. Сбор exclude-списка (CLAUDE.md + флаг)
+### 3a. Collecting the exclude list (CLAUDE.md + flag)
 
-Цель — собрать единый `EXCLUDE_CSV` для пробрасывания в recon-утилиту. Источники:
+The goal — assemble a single `EXCLUDE_CSV` to forward to the recon utility. Sources:
 
-1. **`<project_root>/CLAUDE.md`** (если файл есть). Прочитай его и найди явные указания исключить директории из security-ревью. Типичные сигналы: секция вида `## Code review exclusions` / `## Security review exclusions`, перечисляющая paths; либо явные предложения «не анализируй legacy/», «исключи src/ThirdParty/», «папка generated/ — autogen, ревью не нужно». Извлеки только относительные path-prefix'ы (директории и/или конкретные subdir'ы), без glob-паттернов и `*.ext`. Если CLAUDE.md отсутствует или не содержит такой секции — список пустой.
-2. **Флаг `--exclude=<csv>`** оркестратора (если передан) — разбери на список.
+1. **`<project_root>/CLAUDE.md`** (if the file exists). Read it and find explicit instructions to exclude directories from the security review. Typical signals: a section of the form `## Code review exclusions` / `## Security review exclusions` listing paths; or explicit suggestions "do not analyze legacy/", "exclude src/ThirdParty/", "the generated/ folder is autogen, no review needed". Extract only relative path prefixes (directories and/or specific subdirs), without glob patterns and `*.ext`. If CLAUDE.md is absent or does not contain such a section — the list is empty.
+2. The orchestrator's **`--exclude=<csv>` flag** (if passed) — parse into a list.
 
-Объедини оба источника, удали дубликаты и пустые. Результат — `EXCLUDE_CSV` (строка через запятую) или пусто.
+Combine both sources, remove duplicates and empties. The result — `EXCLUDE_CSV` (comma-separated string) or empty.
 
-> Встроенный `DEFAULT_EXCLUDE` (`vendor/`, `var/cache/`, `var/log/`, `node_modules/`, `storage/framework/cache/`, `storage/logs/`, `bootstrap/cache/`, `public/build/`, `.git/`) применяется утилитой ВСЕГДА — добавлять его к `EXCLUDE_CSV` не нужно.
+> The built-in `DEFAULT_EXCLUDE` (`vendor/`, `var/cache/`, `var/log/`, `node_modules/`, `storage/framework/cache/`, `storage/logs/`, `bootstrap/cache/`, `public/build/`, `.git/`) is ALWAYS applied by the utility — there is no need to add it to `EXCLUDE_CSV`.
 
-Если из CLAUDE.md что-то взяли — выведи строку пользователю:
+If something was taken from CLAUDE.md — print a line to the user:
 
 ```
 Exclude (CLAUDE.md): <list>
-Exclude (--exclude flag): <list или "none">
+Exclude (--exclude flag): <list or "none">
 ```
 
-Это даёт прозрачность: пользователь видит, какие директории не будут проанализированы, прежде чем уйдёт ждать прогон.
+This gives transparency: the user sees which directories will not be analyzed before leaving for the run.
 
-**Рекомендуемый формат секции в CLAUDE.md** (для информации пользователя — мы её не пишем сами):
+**Recommended section format in CLAUDE.md** (for user information — we do not write it ourselves):
 
 ```markdown
 ## Code review exclusions
-Не анализировать в security-ревью:
-- legacy/                — устаревший код, будет удалён в Q4
-- src/ThirdParty/        — vendored-код, не наш контракт
-- generated/             — autogenerated, ревью не нужно
+Do not analyze in security review:
+- legacy/                — outdated code, to be removed in Q4
+- src/ThirdParty/        — vendored code, not our contract
+- generated/             — autogenerated, no review needed
 ```
 
-### 4. Recon фаза
+### 4. Recon phase
 
-**Если `--skip-recon` передан И `<REVIEW_ROOT>/CONTEXT.md` существует:**
+**If `--skip-recon` is passed AND `<REVIEW_ROOT>/CONTEXT.md` exists:**
 
-1. Валидируй схему: `python3 ${CLAUDE_PLUGIN_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>"`
-2. Посчитай текущие fingerprints: `python3 ${CLAUDE_PLUGIN_ROOT}/bin/compute_fingerprint.py . --json`
-3. Извлеки из frontmatter существующего `<REVIEW_ROOT>/CONTEXT.md` поля `project_fingerprint` и `code_fingerprint`, сравни:
-   - **project_fingerprint mismatch** → `abort`: «Конфигурация/зависимости изменились, нужен полный recon»
-   - **project_fingerprint match + code_fingerprint match** → использовать контекст as-is
+1. Validate the schema: `python3 ${CLAUDE_PLUGIN_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>"`
+2. Compute current fingerprints: `python3 ${CLAUDE_PLUGIN_ROOT}/bin/compute_fingerprint.py . --json`
+3. Extract `project_fingerprint` and `code_fingerprint` from the frontmatter of the existing `<REVIEW_ROOT>/CONTEXT.md`, compare:
+   - **project_fingerprint mismatch** → `abort`: "Configuration/dependencies changed, full recon required"
+   - **project_fingerprint match + code_fingerprint match** → use context as-is
    - **project_fingerprint match + code_fingerprint mismatch**:
-     - Если `--force-skip-recon` → продолжить с warning
-     - Иначе если `--interactive` → `AskUserQuestion`: «Код изменился, контекст может быть stale. Продолжить?»
-     - Иначе → `abort` с подсказкой `--force-skip-recon`
+     - If `--force-skip-recon` → continue with warning
+     - Else if `--interactive` → `AskUserQuestion`: "Code changed, context may be stale. Continue?"
+     - Else → `abort` with the hint `--force-skip-recon`
 
-**Иначе (полный recon):**
+**Otherwise (full recon):**
 
-Запусти recon-агент. Он сам выберет recipe (detect) и вызовет `recon_inventory.py`, который запишет `<REVIEW_ROOT>/CONTEXT.md`. Если оркестратор получил `--no-console` — пробрось его в prompt. Если на шаге 3a получил непустой `EXCLUDE_CSV` — пробрось `--exclude=<EXCLUDE_CSV>`:
+Launch the recon agent. It will pick the recipe itself (detect) and call `recon_inventory.py`, which writes `<REVIEW_ROOT>/CONTEXT.md`. If the orchestrator received `--no-console` — forward it to the prompt. If step 3a collected a non-empty `EXCLUDE_CSV` — forward `--exclude=<EXCLUDE_CSV>`:
 
 ```
 Task(subagent_type="security-recon", prompt="""
   project_root: <cwd>
   review_root: <REVIEW_ROOT>
-  [--no-console]            # только если флаг был передан оркестратору
-  [--exclude=<EXCLUDE_CSV>] # только если 3a собрал непустой список
+  [--no-console]            # only if the flag was passed to the orchestrator
+  [--exclude=<EXCLUDE_CSV>] # only if 3a collected a non-empty list
 """)
 ```
 
-**В обычном режиме `--no-console` не нужен** — recon-утилита решает сама (если console enrichment доступен — использует, иначе ставит ceiling=medium). Передавай флаг только при явном требовании sandbox'а (hostile-репо аудит, CI без credentials).
+**In normal mode `--no-console` is not needed** — the recon utility decides itself (if console enrichment is available — uses it, otherwise sets ceiling=medium). Pass the flag only on explicit sandbox requirement (hostile-repo audit, CI without credentials).
 
-После возврата — проверь `RECON_OK` в ответе агента. Если получено `RECON_*_FAILED` — остановись, выведи ошибку.
+After return — check `RECON_OK` in the agent's response. If `RECON_*_FAILED` is received — stop, print the error.
 
-Затем дополнительно прогоняй sanity-check с filesystem coverage:
+Then additionally run sanity-check with filesystem coverage:
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>" --sanity
 ```
 
-`--sanity` импортирует recipe (по `recipe_used` из frontmatter), вызывает `recipe.sanity_probes()`, сравнивает declared `file:` в секциях с фактическим filesystem. **Coverage threshold ladder** (rev v3):
+`--sanity` imports the recipe (per `recipe_used` from frontmatter), calls `recipe.sanity_probes()`, compares declared `file:` in sections against the actual filesystem. **Coverage threshold ladder** (rev v3):
 
 - diff ≤ 5 % → ok, `recon_confidence: high`
-- diff 5–20 % → warning, `recon_confidence: medium`, rationale во `frontmatter.warnings`
+- diff 5–20 % → warning, `recon_confidence: medium`, rationale in `frontmatter.warnings`
 - diff > 20 % → error, `recon_confidence: low`, exit 1
 
-Если валидация падает (ERROR exit 1) — остановись, покажи ошибки пользователю.
+If validation fails (ERROR exit 1) — stop, show errors to the user.
 
-Если только warnings (sanity diff 5–20 %) — используй следующую логику в зависимости от того, первый ли это recon или повторный (`RECON_RETRY_DONE`):
+If only warnings (sanity diff 5–20 %) — use the following logic depending on whether this is the first recon or a repeat (`RECON_RETRY_DONE`):
 
-**Первый recon (RECON_RETRY_DONE = false):** покажи warnings пользователю и предложи выбор через AskUserQuestion:
-- (а) Повторить recon (`rm <REVIEW_ROOT>/CONTEXT.md` + заново) — рекомендуется если много пропущенных файлов
-- (б) Продолжить с осознанием пробелов
+**First recon (RECON_RETRY_DONE = false):** show warnings to the user and offer a choice via AskUserQuestion:
+- (a) Repeat recon (`rm <REVIEW_ROOT>/CONTEXT.md` + start over) — recommended if many files are missed
+- (b) Continue with awareness of the gaps
 
-Если пользователь выбрал (а): установи `RECON_RETRY_DONE = true`, удали `<REVIEW_ROOT>/CONTEXT.md`, запусти recon-агент заново, прогони валидацию и sanity-check снова.
+If the user picked (a): set `RECON_RETRY_DONE = true`, remove `<REVIEW_ROOT>/CONTEXT.md`, restart the recon agent, run validation and sanity-check again.
 
-**Повторный recon (RECON_RETRY_DONE = true):** если coverage всё ещё в диапазоне warning — **не спрашивай повторно**. Покажи варнинг и автоматически продолжай:
-
-```
-⚠️  Sanity-check после повторного recon: coverage улучшился, но warning остался.
-   Возможно, часть файлов вне ожидаемых директорий или следует нестандартному именованию.
-   Продолжаю с имеющимся инвентарём — воркеры покроют объявленные entry points.
-```
-
-### 5. Резюме пользователю
-
-Прочитай `<REVIEW_ROOT>/CONTEXT.md`, покажи краткое резюме (имена секций — те, что есть в данном CONTEXT.md; ниже — пример для Symfony, для других стэков названия отличаются):
+**Repeat recon (RECON_RETRY_DONE = true):** if coverage is still in the warning range — **do not ask again**. Show the warning and automatically continue:
 
 ```
-Recon завершён (recon_confidence: <level>, ceiling: <level>).
+⚠️  Sanity-check after repeat recon: coverage improved, but warning remains.
+   Possibly some files are outside expected directories or follow non-standard naming.
+   Continuing with the available inventory — workers will cover the declared entry points.
+```
+
+### 5. Summary for the user
+
+Read `<REVIEW_ROOT>/CONTEXT.md`, show a brief summary (section names — those that are present in this CONTEXT.md; below is an example for Symfony, for other stacks names differ):
+
+```
+Recon complete (recon_confidence: <level>, ceiling: <level>).
 Stack: <framework name from frontmatter.stack.framework>
-Найдено (top-level core sections):
+Found (top-level core sections):
   - attack_surface: <N items>
-  - data_access: <N items> (с раз. источниками: <M>)
+  - data_access: <N items> (with diff. sources: <M>)
   - authz_usage: <N items>
   - serialization: <N items>
   - file_operations / http_clients: <N> / <M>
   - secrets: <status>
   - fintech_markers: <present|none>
-Framework-specific (если присутствует): <list of framework_specific.<stack>.* keys with statuses>
+Framework-specific (if present): <list of framework_specific.<stack>.* keys with statuses>
 Missing sections / warnings: [<list>]
 ```
 
-### 6. Опциональный чекпоинт `--interactive`
+### 6. Optional `--interactive` checkpoint
 
-Если `--interactive`:
+If `--interactive`:
 
 ```
 AskUserQuestion:
-  "Инвентарь верный? Что добавить, уточнить, приоритизировать?"
+  "Is the inventory correct? What to add, refine, prioritize?"
 ```
 
-Ответ пользователя — фиксируй в комментарии к слайсу при запуске воркеров (`prompt`-поле). **CONTEXT.md не модифицируем** — recon-агент авторитетен.
+The user's answer — record in a comment on the slice when launching workers (`prompt` field). **CONTEXT.md is not modified** — the recon agent is authoritative.
 
-### 7. Генерация плана волн
+### 7. Wave plan generation
 
-Определи значение флагов:
-- `EXPLORATORY` = on, если `--quick` НЕ указан (дефолт). Off, если указан `--quick`.
-- `ALL_OPUS` = on, если указан `--all-opus`.
-- `SCOPE_GLOB` = значение после `--scope=`, или пусто.
+Determine flag values:
+- `EXPLORATORY` = on if `--quick` is NOT specified (default). Off if `--quick` is specified.
+- `ALL_OPUS` = on if `--all-opus` is specified.
+- `SCOPE_GLOB` = value after `--scope=`, or empty.
 
-Вызов:
+Call:
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/bin/plan_waves.py "<REVIEW_ROOT>/CONTEXT.md" \
   --plugin-root="${CLAUDE_PLUGIN_ROOT}" \
   --save-plan="<REVIEW_ROOT>/waves_plan.json" \
-  [--all-opus]            # если ALL_OPUS \
-  [--exploratory]         # если EXPLORATORY \
-  [--scope-glob=<SCOPE_GLOB>]   # если задан
+  [--all-opus]            # if ALL_OPUS \
+  [--exploratory]         # if EXPLORATORY \
+  [--scope-glob=<SCOPE_GLOB>]   # if set
 ```
 
-`--save-plan` сохраняет план в JSON для последующего coverage-блока в REPORT.md (шаг 11 / 11.5.2).
+`--save-plan` saves the plan to JSON for the subsequent coverage block in REPORT.md (step 11 / 11.5.2).
 
-**`--plugin-root` обязателен** — иначе `plan_waves` не найдёт `checklists/` (относительный путь резолвится к cwd проекта, не плагина). Скрипт префиксирует чек-листы абсолютным путём.
+**`--plugin-root` is required** — otherwise `plan_waves` will not find `checklists/` (the relative path resolves to the project's cwd, not the plugin's). The script prefixes checklists with an absolute path.
 
-**`--exploratory` передаётся по умолчанию** (кроме `--quick` режима). Это даёт W∞ волну — ключевая для cross-layer уязвимостей (OAuth chains, tenancy integrity, authenticator flows).
+**`--exploratory` is passed by default** (except in `--quick` mode). This gives the W∞ wave — key for cross-layer vulnerabilities (OAuth chains, tenancy integrity, authenticator flows).
 
-Вернёт JSON-массив со списком слайсов. Поля каждого слайса:
-- `slice_id`, `wave_id`, `themes`, `checklists` (абсолютные пути)
+It returns a JSON array with a list of slices. Each slice's fields:
+- `slice_id`, `wave_id`, `themes`, `checklists` (absolute paths)
 - `relevant_section_paths` (dot-notation), `entry_points_in_scope`, `target_files`
 - `model` (opus|sonnet), `mode` (project)
 
-### 7a. Печать плана пользователю
+### 7a. Print the plan to the user
 
-Перед запуском воркеров покажи пользователю сводку плана:
+Before launching workers, show the user a plan summary:
 
 ```
-Запускаю <N> волн (режим: <balanced|all-opus>):
-  W1 (opus, <M> файлов): auth+disclosure
-  W2 (opus, <M> файлов): injection+data-access
-  W3 (sonnet, <M> файлов): output-render+frontend-js
-  W4 (sonnet, <M> файлов): serialization+crypto
-  W5 (sonnet, <M> файлов): ssrf-fileops
-  W6 (opus, <M> файлов): fintech (если триггернулся)
+Launching <N> waves (mode: <balanced|all-opus>):
+  W1 (opus, <M> files): auth+disclosure
+  W2 (opus, <M> files): injection+data-access
+  W3 (sonnet, <M> files): output-render+frontend-js
+  W4 (sonnet, <M> files): serialization+crypto
+  W5 (sonnet, <M> files): ssrf-fileops
+  W6 (opus, <M> files): fintech (if triggered)
   W∞ (sonnet, exploratory): union themes
 ```
 
-Это даёт видимость — пользователь видит что будет запущено, прежде чем уйти в параллельную обработку на ~5-15 минут.
+This gives visibility — the user sees what will be launched before going off into parallel processing for ~5-15 minutes.
 
-### 8. Параллельный запуск воркеров
+### 8. Parallel worker launch
 
-Разбить волны на батчи по **6 воркеров** и запускать батч за батчем:
+Split waves into batches of **6 workers** and launch batch by batch:
 
-1. Взять первые 6 волн из плана → запустить параллельно в одном блоке Task-вызовов
-2. Дождаться завершения всех 6 → обработать результаты (шаг 9) → запустить следующий батч
-3. Повторять до исчерпания волн
+1. Take the first 6 waves from the plan → launch in parallel in one block of Task calls
+2. Wait for all 6 to complete → process results (step 9) → launch the next batch
+3. Repeat until waves are exhausted
 
-Формат Task-вызова для каждой волны:
+Task call format for each wave:
 
 ```
-Task(subagent_type="security", model=<из плана, поле "model">, prompt="""
+Task(subagent_type="security", model=<from plan, field "model">, prompt="""
   review_root: <REVIEW_ROOT>
-  relevant_section_paths: <список dot-notation путей>
-  checklists: <список абсолютных путей>
-  entry_points_in_scope: <список>
-  target_files: <список>
-  slice_id: <из плана>
+  relevant_section_paths: <list of dot-notation paths>
+  checklists: <list of absolute paths>
+  entry_points_in_scope: <list>
+  target_files: <list>
+  slice_id: <from plan>
   mode: project
 """)
 ```
 
-**Важно:** параметр `model` передаётся как аргумент Task-вызова, а не в тексте промпта. Это гарантирует, что воркер запустится на нужной модели (opus/sonnet из balanced-profile). Значение берётся из поля `"model"` JSON-плана.
+**Important:** the `model` parameter is passed as a Task call argument, not in the prompt text. This guarantees that the worker runs on the needed model (opus/sonnet from the balanced profile). The value is taken from the `"model"` field of the JSON plan.
 
-**Важно:** максимум 6 параллельных Task-вызовов за раз. При большом количестве волн — несколько батчей последовательно.
+**Important:** maximum 6 parallel Task calls at once. With many waves — several batches sequentially.
 
-### 9. Safety net + прогресс по каждому воркеру
+### 9. Safety net + progress per worker
 
-Для **каждого** возврата Task воркера:
+For **each** Task worker return:
 
-1. Проверить существование файла:
+1. Check file existence:
    ```bash
    ls "<REVIEW_ROOT>/waves/<slice_id>.md"
    ```
-2. **Safety net (всегда):** если файл **отсутствует**, воркер не выполнил Write — извлеки тело markdown из его ответного сообщения (там должны быть блоки `# Уязвимость ...`) и запиши сам через Write в `<REVIEW_ROOT>/waves/<slice_id>.md`. Это гарантирует что дедуп получит на вход все находки.
-3. **Если в ответе тоже нет markdown-блоков** (воркер вернул только текст или упал) — создай файл с шапкой:
+2. **Safety net (always):** if the file is **missing**, the worker did not perform a Write — extract the markdown body from its response message (it should contain `# Vulnerability ...` blocks) and write it yourself via Write to `<REVIEW_ROOT>/waves/<slice_id>.md`. This guarantees that dedup receives all findings as input.
+3. **If the response also has no markdown blocks** (worker returned only text or crashed) — create a file with a header:
    ```markdown
    # Wave <slice_id> — no findings or worker failed
-   <краткое сообщение из ответа воркера или причина fail>
+   <short message from worker response or fail reason>
    ```
-4. Выведи пользователю одну строку статуса:
-   - `✓ <slice_id>: saved <N> findings (Critical: x, High: y, Medium: z)` — нашёл
-   - `✓ <slice_id>: clean (0 findings)` — проверил, чисто
-   - `⚠ <slice_id>: worker returned no file, recovered from response` — safety net сработал
-   - `✗ <slice_id>: failed — <reason>` — не удалось получить осмысленный результат
+4. Print a one-line status to the user:
+   - `✓ <slice_id>: saved <N> findings (Critical: x, High: y, Medium: z)` — found
+   - `✓ <slice_id>: clean (0 findings)` — checked, clean
+   - `⚠ <slice_id>: worker returned no file, recovered from response` — safety net fired
+   - `✗ <slice_id>: failed — <reason>` — could not get a meaningful result
 
-Retry воркеров не делаем. Продолжаем с оставшимися.
+We do not retry workers. Continue with the remaining.
 
-### 9a. Merge pre-retry файлов (если есть)
+### 9a. Merge pre-retry files (if any)
 
-Если оркестратор (или пользователь) ранее выполнил retry воркера и остались файлы `*.pre-retry.md`:
+If the orchestrator (or user) previously did a worker retry and `*.pre-retry.md` files remain:
 
 ```bash
 for pre in "<REVIEW_ROOT>/waves/"*.pre-retry.md; do
@@ -360,31 +360,31 @@ for pre in "<REVIEW_ROOT>/waves/"*.pre-retry.md; do
 done
 ```
 
-Дедуп-скрипт автоматически сольёт дубликаты — лучше дубликат, чем потеря security-кейса.
+The dedup script will automatically merge duplicates — better duplicate than losing a security case.
 
-### 10. Предупреждение для больших проектов с exploratory
+### 10. Warning for large projects with exploratory
 
-Если `EXPLORATORY=on` (по умолчанию) И в scope >100 файлов — выведи warning **до запуска** W∞ Task:
+If `EXPLORATORY=on` (by default) AND >100 files in scope — print a warning **before launching** the W∞ Task:
 
 ```
-⚠️  Exploratory-волна (W∞) на проекте >100 файлов — может быть дорого.
-   W∞ загружает union всех тематических чек-листов и бежит по всем target-файлам
-   чанками по 65 файлов на sonnet — стоимость растёт линейно с размером проекта.
-   W4/W5 уже на sonnet по умолчанию (опции тут нет).
+⚠️  Exploratory wave (W∞) on a project >100 files — may be expensive.
+   W∞ loads the union of all thematic checklists and runs across all target files
+   in chunks of 65 files on sonnet — cost grows linearly with project size.
+   W4/W5 are already on sonnet by default (no option here).
 
-   Варианты сэкономить:
-     • --quick           — отключить W∞ целиком. Теряем cross-layer анализ:
+   Options to save:
+     • --quick           — disable W∞ entirely. We lose cross-layer analysis:
                            OAuth state chains, multi-tenancy boundaries,
                            authenticator integrity, prompt injection chains.
-                           Фокусные волны W1–W6 продолжают работать.
-     • --scope=<glob>    — сузить target_files до подмножества (например,
-                           --scope='src/Api/**'). W∞ остаётся включённой,
-                           но бежит только по матчам — пропорционально дешевле.
+                           Focused waves W1–W6 continue to work.
+     • --scope=<glob>    — narrow target_files to a subset (for example,
+                           --scope='src/Api/**'). W∞ stays enabled,
+                           but runs only on matches — proportionally cheaper.
 ```
 
-W∞ Task запускается автоматически в общем цикле (шаг 8) — отдельный шаг не нужен, `plan_waves.py --exploratory` уже включил его в план.
+The W∞ Task is launched automatically in the common loop (step 8) — a separate step is not needed; `plan_waves.py --exploratory` already included it in the plan.
 
-### 11. Дедупликация и свод
+### 11. Deduplication and summary
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/bin/dedupe_findings.py \
@@ -394,34 +394,34 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/dedupe_findings.py \
   --waves-plan "<REVIEW_ROOT>/waves_plan.json"
 ```
 
-Дедуп выдаёт **split-отчёт** (по умолчанию):
-- `<REVIEW_ROOT>/REPORT.md` — executive summary + index-таблица всех находок со ссылками на детали
-- `<REVIEW_ROOT>/REPORT/<root_cause_family>.md` — детали находок по категориям (authz.md, injection.md, disclosure.md, crypto.md, ssrf.md, webhook.md, business_logic.md, xss.md, deserialization.md)
-- `<REVIEW_ROOT>/REPORT/manual_review.md` — находки, требующие ручной проверки: не прошедшие auto-promote (custom sink_kind + не критичные) **и** parse-failed (воркер не выдал `sink_file`, флаг `[PARSE_FAILED]`). Index выводит callout «⚠️ Action required: N» при ненулевом count.
+Dedup produces a **split report** (by default):
+- `<REVIEW_ROOT>/REPORT.md` — executive summary + index table of all findings with links to details
+- `<REVIEW_ROOT>/REPORT/<root_cause_family>.md` — finding details by category (authz.md, injection.md, disclosure.md, crypto.md, ssrf.md, webhook.md, business_logic.md, xss.md, deserialization.md)
+- `<REVIEW_ROOT>/REPORT/manual_review.md` — findings requiring manual check: those that did not pass auto-promote (custom sink_kind + non-critical) **and** parse-failed (worker did not emit `sink_file`, flag `[PARSE_FAILED]`). The index outputs a callout "⚠️ Action required: N" on non-zero count.
 
-Для legacy-режима (всё в один файл) — флаг `--single-file`.
+For legacy mode (everything in one file) — flag `--single-file`.
 
-### 11.5. Adversarial refute pass (опционально, по умолчанию on)
+### 11.5. Adversarial refute pass (optional, on by default)
 
-Если оркестратор был запущен с флагом `--no-adversarial` — **пропусти этот шаг** (тогда сразу к шагу 12).
+If the orchestrator was launched with `--no-adversarial` — **skip this step** (then directly to step 12).
 
-#### 11.5.1. Запуск refute-волны
+#### 11.5.1. Launching the refute wave
 
-Прочитай `<REVIEW_ROOT>/REPORT.md` index-таблицу. Разбей строки на батчи по ≤20 findings (first 20 → batch_index=0, next 20 → batch_index=1, и т.д.).
+Read the `<REVIEW_ROOT>/REPORT.md` index table. Split rows into batches of ≤20 findings (first 20 → batch_index=0, next 20 → batch_index=1, etc.).
 
-Для каждого батча — sequential Task call (параллелить **запрещено** — refute-агент пишет в один файл `<REVIEW_ROOT>/refute.md` Append-режимом):
+For each batch — sequential Task call (parallelism is **forbidden** — the refute agent writes to a single file `<REVIEW_ROOT>/refute.md` in Append mode):
 
 ```
 Task subagent_type=security-refute prompt="
 review_root: <REVIEW_ROOT>
 batch_index: <0..N-1>
-findings_slice: <markdown срез index'а REPORT.md ≤ 20 finding строк>
+findings_slice: <markdown slice of REPORT.md index ≤ 20 finding rows>
 "
 ```
 
-Soft timeout 10 минут per call. Если Task не вернулся в timeout — оркестратор печатает warning «adversarial pass partial — N from M findings reviewed» и продолжает с partial refute. Refute не блокирует основной отчёт.
+Soft timeout 10 minutes per call. If the Task did not return within timeout — the orchestrator prints a warning "adversarial pass partial — N from M findings reviewed" and continues with partial refute. Refute does not block the main report.
 
-#### 11.5.2. Применение refute результатов
+#### 11.5.2. Apply refute results
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/bin/dedupe_findings.py \
@@ -433,23 +433,23 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/dedupe_findings.py \
   --project-root "<PROJECT_ROOT>"
 ```
 
-Это перезапускает дедуп (быстро) и применяет refute-теги. На выходе:
-- В `REPORT.md` — каждый refute-помеченный finding получает `[REFUTE_CLAIMED]` маркер с `refute_file:refute_line` хвостом.
-- Новый файл `<REVIEW_ROOT>/REPORT/refute_invalid.md` — refute records, не прошедшие auto-validation (для аудита).
-- Executive summary показывает счётчики `confirmed / refute_claimed / refute_invalid / manual_review / parse_failed`.
+This re-runs dedup (fast) and applies refute tags. On output:
+- In `REPORT.md` — each refute-marked finding receives a `[REFUTE_CLAIMED]` marker with a `refute_file:refute_line` tail.
+- A new file `<REVIEW_ROOT>/REPORT/refute_invalid.md` — refute records that did not pass auto-validation (for audit).
+- Executive summary shows counters `confirmed / refute_claimed / refute_invalid / manual_review / parse_failed`.
 
-### 12. Вывод пользователю
+### 12. Output to user
 
 ```
-Security review завершён.
+Security review complete.
   Index: <REVIEW_ROOT>/REPORT.md
-  Детали по категориям: <REVIEW_ROOT>/REPORT/<family>.md
-  Промежуточные отчёты (для аудита): <REVIEW_ROOT>/waves/*.md
-  Не покрытые срезы: [<list> или none]
+  Details by category: <REVIEW_ROOT>/REPORT/<family>.md
+  Intermediate reports (for audit): <REVIEW_ROOT>/waves/*.md
+  Uncovered slices: [<list> or none]
 ```
 
-## ПРИНЦИПЫ
+## PRINCIPLES
 
-- Никогда не коммитить артефакты — локальный `.gitignore` внутри `<REVIEW_ROOT>/` уже игнорирует всё содержимое + сам `.gitignore`. Пользователь сам решит закоммитить через `git add -f`, если захочет.
-- Воркер failure ≠ abort всего ревью — продолжаем с оставшимися
-- Все промежуточные `<REVIEW_ROOT>/waves/*.md` сохранять для аудита, не удалять между шагами
+- Never commit artifacts — the local `.gitignore` inside `<REVIEW_ROOT>/` already ignores all content + the `.gitignore` itself. The user decides themselves to commit via `git add -f`, if they wish.
+- Worker failure ≠ abort the whole review — continue with the remaining
+- Keep all intermediate `<REVIEW_ROOT>/waves/*.md` for audit, do not delete between steps

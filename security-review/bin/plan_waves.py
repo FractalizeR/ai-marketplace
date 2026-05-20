@@ -130,7 +130,7 @@ CONCEPT_RESOLVERS: dict[tuple[str, str], tuple[str, ...]] = {
     # framework_specific bags for these — concepts resolve to () and the wave
     # uses only its core paths.
     # long_running_runtime: Symfony does not declare runtime; Octane gate is a
-    # Laravel-only concept (see plan §C-агент Octane gate).
+    # Laravel-only concept (see plan §C-agent Octane gate).
 
     # --- Laravel ---
     ("laravel", "auth_guards"): (
@@ -170,7 +170,7 @@ import validate_context as vc  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# Wave definitions (schema v2 — раздел F плана rev 3.7).
+# Wave definitions (schema v2 — section F of plan rev 3.7).
 # ---------------------------------------------------------------------------
 
 
@@ -993,8 +993,8 @@ def build_plan(
             for s in plan:
                 focused.update(s.get("entry_points_in_scope", []))
             all_eps = sorted(own | focused)
-            # Exploratory loads union of all themes' checklists (раздел F:
-            # «На W∞ exploratory загружаются все темы union'ом»).
+            # Exploratory loads union of all themes' checklists (section F:
+            # "On W∞ exploratory all themes are loaded as a union").
             checklists = resolve_checklists(wave.themes, stack, plugin_root)
 
             chunks = split_files(files, model, limit_override=WINF_SPLIT) or [[]]

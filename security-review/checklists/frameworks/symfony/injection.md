@@ -1,21 +1,21 @@
 # Injection (Symfony) — Form mass-assignment, Messenger transport trust
 
-> Этот чек-лист дополняет `core/injection.md` для проектов на symfony. При конфликте инструкций — приоритет за этим файлом, как более специфичным. Worker загружает оба файла одновременно.
+> This checklist complements `core/injection.md` for symfony projects. On conflicting instructions, this file takes priority as the more specific one. Worker loads both files simultaneously.
 
-**Это типичные паттерны категории, не исчерпывающий список.** Если ты обнаружил эксплуатируемую уязвимость, проходящую методологию (источник входа → трансформации → sink + конкретный путь эксплуатации) — репортить **обязательно**, даже если она не подпадает ни под один пункт ниже. Чек-лист — указатель приоритета поиска, а не фильтр.
+**These are typical patterns of the category, not an exhaustive list.** If you discover an exploitable vulnerability that passes the methodology (input source → transformations → sink + a concrete exploit path) — reporting is **mandatory**, even if it does not fall under any item below. The checklist is a search-priority pointer, not a filter.
 
 ## Form mass-assignment (Symfony Form)
 
-Формы Symfony Form-компонента — основной канал mass-assignment в Symfony-проектах. Без `data_class` и/или с `allow_extra_fields: true` форма пропускает любые поля от клиента.
+Forms of the Symfony Form component are the main channel for mass-assignment in Symfony projects. Without `data_class` and/or with `allow_extra_fields: true`, the form lets through any fields from the client.
 
-- `Symfony\Component\Form\FormType` без `data_class` → пропускает любые поля (forms over arrays)
-- FormType с `allow_extra_fields: true` — принимает любые дополнительные поля и десериализует их в entity
-- `Serializer::denormalize($data, Entity::class)` из request body без `AbstractNormalizer::ATTRIBUTES` whitelist
-- Direct setters на privileged fields достижимы через FormType: `setRoles`, `setIsAdmin`, `setPaid(true)` если поля добавлены в форму без guard
-- Entity с public properties вместо setters — любой `Serializer::denormalize` / FormType заполнит всё
+- `Symfony\Component\Form\FormType` without `data_class` → lets through any fields (forms over arrays)
+- FormType with `allow_extra_fields: true` — accepts any additional fields and deserializes them into the entity
+- `Serializer::denormalize($data, Entity::class)` from the request body without `AbstractNormalizer::ATTRIBUTES` whitelist
+- Direct setters on privileged fields reachable through FormType: `setRoles`, `setIsAdmin`, `setPaid(true)` if the fields are added to the form without a guard
+- Entity with public properties instead of setters — any `Serializer::denormalize` / FormType will fill everything
 
 ## Messenger transport trust
 
-См. также `serialization.md` для PhpSerializer-related deserialization concerns. Здесь — анти-паттерны доверия handlers к содержимому сообщения:
+See also `serialization.md` for PhpSerializer-related deserialization concerns. Here — anti-patterns of handlers trusting message contents:
 
-- Handler полагается на то, что сообщение «откуда-то от доверенной системы», и не проверяет владельца / authz по `userId`/`tenantId` из body сообщения. См. также `auth.md` (tenancy trust) — async handler = тот же service-level firewall, без cryptographic binding.
+- Handler relies on the message being "from a trusted system somewhere" and does not check the owner / authz by `userId`/`tenantId` from the message body. See also `auth.md` (tenancy trust) — an async handler = the same service-level firewall, without cryptographic binding.
