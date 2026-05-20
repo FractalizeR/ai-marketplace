@@ -425,6 +425,22 @@ def _validate_frontmatter_v2(text: str, res: ValidationResult) -> Optional[dict]
         for k in ("language", "framework"):
             if k not in stack:
                 res.errors.append(f"frontmatter.stack missing key: {k}")
+        # Optional addons / integrations: must be lists of strings if present.
+        # Missing keys are treated as empty list (no error).
+        for opt_key in ("addons", "integrations"):
+            v = stack.get(opt_key)
+            if v is None:
+                continue
+            if not isinstance(v, list):
+                res.errors.append(
+                    f"frontmatter.stack.{opt_key} must be a list of strings, got {type(v).__name__}"
+                )
+                continue
+            for i, item in enumerate(v):
+                if not isinstance(item, str):
+                    res.errors.append(
+                        f"frontmatter.stack.{opt_key}[{i}] must be a string, got {type(item).__name__}"
+                    )
     elif "stack" in fm:
         res.errors.append(f"frontmatter.stack must be a mapping, got {type(stack).__name__}")
 

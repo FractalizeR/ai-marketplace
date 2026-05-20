@@ -227,9 +227,9 @@ class ChecklistCoverageBlockTests(unittest.TestCase):
         )
 
     def test_inactive_checklist_tagged_with_stack(self):
-        """Frameworks checklists not in waves_plan -> marked '(stack: <stack>)'."""
+        """Stack checklists not in waves_plan -> marked '(stack: <stack>)'."""
         # Active: only core/auth. All other on-disk checklists report as
-        # inactive — at minimum we expect frameworks/symfony/auth tagged.
+        # inactive — at minimum we expect stacks/symfony/auth tagged.
         cl_active = self.PLUGIN_ROOT / "checklists" / "core" / "auth.md"
         plan = [{
             "wave_id": "W1",
@@ -242,9 +242,9 @@ class ChecklistCoverageBlockTests(unittest.TestCase):
             plugin_root=self.PLUGIN_ROOT,
         )
         self.assertIn("## Checklist coverage", summary)
-        # Symfony auth is frameworks/symfony/auth.md -> stack inferred = symfony.
+        # Symfony auth is stacks/symfony/auth.md -> stack inferred = symfony.
         self.assertIn(
-            "`checklists/frameworks/symfony/auth.md`: not activated (stack: symfony)",
+            "`checklists/stacks/symfony/auth.md`: not activated (stack: symfony)",
             summary,
         )
 

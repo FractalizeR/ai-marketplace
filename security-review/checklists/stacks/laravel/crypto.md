@@ -74,4 +74,4 @@
 
 ## Secret in response Laravel specifics
 
-> sink_kind: `secret_in_response`. The primary material is in `frameworks/laravel/disclosure.md → secret_in_response (Sanctum / Eloquent / API Resource)`. Here only a cross-link, so scanning the crypto checklist does not miss the category.
+> sink_kind: `secret_in_response`. The primary material is in `stacks/laravel/disclosure.md → secret_in_response (Sanctum / Eloquent / API Resource)`. Here only a cross-link, so scanning the crypto checklist does not miss the category.

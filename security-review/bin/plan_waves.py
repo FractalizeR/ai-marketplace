@@ -500,7 +500,7 @@ class ParsedContext:
         """Stack name from frontmatter (e.g. 'symfony', 'none', 'unknown').
 
         Source of truth: `frontmatter.stack.framework`. Falls back to "unknown"
-        when missing, so resolve_checklists treats it as "no framework layer".
+        when missing, so resolve_checklists treats it as "no stack layer".
         """
         st = self.frontmatter.get("stack")
         if isinstance(st, dict):
@@ -508,6 +508,44 @@ class ParsedContext:
             if isinstance(fw, str) and fw:
                 return fw
         return "unknown"
+
+    @property
+    def resolution_context(self) -> "ResolutionContext":
+        """Build a ResolutionContext from frontmatter.stack for resolve_checklists.
+
+        - language: from stack.language (None if missing or empty string).
+        - stack: from stack.framework (default "unknown").
+        - addons: from stack.addons (default empty).
+        - integrations: from stack.integrations (default empty).
+
+        Defends against malformed YAML (non-list addons/integrations, non-string
+        items) before passing to ResolutionContext, which normalizes the result
+        (dedupe + sort) in __post_init__.
+        """
+        st = self.frontmatter.get("stack")
+        language: Optional[str] = None
+        stack_name = "unknown"
+        addons_raw: tuple[str, ...] = ()
+        integrations_raw: tuple[str, ...] = ()
+        if isinstance(st, dict):
+            lang = st.get("language")
+            if isinstance(lang, str) and lang:
+                language = lang
+            fw = st.get("framework")
+            if isinstance(fw, str) and fw:
+                stack_name = fw
+            a = st.get("addons")
+            if isinstance(a, list):
+                addons_raw = tuple(x for x in a if isinstance(x, str) and x)
+            i = st.get("integrations")
+            if isinstance(i, list):
+                integrations_raw = tuple(x for x in i if isinstance(x, str) and x)
+        return ResolutionContext(
+            language=language,
+            stack=stack_name,
+            addons=addons_raw,
+            integrations=integrations_raw,
+        )
 
     def payload_at(self, path: str) -> Optional[dict[str, Any]]:
         """Resolve dot-notation path → payload dict.
@@ -794,43 +832,93 @@ def collect_entry_points(
 
 
 # ---------------------------------------------------------------------------
-# Checklist resolution (rev 3.7 layout: core/ + frameworks/{stack}/).
+# Checklist resolution (5-layer: core → language → stack → addons → integrations).
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ResolutionContext:
+    """Inputs for the 5-layer checklist resolver.
+
+    - language: e.g. "php"/"python"/"node"; None disables the language layer.
+    - stack: e.g. "symfony"/"laravel"/"none"/"unknown"; "none"/"unknown" disable
+      the stack and addons layers.
+    - addons: alphabetically sorted, deduped (normalized in __post_init__).
+    - integrations: alphabetically sorted, deduped (normalized in __post_init__).
+    """
+    language: Optional[str]
+    stack: str
+    addons: tuple[str, ...]
+    integrations: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        # Normalize language: empty string → None (callers may pass "" when the
+        # field was absent in YAML).
+        if self.language == "":
+            object.__setattr__(self, "language", None)
+        # Normalize addons / integrations: drop non-strings, dedupe, sort.
+        for field in ("addons", "integrations"):
+            raw = getattr(self, field)
+            normalized = tuple(sorted({x for x in raw if isinstance(x, str) and x}))
+            object.__setattr__(self, field, normalized)
 
 
 def resolve_checklists(
     themes: tuple[str, ...],
-    stack: str,
+    ctx: ResolutionContext,
     plugin_root: Optional[Path],
 ) -> list[str]:
-    """Return absolute checklist paths for the given themes & stack.
+    """Return absolute checklist paths for the given themes & resolution ctx.
 
-    Layout:
-      checklists/core/{theme}.md            — always loaded if present.
-      checklists/frameworks/{stack}/{theme}.md — loaded if stack ∉ {none, unknown}
-                                                 and the file exists.
+    Layout (5-layer; precedence increases with depth):
+      1. checklists/core/{theme}.md
+      2. checklists/languages/{language}/{theme}.md       — skip if ctx.language is None
+      3. checklists/stacks/{stack}/{theme}.md             — skip if stack ∈ {none, unknown}
+      4. checklists/stacks/{stack}/addons/{addon}/{theme}.md
+         — for each addon, alphabetical; skip if stack ∈ {none, unknown}
+      5. checklists/integrations/{integration}/{theme}.md
+         — for each integration, alphabetical; independent of stack
 
-    Order: all core first (theme order preserved), then all framework files
-    (theme order preserved). Worker is told that framework files override
-    core when both are present (anchor in frameworks/{stack}/{theme}.md).
+    Order per theme: core → language → stack → addons → integrations
+    (i.e., less specific first; more specific layer overrides on conflict).
+    Across themes: theme order is preserved (for each theme we append its full
+    chain before moving to the next).
 
-    Graceful skip: missing files are silently dropped — core is best-effort,
-    framework is opt-in. plugin_root=None disables resolution entirely
-    (returns []) — callers must pass an existing plugin root.
+    Graceful skip: missing files are silently dropped — every layer is opt-in.
+    plugin_root=None disables resolution entirely (returns []) — callers must
+    pass an existing plugin root.
     """
     if plugin_root is None:
         return []
     root = plugin_root.resolve()
+    cl = root / "checklists"
     out: list[str] = []
+    stack_active = bool(ctx.stack) and ctx.stack not in ("none", "unknown")
     for t in themes:
-        core = root / "checklists" / "core" / f"{t}.md"
+        # 1. core.
+        core = cl / "core" / f"{t}.md"
         if core.is_file():
             out.append(str(core))
-    if stack and stack not in ("none", "unknown"):
-        for t in themes:
-            fw = root / "checklists" / "frameworks" / stack / f"{t}.md"
-            if fw.is_file():
-                out.append(str(fw))
+        # 2. language.
+        if ctx.language:
+            lang = cl / "languages" / ctx.language / f"{t}.md"
+            if lang.is_file():
+                out.append(str(lang))
+        # 3. stack.
+        if stack_active:
+            stk = cl / "stacks" / ctx.stack / f"{t}.md"
+            if stk.is_file():
+                out.append(str(stk))
+            # 4. addons (only if stack is active — addons live under stacks/{stack}/addons/).
+            for addon in ctx.addons:
+                ad = cl / "stacks" / ctx.stack / "addons" / addon / f"{t}.md"
+                if ad.is_file():
+                    out.append(str(ad))
+        # 5. integrations (independent of stack).
+        for integration in ctx.integrations:
+            ig = cl / "integrations" / integration / f"{t}.md"
+            if ig.is_file():
+                out.append(str(ig))
     return out
 
 
@@ -951,7 +1039,7 @@ def build_plan(
             wave.entry_point_section_paths, wave.entry_point_kinds, ctx,
         )
         chunks = split_files(files, model)
-        checklists = resolve_checklists(wave.themes, stack, plugin_root)
+        checklists = resolve_checklists(wave.themes, ctx.resolution_context, plugin_root)
         for idx, chunk in enumerate(chunks, start=1):
             slice_id = f"{wave.wave_id}_PART{idx}"
             if mode == "changes":
@@ -995,7 +1083,7 @@ def build_plan(
             all_eps = sorted(own | focused)
             # Exploratory loads union of all themes' checklists (section F:
             # "On W∞ exploratory all themes are loaded as a union").
-            checklists = resolve_checklists(wave.themes, stack, plugin_root)
+            checklists = resolve_checklists(wave.themes, ctx.resolution_context, plugin_root)
 
             chunks = split_files(files, model, limit_override=WINF_SPLIT) or [[]]
             for idx, chunk in enumerate(chunks, start=1):

@@ -164,14 +164,14 @@ def _normalize_checklist_path(p: str, plugin_root: Path) -> str:
 def _checklist_stack(rel_path: str) -> str | None:
     """Infer stack folder from a normalized relative checklist path.
 
-    `checklists/frameworks/<stack>/<theme>.md` → <stack>;
+    `checklists/stacks/<stack>/<theme>.md` → <stack>;
     `checklists/core/<theme>.md` or anything else → None.
     """
     parts = rel_path.split("/")
     if (
         len(parts) >= 4
         and parts[0] == "checklists"
-        and parts[1] == "frameworks"
+        and parts[1] == "stacks"
         and parts[2]
     ):
         return parts[2]

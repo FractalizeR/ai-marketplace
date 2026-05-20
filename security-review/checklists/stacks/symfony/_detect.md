@@ -1,6 +1,6 @@
 # Symfony stack — detection
 
-This file describes how `recipes/symfony` detects a Symfony project and activates checklists from `frameworks/symfony/`. It is not a checklist itself — there are no vulnerability items.
+This file describes how `recipes/symfony` detects a Symfony project and activates checklists from `stacks/symfony/`. It is not a checklist itself — there are no vulnerability items.
 
 ## Symfony project signals (by `composer.json` and file structure)
 
@@ -15,7 +15,7 @@ stack:
   detector: composer.json+symfony.lock
 ```
 
-`plan_waves.resolve_checklists(themes, stack="symfony", plugin_root)` then adds to each theme the file `frameworks/symfony/{theme}.md`, if it exists.
+`plan_waves.resolve_checklists(themes, ctx, plugin_root)` (where `ctx.stack == "symfony"`) then adds to each theme the file `stacks/symfony/{theme}.md`, if it exists.
 
 ## What lands in the `framework_specific.symfony` bag
 
@@ -25,6 +25,6 @@ See `bin/recon/recipes/symfony.py::FRAMEWORK_SPECIFIC_SCHEMA` for the exact shap
 
 ## What "framework: none/unknown" means
 
-`none` — generic PHP project without a framework. `frameworks/symfony/*.md` are not loaded. Worker operates only with core checklists.
+`none` — generic PHP project without a framework. `stacks/symfony/*.md` are not loaded. Worker operates only with core checklists.
 
 `unknown` — detect did not fire (possibly non-standard installation). The recon agent writes `recon_confidence: low`, plan_waves does not activate framework sections.

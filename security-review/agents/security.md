@@ -336,7 +336,7 @@ These examples are calibration for severity/confidence evaluation. Use their str
 * **Exploitation scenario**: request `GET /posts?order_by=id;DROP TABLE users--` — the fragment ends up in the final SQL after `ORDER BY`. Through a UNION-based payload (`id) UNION SELECT password FROM users--`) the attacker reads other columns. No auth needed — the endpoint is public.
 * **Impact**: read of the whole DB, including password hashes / session tokens; destructive payload if the application's DB user has DROP/DELETE privileges.
 * **Recommendation**: replace `whereRaw("ORDER BY $orderBy")` with `->orderBy($column, $direction)` with a whitelist of allowed columns (`in_array($orderBy, ['id', 'created_at'], true)`); or `whereRaw("ORDER BY ?", [$orderBy])` does not help either — bind does not work for identifiers, only whitelist.
-* **Discovered via**: checklist:checklists/frameworks/laravel/data-access.md
+* **Discovered via**: checklist:checklists/stacks/laravel/data-access.md
 ```
 
 ### Example 2 — Missing-defense Critical: OAuth callback without `state` parameter

@@ -96,6 +96,22 @@ def _build_generic_php(**overrides: str) -> Path:
     return _build_context(framework="none", recipe="generic_php", **overrides)
 
 
+def _ctx(
+    stack: str,
+    *,
+    language: str | None = None,
+    addons: tuple[str, ...] = (),
+    integrations: tuple[str, ...] = (),
+) -> "pw.ResolutionContext":
+    """Compact helper for ResolutionContext in resolve_checklists tests."""
+    return pw.ResolutionContext(
+        language=language,
+        stack=stack,
+        addons=addons,
+        integrations=integrations,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Frontmatter / stack tests.
 # ---------------------------------------------------------------------------
@@ -142,6 +158,178 @@ class StackFromFrontmatterTests(unittest.TestCase):
         try:
             ctx = pw.parse_context(p)
             self.assertEqual(ctx.stack, "unknown")
+        finally:
+            p.unlink()
+
+
+# ---------------------------------------------------------------------------
+# ParsedContext.resolution_context (frontmatter → ResolutionContext).
+# ---------------------------------------------------------------------------
+
+
+def _build_context_with_stack_block(stack_yaml: str) -> Path:
+    """Write a temp CONTEXT.md whose frontmatter `stack:` is custom `stack_yaml`.
+
+    `stack_yaml` is the body inside the `stack:` mapping (already indented), or
+    the literal `null` to mean "no stack block".
+    """
+    if stack_yaml == "__NO_STACK__":
+        fm = (
+            "---\n"
+            "schema_version: 2\n"
+            'generated_at: "2026-04-13T12:00:00Z"\n'
+            'git_rev: "abc"\n'
+            'project_fingerprint: "pf"\n'
+            'code_fingerprint: "cf"\n'
+            "scope: project\n"
+            "recipe_used: generic_php\n"
+            "tool_versions:\n  mcp_phpstorm: available\n"
+            "sources_used:\n  - test\n"
+            "missing_sections: []\n"
+            "recon_confidence:\n  level: high\n  ceiling: high\n"
+            "---\n"
+        )
+    else:
+        fm = (
+            "---\n"
+            "schema_version: 2\n"
+            'generated_at: "2026-04-13T12:00:00Z"\n'
+            'git_rev: "abc"\n'
+            'project_fingerprint: "pf"\n'
+            'code_fingerprint: "cf"\n'
+            "scope: project\n"
+            "stack:\n"
+            f"{stack_yaml}"
+            "recipe_used: symfony\n"
+            "tool_versions:\n  mcp_phpstorm: available\n"
+            "sources_used:\n  - test\n"
+            "missing_sections: []\n"
+            "recon_confidence:\n  level: high\n  ceiling: high\n"
+            "---\n"
+        )
+    body = _all_sections()
+    f = tempfile.NamedTemporaryFile("w", suffix=".md", delete=False)
+    f.write(fm + body)
+    f.close()
+    return Path(f.name)
+
+
+class ResolutionContextFromParsedTests(unittest.TestCase):
+    def test_full_context_extraction(self):
+        stack_yaml = (
+            "  language: php\n"
+            "  framework: symfony\n"
+            "  framework_version: null\n"
+            "  detected_via: test\n"
+            "  addons:\n"
+            "    - api-platform\n"
+            "    - easyadmin\n"
+            "  integrations:\n"
+            "    - auth0\n"
+            "    - stripe\n"
+        )
+        p = _build_context_with_stack_block(stack_yaml)
+        try:
+            ctx = pw.parse_context(p)
+            rc = ctx.resolution_context
+            self.assertEqual(
+                rc,
+                pw.ResolutionContext(
+                    language="php",
+                    stack="symfony",
+                    addons=("api-platform", "easyadmin"),
+                    integrations=("auth0", "stripe"),
+                ),
+            )
+        finally:
+            p.unlink()
+
+    def test_missing_addons_defaults_to_empty(self):
+        stack_yaml = (
+            "  language: php\n"
+            "  framework: symfony\n"
+            "  framework_version: null\n"
+            "  detected_via: test\n"
+        )
+        p = _build_context_with_stack_block(stack_yaml)
+        try:
+            ctx = pw.parse_context(p)
+            rc = ctx.resolution_context
+            self.assertEqual(rc.addons, ())
+            self.assertEqual(rc.integrations, ())
+            self.assertEqual(rc.language, "php")
+            self.assertEqual(rc.stack, "symfony")
+        finally:
+            p.unlink()
+
+    def test_addons_sorted_and_deduped(self):
+        stack_yaml = (
+            "  language: php\n"
+            "  framework: symfony\n"
+            "  framework_version: null\n"
+            "  detected_via: test\n"
+            "  addons:\n"
+            "    - easyadmin\n"
+            "    - api-platform\n"
+            "    - easyadmin\n"
+        )
+        p = _build_context_with_stack_block(stack_yaml)
+        try:
+            ctx = pw.parse_context(p)
+            rc = ctx.resolution_context
+            self.assertEqual(rc.addons, ("api-platform", "easyadmin"))
+        finally:
+            p.unlink()
+
+    def test_non_string_items_dropped(self):
+        # YAML allows mixed-type lists. ResolutionContext drops non-strings.
+        stack_yaml = (
+            "  language: php\n"
+            "  framework: symfony\n"
+            "  framework_version: null\n"
+            "  detected_via: test\n"
+            "  addons:\n"
+            "    - valid\n"
+            "    - 5\n"
+            "    - null\n"
+        )
+        p = _build_context_with_stack_block(stack_yaml)
+        try:
+            ctx = pw.parse_context(p)
+            rc = ctx.resolution_context
+            self.assertEqual(rc.addons, ("valid",))
+        finally:
+            p.unlink()
+
+    def test_empty_language_string_becomes_none(self):
+        stack_yaml = (
+            '  language: ""\n'
+            "  framework: symfony\n"
+            "  framework_version: null\n"
+            "  detected_via: test\n"
+        )
+        p = _build_context_with_stack_block(stack_yaml)
+        try:
+            ctx = pw.parse_context(p)
+            rc = ctx.resolution_context
+            self.assertIsNone(rc.language)
+        finally:
+            p.unlink()
+
+    def test_missing_stack_block(self):
+        p = _build_context_with_stack_block("__NO_STACK__")
+        try:
+            ctx = pw.parse_context(p)
+            rc = ctx.resolution_context
+            self.assertEqual(
+                rc,
+                pw.ResolutionContext(
+                    language=None,
+                    stack="unknown",
+                    addons=(),
+                    integrations=(),
+                ),
+            )
         finally:
             p.unlink()
 
@@ -867,84 +1055,208 @@ class ResolveChecklistsTests(unittest.TestCase):
         self.root = Path(self.tmp)
         # Mock layout.
         (self.root / "checklists" / "core").mkdir(parents=True)
-        (self.root / "checklists" / "frameworks" / "symfony").mkdir(parents=True)
+        (self.root / "checklists" / "stacks" / "symfony").mkdir(parents=True)
         (self.root / "checklists" / "core" / "auth.md").write_text("auth core")
         (self.root / "checklists" / "core" / "disclosure.md").write_text("disclosure core")
-        (self.root / "checklists" / "frameworks" / "symfony" / "auth.md").write_text("auth symfony")
-        # Note: NO frameworks/symfony/disclosure.md → graceful skip.
+        (self.root / "checklists" / "stacks" / "symfony" / "auth.md").write_text("auth symfony")
+        # Note: NO stacks/symfony/disclosure.md → graceful skip.
 
     def tearDown(self):
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_core_only_when_stack_none(self):
-        out = pw.resolve_checklists(("auth", "disclosure"), "none", self.root)
-        # Only core/* — frameworks/none/ is skipped by stack guard.
+        out = pw.resolve_checklists(("auth", "disclosure"), _ctx("none"), self.root)
+        # Only core/* — stacks/none/ is skipped by stack guard.
         self.assertEqual(len(out), 2)
         for s in out:
             self.assertTrue(s.endswith("/core/auth.md") or s.endswith("/core/disclosure.md"))
 
     def test_core_only_when_stack_unknown(self):
-        out = pw.resolve_checklists(("auth",), "unknown", self.root)
+        out = pw.resolve_checklists(("auth",), _ctx("unknown"), self.root)
         self.assertEqual(len(out), 1)
         self.assertTrue(out[0].endswith("/core/auth.md"))
 
-    def test_core_plus_framework_when_stack_present(self):
-        out = pw.resolve_checklists(("auth", "disclosure"), "symfony", self.root)
-        # Order: all core first, then framework files.
-        self.assertEqual(len(out), 3)  # core/auth, core/disclosure, frameworks/symfony/auth (no disclosure)
+    def test_core_plus_stack_when_stack_present(self):
+        out = pw.resolve_checklists(("auth", "disclosure"), _ctx("symfony"), self.root)
+        # Order: per-theme chain (core → stack), themes preserve their order.
+        # auth: core/auth, stacks/symfony/auth.
+        # disclosure: core/disclosure (no stacks/symfony/disclosure → skip).
+        self.assertEqual(len(out), 3)
         self.assertTrue(out[0].endswith("/core/auth.md"))
-        self.assertTrue(out[1].endswith("/core/disclosure.md"))
-        self.assertTrue(out[2].endswith("/frameworks/symfony/auth.md"))
+        self.assertTrue(out[1].endswith("/stacks/symfony/auth.md"))
+        self.assertTrue(out[2].endswith("/core/disclosure.md"))
 
     def test_graceful_skip_missing_files(self):
-        out = pw.resolve_checklists(("nonexistent",), "symfony", self.root)
+        out = pw.resolve_checklists(("nonexistent",), _ctx("symfony"), self.root)
         self.assertEqual(out, [])
 
     def test_plugin_root_none_returns_empty(self):
-        self.assertEqual(pw.resolve_checklists(("auth",), "symfony", None), [])
+        self.assertEqual(pw.resolve_checklists(("auth",), _ctx("symfony"), None), [])
 
     def test_returns_absolute_paths(self):
-        out = pw.resolve_checklists(("auth",), "symfony", self.root)
+        out = pw.resolve_checklists(("auth",), _ctx("symfony"), self.root)
         for p in out:
             self.assertTrue(Path(p).is_absolute())
+
+    # --- 5-layer chain coverage (languages / addons / integrations) ---
+
+    def test_languages_layer_resolves(self):
+        # Add languages/php/auth.md to the mock layout.
+        lang_dir = self.root / "checklists" / "languages" / "php"
+        lang_dir.mkdir(parents=True)
+        (lang_dir / "auth.md").write_text("auth php")
+        out = pw.resolve_checklists(("auth",), _ctx("symfony", language="php"), self.root)
+        # Expected order: core → languages → stacks.
+        self.assertEqual(len(out), 3)
+        self.assertTrue(out[0].endswith("/core/auth.md"))
+        self.assertTrue(out[1].endswith("/languages/php/auth.md"))
+        self.assertTrue(out[2].endswith("/stacks/symfony/auth.md"))
+
+    def test_languages_layer_skipped_when_language_none(self):
+        # File exists but language=None should suppress the entire languages layer.
+        lang_dir = self.root / "checklists" / "languages" / "php"
+        lang_dir.mkdir(parents=True)
+        (lang_dir / "auth.md").write_text("auth php")
+        out = pw.resolve_checklists(("auth",), _ctx("symfony", language=None), self.root)
+        for s in out:
+            self.assertNotIn("/languages/php/auth.md", s)
+
+    def test_addons_in_caller_order_per_theme(self):
+        # Two addon checklists for `auth`. Pass them deliberately unsorted to
+        # prove ResolutionContext.__post_init__ normalization (alphabetical).
+        ad_root = self.root / "checklists" / "stacks" / "symfony" / "addons"
+        (ad_root / "api-platform").mkdir(parents=True)
+        (ad_root / "easyadmin").mkdir(parents=True)
+        (ad_root / "api-platform" / "auth.md").write_text("auth api-platform")
+        (ad_root / "easyadmin" / "auth.md").write_text("auth easyadmin")
+        # Pass in reverse order; resolver should still emit alphabetical.
+        out = pw.resolve_checklists(
+            ("auth",),
+            _ctx("symfony", addons=("easyadmin", "api-platform")),
+            self.root,
+        )
+        # Expected: core, stack, addons/api-platform, addons/easyadmin (alpha).
+        self.assertEqual(len(out), 4)
+        self.assertTrue(out[0].endswith("/core/auth.md"))
+        self.assertTrue(out[1].endswith("/stacks/symfony/auth.md"))
+        self.assertTrue(out[2].endswith("/stacks/symfony/addons/api-platform/auth.md"))
+        self.assertTrue(out[3].endswith("/stacks/symfony/addons/easyadmin/auth.md"))
+
+    def test_integrations_apply_when_stack_none(self):
+        # Integrations are independent of the stack layer.
+        ig_dir = self.root / "checklists" / "integrations" / "stripe"
+        ig_dir.mkdir(parents=True)
+        (ig_dir / "auth.md").write_text("auth stripe")
+        out = pw.resolve_checklists(
+            ("auth",),
+            _ctx("none", integrations=("stripe",)),
+            self.root,
+        )
+        # No stack layer (none/unknown disables it), but integrations apply.
+        self.assertEqual(len(out), 2)
+        self.assertTrue(out[0].endswith("/core/auth.md"))
+        self.assertTrue(out[1].endswith("/integrations/stripe/auth.md"))
+
+    def test_addons_skipped_when_stack_unknown(self):
+        # Addons live under stacks/{stack}/addons — without an active stack they
+        # cannot resolve.
+        ad_dir = self.root / "checklists" / "stacks" / "symfony" / "addons" / "easyadmin"
+        ad_dir.mkdir(parents=True)
+        (ad_dir / "auth.md").write_text("auth easyadmin")
+        out = pw.resolve_checklists(
+            ("auth",),
+            _ctx("unknown", addons=("easyadmin",)),
+            self.root,
+        )
+        for s in out:
+            self.assertNotIn("/addons/easyadmin/", s)
+
+    def test_per_theme_interleaving(self):
+        # Add a stack-level disclosure file so we have core + stack at two themes.
+        (self.root / "checklists" / "stacks" / "symfony" / "disclosure.md").write_text(
+            "disclosure symfony"
+        )
+        out = pw.resolve_checklists(
+            ("auth", "disclosure"),
+            _ctx("symfony"),
+            self.root,
+        )
+        # Expected interleave: core/auth, stacks/symfony/auth,
+        # core/disclosure, stacks/symfony/disclosure.
+        self.assertEqual(len(out), 4)
+        self.assertTrue(out[0].endswith("/core/auth.md"))
+        self.assertTrue(out[1].endswith("/stacks/symfony/auth.md"))
+        self.assertTrue(out[2].endswith("/core/disclosure.md"))
+        self.assertTrue(out[3].endswith("/stacks/symfony/disclosure.md"))
+
+    def test_full_5_layer_chain_for_single_theme(self):
+        # Populate all 5 layers for theme "auth".
+        cl = self.root / "checklists"
+        lang_dir = cl / "languages" / "php"
+        lang_dir.mkdir(parents=True)
+        (lang_dir / "auth.md").write_text("auth php")
+        addon_dir = cl / "stacks" / "symfony" / "addons" / "easyadmin"
+        addon_dir.mkdir(parents=True)
+        (addon_dir / "auth.md").write_text("auth easyadmin")
+        ig_dir = cl / "integrations" / "auth0"
+        ig_dir.mkdir(parents=True)
+        (ig_dir / "auth.md").write_text("auth auth0")
+        # core/auth.md and stacks/symfony/auth.md already created in setUp.
+        out = pw.resolve_checklists(
+            ("auth",),
+            _ctx(
+                "symfony",
+                language="php",
+                addons=("easyadmin",),
+                integrations=("auth0",),
+            ),
+            self.root,
+        )
+        # Expected order: core → languages → stacks → addons → integrations.
+        self.assertEqual(len(out), 5)
+        self.assertTrue(out[0].endswith("/core/auth.md"))
+        self.assertTrue(out[1].endswith("/languages/php/auth.md"))
+        self.assertTrue(out[2].endswith("/stacks/symfony/auth.md"))
+        self.assertTrue(out[3].endswith("/stacks/symfony/addons/easyadmin/auth.md"))
+        self.assertTrue(out[4].endswith("/integrations/auth0/auth.md"))
 
 
 class ResolveChecklistsRealLayoutTests(unittest.TestCase):
     """Sanity check against the real plugin layout shipped with this code."""
 
     def test_w1_checklists_resolve_for_symfony(self):
-        out = pw.resolve_checklists(("auth", "disclosure"), "symfony", PLUGIN_ROOT)
-        # We expect at least core/auth, core/disclosure, frameworks/symfony/auth, frameworks/symfony/disclosure.
+        out = pw.resolve_checklists(("auth", "disclosure"), _ctx("symfony"), PLUGIN_ROOT)
+        # We expect at least core/auth, core/disclosure, stacks/symfony/auth, stacks/symfony/disclosure.
         suffixes = sorted(p.split("checklists/", 1)[-1] for p in out)
         self.assertIn("core/auth.md", suffixes)
         self.assertIn("core/disclosure.md", suffixes)
-        self.assertIn("frameworks/symfony/auth.md", suffixes)
-        self.assertIn("frameworks/symfony/disclosure.md", suffixes)
+        self.assertIn("stacks/symfony/auth.md", suffixes)
+        self.assertIn("stacks/symfony/disclosure.md", suffixes)
 
     def test_generic_php_loads_only_core(self):
-        out = pw.resolve_checklists(("auth", "disclosure"), "none", PLUGIN_ROOT)
+        out = pw.resolve_checklists(("auth", "disclosure"), _ctx("none"), PLUGIN_ROOT)
         suffixes = [p.split("checklists/", 1)[-1] for p in out]
-        # Should be only core/* — no frameworks/none/ subtree exists.
+        # Should be only core/* — no stacks/none/ subtree exists.
         for s in suffixes:
             self.assertTrue(s.startswith("core/"), f"unexpected non-core path: {s}")
 
     def test_w1_checklists_resolve_for_laravel(self):
-        out = pw.resolve_checklists(("auth", "disclosure"), "laravel", PLUGIN_ROOT)
+        out = pw.resolve_checklists(("auth", "disclosure"), _ctx("laravel"), PLUGIN_ROOT)
         suffixes = sorted(p.split("checklists/", 1)[-1] for p in out)
         self.assertIn("core/auth.md", suffixes)
         self.assertIn("core/disclosure.md", suffixes)
-        self.assertIn("frameworks/laravel/auth.md", suffixes)
-        self.assertIn("frameworks/laravel/disclosure.md", suffixes)
+        self.assertIn("stacks/laravel/auth.md", suffixes)
+        self.assertIn("stacks/laravel/disclosure.md", suffixes)
 
     def test_laravel_full_theme_set_resolves(self):
         """All themes used by WAVES should have laravel-specific checklists where Symfony does."""
         themes = ("auth", "disclosure", "injection", "data-access",
                   "output-render", "serialization", "crypto")
-        out = pw.resolve_checklists(themes, "laravel", PLUGIN_ROOT)
+        out = pw.resolve_checklists(themes, _ctx("laravel"), PLUGIN_ROOT)
         suffixes = {p.split("checklists/", 1)[-1] for p in out}
         for t in themes:
-            self.assertIn(f"frameworks/laravel/{t}.md", suffixes, f"missing {t} laravel checklist")
+            self.assertIn(f"stacks/laravel/{t}.md", suffixes, f"missing {t} laravel checklist")
 
 
 # ---------------------------------------------------------------------------
@@ -967,7 +1279,7 @@ class BuildPlanChecklistsTests(unittest.TestCase):
                 self.assertTrue(Path(c).is_absolute())
             suffixes = [c.split("checklists/", 1)[-1] for c in cls]
             self.assertIn("core/auth.md", suffixes)
-            self.assertIn("frameworks/symfony/auth.md", suffixes)
+            self.assertIn("stacks/symfony/auth.md", suffixes)
         finally:
             p.unlink()
 
