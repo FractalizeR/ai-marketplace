@@ -74,7 +74,7 @@ Each **core** checklist lists the values from the closed `sink_kind` enum that i
 **Non-core files (languages, stacks, addons, integrations) DO NOT declare their own `## Recommended sink_kinds` section** — they refine the applicability of `sink_kind` values declared in the corresponding `core/{theme}.md`. This rule is fixed: a non-core checklist **does not introduce new `sink_kind` values**, but narrows/refines applicability of the core sink_kind. All worker findings are always classified by `sink_kind` from the core enum.
 
 `sink_kind` enum values:
-`dql_concat`, `native_sql_concat`, `unsafe_html_render`, `template_raw`, `ssti`, `unserialize_untrusted`, `command_exec`, `file_include_dynamic`, `path_traversal`, `redirect_open`, `weak_hash`, `hardcoded_secret`, `cors_misconfig`, `missing_authz`, `idor_lookup`, `xxe`, `ssrf`, `mass_assignment`, `csrf_missing`, `decimal_arith`, `race_condition`, `webhook_unverified`, `pii_in_logs`, `stacktrace_exposed`, `type_juggling`, `oauth_state_missing`, `webhook_replay`, `weak_random`, `secret_in_response`, `sensitive_field_unmasked`, `csp_missing`, `csp_unsafe_inline`, `clickjacking_unprotected`, `hsts_missing`, `mime_sniff_unprotected`, `jwks_spoof`, `oidc_misconfig`, `tls_validation_bypass`.
+`dql_concat`, `native_sql_concat`, `unsafe_html_render`, `template_raw`, `ssti`, `unserialize_untrusted`, `command_exec`, `file_include_dynamic`, `path_traversal`, `ldap_injection`, `xpath_injection`, `nosql_injection`, `redirect_open`, `weak_hash`, `hardcoded_secret`, `cors_misconfig`, `missing_authz`, `idor_lookup`, `xxe`, `ssrf`, `mass_assignment`, `csrf_missing`, `decimal_arith`, `race_condition`, `webhook_unverified`, `pii_in_logs`, `stacktrace_exposed`, `type_juggling`, `oauth_state_missing`, `webhook_replay`, `weak_random`, `secret_in_response`, `sensitive_field_unmasked`, `csp_missing`, `csp_unsafe_inline`, `clickjacking_unprotected`, `hsts_missing`, `mime_sniff_unprotected`, `jwks_spoof`, `oidc_misconfig`, `tls_validation_bypass`.
 
 ### Note on `dql_concat` (overloaded name)
 
@@ -94,6 +94,7 @@ For native SQL concatenations (without an ORM wrapper, via PDO/mysqli/pg_*/curso
 | `unsafe_html_render`, `template_raw`, `ssti` | `xss` |
 | `unserialize_untrusted` | `deserialization` |
 | `command_exec`, `file_include_dynamic`, `path_traversal` | `injection` |
+| `ldap_injection`, `xpath_injection`, `nosql_injection` | `injection` |
 | `redirect_open` | `business_logic` |
 | `weak_hash`, `hardcoded_secret` | `crypto` |
 | `cors_misconfig` | `authz` |
@@ -136,6 +137,24 @@ Floor rules **do not replace** the quality gate (confidence ≥ 8, severity ≥ 
 
 Floor rules may live in any layer — wherever they are most specific. If a pattern is mentioned in multiple layers, the more specific layer (per resolution chain) takes precedence.
 
+## Optional `## Trusted patterns (do NOT flag)` section
+
+If for a category there are common idioms that **look** risky but are safe by construction (auto-escape, CSPRNG wrappers, ORM parameter binding for scalar args), enumerate them under a dedicated `## Trusted patterns (do NOT flag)` section. The worker uses this section as a negative filter — patterns listed here are NOT vulnerabilities and should be skipped during search.
+
+Use **sparingly** — only for patterns that workers consistently mis-classify as bugs. Each entry must be a concrete code pattern, not an abstract guideline.
+
+Format: bullet list. Each item names the API/idiom, explains *why* it is safe by construction, and (when needed) calls out the narrower pattern that **does** still constitute a finding.
+
+Example:
+```markdown
+## Trusted patterns (do NOT flag)
+
+- `random_bytes()`, `random_int()` — CSPRNG, secure by construction. Not `weak_random`.
+- Twig default auto-escape — `{{ var }}` in `.html.twig` is HTML-safe; flag only `|raw` or explicit `{% autoescape false %}` blocks.
+```
+
+Precedent: this convention is adapted from Anthropic's `claude-code-security-review` "PRECEDENTS" block, mapped onto our enum-driven model. Layer precedence follows the same chain as `## Confidence floor rules` — more specific layers can extend or override the trusted list.
+
 ## Confidence floor — where it lives
 
 | Pattern type | Where |
@@ -173,8 +192,11 @@ The new `sink_kind` values in 3.4.0 are close in meaning to existing ones — fo
 | Admin UI displays a raw token field without masking | `sensitive_field_unmasked` | `secret_in_response` (response body), `pii_in_logs` (logs) |
 | `X-Content-Type-Options: nosniff` missing on file-download / user-upload endpoint | `mime_sniff_unprotected` | `secret_in_response` (response leaks a secret) / `stacktrace_exposed` (response leaks debug info). Canonical exploit: stored XSS via SVG/HTML masquerade — hence family `xss`. JSON-as-HTML sniffing for XS-Search is a secondary path. |
 | OAuth/OIDC `redirect_uri` matched by prefix/regex; missing `aud`/`iss` validation; attacker-controlled issuer URL | `oidc_misconfig` | `missing_authz` (no authz check in application code), `oauth_state_missing` (callback CSRF — distinct row) |
+| N1QL / Couchbase string-concatenation in queries | `nosql_injection` | `native_sql_concat` (reserved for actual SQL drivers / PDO / mysqli / pg_* / cursor.execute) |
+| LDAP filter built inside a Doctrine/ORM repository helper | `ldap_injection` | `dql_concat` (concatenation in DQL/ORM-query string proper) |
+| XPath expression evaluated inside a Twig/template rendering helper | `xpath_injection` | `template_raw` (sink is the template renderer, not the XPath evaluator) |
 
-`Str::random()`, `random_bytes()`, `random_int()`, `Symfony\Component\String\ByteString::fromRandom()` are **NOT** `weak_random`: internally they rely on a CSPRNG.
+See `core/auth.md` → Trusted patterns for the canonical CSPRNG list.
 
 ## Core file structure
 
@@ -190,6 +212,11 @@ The new `sink_kind` values in 3.4.0 are close in meaning to existing ones — fo
 
 ## Confidence floor rules
 (optional)
+
+- ...
+
+## Trusted patterns (do NOT flag)
+(optional, layer-specific)
 
 - ...
 
@@ -209,6 +236,11 @@ The new `sink_kind` values in 3.4.0 are close in meaning to existing ones — fo
 <mandatory methodology header — copy verbatim>
 
 ## Confidence floor rules
+(optional, layer-specific)
+
+- ...
+
+## Trusted patterns (do NOT flag)
 (optional, layer-specific)
 
 - ...

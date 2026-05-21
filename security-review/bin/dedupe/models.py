@@ -85,6 +85,9 @@ SINK_KIND_TO_FAMILY: dict[str, str] = {
     "command_exec": "injection",
     "file_include_dynamic": "injection",
     "path_traversal": "injection",
+    "ldap_injection": "injection",
+    "xpath_injection": "injection",
+    "nosql_injection": "injection",
     # XSS family.
     "unsafe_html_render": "xss",
     "template_raw": "xss",

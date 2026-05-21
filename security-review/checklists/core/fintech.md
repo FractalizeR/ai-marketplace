@@ -9,6 +9,11 @@
 - `idor_lookup` — IDOR on financial operations (cross-ref `auth.md`)
 - `webhook_unverified` — webhook without signature (cross-ref `auth.md`)
 
+## Confidence floor rules
+
+- **`race_condition` qualified floor — concrete state mutation**: **confidence ≥ 8** only when the race window allows mutating shared state with security impact: TOCTOU on file ops (`is_writable` → `file_put_contents`), account state (balance debit, promo redeem, invite consume), inventory (last seat reservation), uniqueness (signup with duplicate-key check then insert). The mutation must be the exploit primitive, not a side effect.
+- **`race_condition` confidence cap — read-side stale-cache races**: pure read-side races where one observer briefly sees stale cached state without any persisted mutation → **max confidence 4**. Not every "concurrent access without lock" is a security bug; cache freshness gaps without state mutation are reliability concerns, not vulnerabilities.
+
 ## Concurrency / race conditions
 
 - Double debit / double card charge: processing without a transactional lock
