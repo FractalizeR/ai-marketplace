@@ -20,6 +20,8 @@ from recon.types import (
     SanityProbe,
     StackMatch,
 )
+from recon.recipes.jwt_generic_detect import detect_jwt_generic
+from recon.recipes.oauth_oidc_detect import detect_oauth_oidc
 
 RECIPE_NAME = "generic_php"
 LANGUAGE = "php"
@@ -128,10 +130,21 @@ def build_inventory(
             data=None,
             source_files=[] if is_scalar else None,
         )
+    # Integration detection (Stage 4): vendor-neutral cross-stack capabilities.
+    # composer.json alone is enough signal for plain-PHP projects — they may
+    # use firebase/php-jwt or league/oauth2-client without any framework.
+    detected_integrations: list[str] = []
+    if detect_jwt_generic(project_root):
+        detected_integrations.append("jwt-generic")
+    if detect_oauth_oidc(project_root):
+        detected_integrations.append("oauth-oidc")
+    detected_integrations = sorted(set(detected_integrations))
+
     return InventoryResult(
         status="partial",
         core=core,
         recon_bags={},
         sources_used=["recipe_stub:generic_php"],
         warnings=["s1_stub_recipe: generic_php build_inventory returns skeleton only"],
+        detected_integrations=detected_integrations,
     )

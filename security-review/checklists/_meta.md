@@ -39,6 +39,10 @@ Missing files at any layer are silently skipped — every non-core layer is opt-
 
 > This checklist extends `core/{theme}.md` and follows the resolution chain (core → languages → stacks → addons → integrations). On instruction conflict, the more specific layer takes precedence. The worker loads the whole chain at once.
 
+**Exception — integrations are stack-agnostic.** Files under `integrations/{integration}/` use a simplified anchor referencing only `core/{theme}.md` (the integration may activate on any stack, including `none`/`unknown`):
+
+> This checklist extends `core/{theme}.md` for projects that use {integration purpose}. On instruction conflict, this file takes precedence as the more specific layer. The worker loads both files at once.
+
 ## Layer conventions
 
 - **core/** — language-agnostic, stack-agnostic patterns. Generic vulnerability categories (SQL injection, XSS, weak crypto, missing authz) described in terms that apply to any code base. The closed `sink_kind` enum lives here.
@@ -70,7 +74,7 @@ Each **core** checklist lists the values from the closed `sink_kind` enum that i
 **Non-core files (languages, stacks, addons, integrations) DO NOT declare their own `## Recommended sink_kinds` section** — they refine the applicability of `sink_kind` values declared in the corresponding `core/{theme}.md`. This rule is fixed: a non-core checklist **does not introduce new `sink_kind` values**, but narrows/refines applicability of the core sink_kind. All worker findings are always classified by `sink_kind` from the core enum.
 
 `sink_kind` enum values:
-`dql_concat`, `native_sql_concat`, `unsafe_html_render`, `template_raw`, `ssti`, `unserialize_untrusted`, `command_exec`, `file_include_dynamic`, `path_traversal`, `redirect_open`, `weak_hash`, `hardcoded_secret`, `cors_misconfig`, `missing_authz`, `idor_lookup`, `xxe`, `ssrf`, `mass_assignment`, `csrf_missing`, `decimal_arith`, `race_condition`, `webhook_unverified`, `pii_in_logs`, `stacktrace_exposed`, `type_juggling`, `oauth_state_missing`, `webhook_replay`, `weak_random`, `secret_in_response`, `sensitive_field_unmasked`, `csp_missing`, `csp_unsafe_inline`, `clickjacking_unprotected`, `hsts_missing`, `mime_sniff_unprotected`.
+`dql_concat`, `native_sql_concat`, `unsafe_html_render`, `template_raw`, `ssti`, `unserialize_untrusted`, `command_exec`, `file_include_dynamic`, `path_traversal`, `redirect_open`, `weak_hash`, `hardcoded_secret`, `cors_misconfig`, `missing_authz`, `idor_lookup`, `xxe`, `ssrf`, `mass_assignment`, `csrf_missing`, `decimal_arith`, `race_condition`, `webhook_unverified`, `pii_in_logs`, `stacktrace_exposed`, `type_juggling`, `oauth_state_missing`, `webhook_replay`, `weak_random`, `secret_in_response`, `sensitive_field_unmasked`, `csp_missing`, `csp_unsafe_inline`, `clickjacking_unprotected`, `hsts_missing`, `mime_sniff_unprotected`, `jwks_spoof`, `oidc_misconfig`, `tls_validation_bypass`.
 
 ### Note on `dql_concat` (overloaded name)
 
@@ -99,8 +103,8 @@ For native SQL concatenations (without an ORM wrapper, via PDO/mysqli/pg_*/curso
 | `decimal_arith`, `race_condition`, `type_juggling` | `business_logic` |
 | `webhook_unverified`, `webhook_replay` | `webhook` |
 | `pii_in_logs`, `stacktrace_exposed`, `secret_in_response`, `sensitive_field_unmasked` | `disclosure` |
-| `oauth_state_missing` | `authz` |
-| `weak_random` | `crypto` |
+| `oauth_state_missing`, `oidc_misconfig` | `authz` |
+| `weak_random`, `jwks_spoof`, `tls_validation_bypass` | `crypto` |
 | `csp_missing`, `csp_unsafe_inline`, `mime_sniff_unprotected` | `xss` |
 | `clickjacking_unprotected` | `clickjacking` |
 | `hsts_missing` | `crypto` |
@@ -139,6 +143,7 @@ Floor rules may live in any layer — wherever they are most specific. If a patt
 | Generic (no framework signatures): `==` for secrets, MD5 for password, `unserialize($_GET[...])` | `core/{theme}.md` |
 | Framework-specific (`#[IsGranted]`, `security.yaml`, `Voter`, `#[Route]`) | `stacks/{stack}/{theme}.md` |
 | Bundle/addon-specific (EasyAdmin/Sonata/API Platform) | `stacks/{stack}/addons/{addon}/{theme}.md` |
+| Capability-integration-specific (JWT, OAuth/OIDC — any vendor) | `integrations/{capability}/{theme}.md` |
 | Vendor-SDK-specific (Stripe/Auth0/Cognito) | `integrations/{integration}/{theme}.md` |
 
 ## Cross-theme duplication (admin-CRUD)
@@ -167,6 +172,7 @@ The new `sink_kind` values in 3.4.0 are close in meaning to existing ones — fo
 | Token/secret leak in HTTP response body (JSON / template render) | `secret_in_response` | `pii_in_logs` (leak to log/file/backup) |
 | Admin UI displays a raw token field without masking | `sensitive_field_unmasked` | `secret_in_response` (response body), `pii_in_logs` (logs) |
 | `X-Content-Type-Options: nosniff` missing on file-download / user-upload endpoint | `mime_sniff_unprotected` | `secret_in_response` (response leaks a secret) / `stacktrace_exposed` (response leaks debug info). Canonical exploit: stored XSS via SVG/HTML masquerade — hence family `xss`. JSON-as-HTML sniffing for XS-Search is a secondary path. |
+| OAuth/OIDC `redirect_uri` matched by prefix/regex; missing `aud`/`iss` validation; attacker-controlled issuer URL | `oidc_misconfig` | `missing_authz` (no authz check in application code), `oauth_state_missing` (callback CSRF — distinct row) |
 
 `Str::random()`, `random_bytes()`, `random_int()`, `Symfony\Component\String\ByteString::fromRandom()` are **NOT** `weak_random`: internally they rely on a CSPRNG.
 

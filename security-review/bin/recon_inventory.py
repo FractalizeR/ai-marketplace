@@ -228,6 +228,7 @@ def _stack_block(
     project_root: Path,
     *,
     detected_addons: Optional[list[str]] = None,
+    detected_integrations: Optional[list[str]] = None,
 ) -> dict:
     """Build the `stack:` frontmatter block.
 
@@ -235,10 +236,17 @@ def _stack_block(
     InventoryResult. Emitted as `stack.addons` so plan_waves' 5-layer
     resolver loads addon checklists. Omitted from the dict when the list is
     empty — keeps frontmatter clean for projects with no addons.
+
+    `detected_integrations` (Stage 4+): sorted, unique integration names from
+    the recipe's InventoryResult. Emitted as `stack.integrations` so the same
+    5-layer resolver loads integration checklists. Integrations are
+    independent of the stack — they apply even on a generic / unknown stack.
+    Omitted from the dict when the list is empty.
     """
     match: Optional[StackMatch] = recipe.detect(project_root)
     framework = "none" if recipe.RECIPE_NAME == "generic_php" else recipe.RECIPE_NAME
     addons = sorted(set(detected_addons or []))
+    integrations = sorted(set(detected_integrations or []))
     if match is None:
         block: dict = {
             "language": getattr(recipe, "LANGUAGE", "unknown"),
@@ -255,6 +263,8 @@ def _stack_block(
         }
     if addons:
         block["addons"] = addons
+    if integrations:
+        block["integrations"] = integrations
     return block
 
 
@@ -428,7 +438,9 @@ def cmd_inventory(
         "code_fingerprint": cf,
         "scope": "changes" if diff_files is not None else "project",
         "stack": _stack_block(
-            recipe, project_root, detected_addons=result.detected_addons,
+            recipe, project_root,
+            detected_addons=result.detected_addons,
+            detected_integrations=result.detected_integrations,
         ),
         "recipe_used": recipe.RECIPE_NAME,
         "tool_versions": _tool_versions(project_root),

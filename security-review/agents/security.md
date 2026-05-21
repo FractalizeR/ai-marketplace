@@ -128,7 +128,7 @@ Each finding must have:
 
 ### Closed enum `sink_kind`
 
-`dql_concat`, `native_sql_concat`, `unsafe_html_render`, `template_raw`, `ssti`, `unserialize_untrusted`, `command_exec`, `file_include_dynamic`, `path_traversal`, `redirect_open`, `weak_hash`, `hardcoded_secret`, `cors_misconfig`, `missing_authz`, `idor_lookup`, `xxe`, `ssrf`, `mass_assignment`, `csrf_missing`, `decimal_arith`, `race_condition`, `webhook_unverified`, `pii_in_logs`, `stacktrace_exposed`, `type_juggling`, `oauth_state_missing`, `webhook_replay`, `weak_random`, `secret_in_response`, `sensitive_field_unmasked`, `csp_missing`, `csp_unsafe_inline`, `clickjacking_unprotected`, `hsts_missing`, `mime_sniff_unprotected`.
+`dql_concat`, `native_sql_concat`, `unsafe_html_render`, `template_raw`, `ssti`, `unserialize_untrusted`, `command_exec`, `file_include_dynamic`, `path_traversal`, `redirect_open`, `weak_hash`, `hardcoded_secret`, `cors_misconfig`, `missing_authz`, `idor_lookup`, `xxe`, `ssrf`, `mass_assignment`, `csrf_missing`, `decimal_arith`, `race_condition`, `webhook_unverified`, `pii_in_logs`, `stacktrace_exposed`, `type_juggling`, `oauth_state_missing`, `webhook_replay`, `weak_random`, `secret_in_response`, `sensitive_field_unmasked`, `csp_missing`, `csp_unsafe_inline`, `clickjacking_unprotected`, `hsts_missing`, `mime_sniff_unprotected`, `jwks_spoof`, `oidc_misconfig`, `tls_validation_bypass`.
 
 Custom type via `other:<name>` (excluded from auto-dedup, goes to `## Manual review required`).
 
@@ -141,6 +141,9 @@ Custom type via `other:<name>` (excluded from auto-dedup, goes to `## Manual rev
 - `weak_random` — `mt_rand`/`rand`/`uniqid`/`microtime` for security-critical values (token, session id, password reset, OAuth state). **Do not apply** to wrappers that use `random_bytes` under the hood (Laravel `Str::random()` with PHP 7+).
 - `secret_in_response` — token/secret leak in HTTP response body (JSON / template render). Logs/backup/file dump → `pii_in_logs`.
 - `sensitive_field_unmasked` — admin UI exposes raw token/secret field (EasyAdmin/Sonata `TextField('accessToken')` without mask).
+- `jwks_spoof` — JWT verifier accepts a token whose signing material is attacker-controlled: `alg: none`, algorithm confusion RS256→HS256, `kid` / `jku` / `x5u` header injection, embedded `jwk` trusted without external pin. Family `crypto`. Detected in `integrations/jwt-generic/`.
+- `oidc_misconfig` — OAuth/OIDC server-side configuration flaw distinct from `oauth_state_missing`: `redirect_uri` validated by prefix/regex instead of exact match, missing `aud`/`iss` validation, attacker-controlled issuer URL. Family `authz`. Detected in `integrations/oauth-oidc/`.
+- `tls_validation_bypass` — TLS peer verification explicitly disabled when fetching a security-critical endpoint (JWKS / OIDC discovery / OAuth token endpoint). Family `crypto`. Detected in `integrations/{jwt-generic,oauth-oidc}/`.
 
 ### Closed enum `root_cause_family`
 

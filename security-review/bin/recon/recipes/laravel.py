@@ -44,6 +44,8 @@ from recon.types import (
     StackMatch,
 )
 from recon.graphql_detect import detect_graphql
+from recon.recipes.jwt_generic_detect import detect_jwt_generic
+from recon.recipes.oauth_oidc_detect import detect_oauth_oidc
 
 
 RECIPE_NAME = "laravel"
@@ -2239,6 +2241,16 @@ def build_inventory(
         "frontend_assets": frontend_assets,
     }
 
+    # Integration detection (Stage 4): vendor-neutral cross-stack capabilities.
+    # Mirrors symfony recipe. Laravel projects use Socialite / Passport / tymon
+    # heavily, so detection is essential here.
+    detected_integrations: list[str] = []
+    if detect_jwt_generic(project_root):
+        detected_integrations.append("jwt-generic")
+    if detect_oauth_oidc(project_root):
+        detected_integrations.append("oauth-oidc")
+    detected_integrations = sorted(set(detected_integrations))
+
     # Ceiling logic: pure-static recipe with no console enrichment available
     # for queue/event metadata → caller should clamp ceiling=medium.
     return InventoryResult(
@@ -2248,4 +2260,5 @@ def build_inventory(
         sources_used=sources_used,
         warnings=warnings,
         errors=errors,
+        detected_integrations=detected_integrations,
     )

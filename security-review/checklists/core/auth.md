@@ -11,12 +11,13 @@
 - `webhook_unverified` — webhook without signature / replay protection
 - `hardcoded_secret` — keys/tokens in the repository
 - `oauth_state_missing` — OAuth/OIDC callback without state parameter / PKCE
+- `oidc_misconfig` — OAuth/OIDC configuration flaw: loose `redirect_uri` matching, missing `aud`/`iss` validation, attacker-controlled issuer URL
 
 ## Confidence floor rules
 
 - **Webhook endpoint without signature verification** (no `hash_equals`, no HMAC validation) → **confidence ≥ 9** for webhook_unverified.
 - **`Access-Control-Allow-Origin: *`** together with `Access-Control-Allow-Credentials: true` → **confidence ≥ 9** for cors_misconfig.
-- **OAuth callback without `state`/PKCE on a public client** → confidence ≥ 9 (`oauth_state_missing`, well-known attack class — account linking / session hijack).
+- **OAuth callback without `state` check** (any flow, any vendor) → **confidence ≥ 9** for `oauth_state_missing`. Cross-ref `integrations/oauth-oidc/auth.md` for vendor-specific patterns. This is a defense-in-depth floor: when the integration is detected, the integration file gives a sharper signal; when it isn't (custom OAuth without a detected package), this core floor still catches it.
 
 ## IDOR
 
@@ -27,20 +28,11 @@
 
 ## JWT and tokens
 
-- JWT with `alg: none` or missing algorithm validation
-- Weak `secret` (short, in the repository)
-- Missing `exp` (expiration) check
-- JWT in localStorage instead of httpOnly cookie (frontend risk, see also frontend-js.md)
-- `sub` claim accepted without verifying user existence
+JWT-specific patterns: see `integrations/jwt-generic/auth.md` (auto-loaded when JWT use is detected). Includes `alg: none`, algorithm confusion, `kid`/`jku`/`jwk` header injection, claim validation, token storage and rotation.
 
 ## OAuth/OIDC
 
-- PKCE for public clients (mobile/SPA): missing `code_challenge` / `code_verifier` pair (`oauth_state_missing` if callback lacks state, otherwise a standard missing-defense).
-- `redirect_uri` whitelist by `startsWith` or `substring` instead of strict `exactMatch` / prefix-with-trailing-slash — attacker registers `evil.com.legit.app` or `app/path?redirect=evil.com`.
-- Account linking without verification of ownership of the new email (link request sends a code to the email but does not validate that the owner actually clicked).
-- Token swap via login CSRF: attacker forces the victim to authenticate using the attacker's OAuth account → attacker gains access to the victim's data.
-- `prompt=none` silent re-auth abuse: attacker uses silent re-auth without user interaction to refresh the victim's tokens.
-- OAuth state parameter missing (`oauth_state_missing`, **confidence floor ≥ 9** for public clients).
+OAuth 2.0 / OpenID Connect patterns: see `integrations/oauth-oidc/auth.md` (auto-loaded when OAuth client/server use is detected). Includes `state`/PKCE, `redirect_uri` exact-match, token swap via login CSRF, OIDC `id_token` validation, server-side authorization endpoint hygiene.
 
 ## MFA / lifecycle
 
