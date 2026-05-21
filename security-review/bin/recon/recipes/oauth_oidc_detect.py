@@ -53,6 +53,9 @@ OAUTH_OIDC_PACKAGES: tuple[str, ...] = (
     # Symfony OAuth2 client bundles.
     "knpuniversity/oauth2-client-bundle",
     "omines/oauth2-client-bundle",
+    # Generic Symfony OIDC bundle (supports any provider — Auth0, Okta,
+    # Google, Keycloak, …). Belongs here, NOT in `keycloak_detect.py`.
+    "nbgrp/oidc-bundle",
     # Laravel.
     "laravel/socialite",
     "laravel/passport",

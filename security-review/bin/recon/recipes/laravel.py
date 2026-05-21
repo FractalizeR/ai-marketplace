@@ -44,8 +44,14 @@ from recon.types import (
     StackMatch,
 )
 from recon.graphql_detect import detect_graphql
+from recon.recipes._shared import expand_provider_implications
 from recon.recipes.jwt_generic_detect import detect_jwt_generic
 from recon.recipes.oauth_oidc_detect import detect_oauth_oidc
+from recon.recipes.auth0_detect import detect_auth0
+from recon.recipes.aws_cognito_detect import detect_aws_cognito
+from recon.recipes.okta_detect import detect_okta
+from recon.recipes.keycloak_detect import detect_keycloak
+from recon.recipes.firebase_auth_detect import detect_firebase_auth
 
 
 RECIPE_NAME = "laravel"
@@ -2249,6 +2255,21 @@ def build_inventory(
         detected_integrations.append("jwt-generic")
     if detect_oauth_oidc(project_root):
         detected_integrations.append("oauth-oidc")
+    # Provider integrations (Stage 5) refine the generic jwt-generic /
+    # oauth-oidc layers; multiple providers can co-exist (rare but legal).
+    if detect_auth0(project_root):
+        detected_integrations.append("auth0")
+    if detect_aws_cognito(project_root):
+        detected_integrations.append("aws-cognito")
+    if detect_okta(project_root):
+        detected_integrations.append("okta")
+    if detect_keycloak(project_root):
+        detected_integrations.append("keycloak")
+    if detect_firebase_auth(project_root):
+        detected_integrations.append("firebase-auth")
+    # A provider integration always IMPLIES the generic layers it refines.
+    # See `_shared.PROVIDER_IMPLIES_INTEGRATIONS`.
+    detected_integrations = expand_provider_implications(detected_integrations)
     detected_integrations = sorted(set(detected_integrations))
 
     # Ceiling logic: pure-static recipe with no console enrichment available
