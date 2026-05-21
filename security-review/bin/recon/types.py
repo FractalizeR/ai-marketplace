@@ -55,6 +55,15 @@ class InventoryResult:
     `frontmatter.stack.addons`, which drives addon-layer checklist
     resolution in plan_waves. Recipes that have no addon concept return
     an empty list.
+
+    `detected_integrations` (Stage 4+): sorted list of integration names that
+    the recipe confirmed are present (e.g. ["jwt-generic", "oauth-oidc"]).
+    Mirrors `detected_addons` but for vendor-neutral cross-stack integrations.
+    Propagated by `recon_inventory` into `frontmatter.stack.integrations`,
+    which drives integration-layer checklist resolution in plan_waves.
+    Integrations are independent of the stack — they activate even on a
+    generic / unknown stack. Recipes that detect no integrations return an
+    empty list.
     """
 
     status: InventoryStatus
@@ -65,6 +74,7 @@ class InventoryResult:
     errors: list[str] = field(default_factory=list)
     missing_sections: list[str] = field(default_factory=list)
     detected_addons: list[str] = field(default_factory=list)
+    detected_integrations: list[str] = field(default_factory=list)
 
 
 @dataclass

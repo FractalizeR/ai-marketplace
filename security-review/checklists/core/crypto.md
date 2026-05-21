@@ -9,6 +9,8 @@
 - `type_juggling` — loose comparison `==` for security-sensitive values
 - `weak_random` — insecure source of randomness for security-critical values
 - `secret_in_response` — token/secret leak in HTTP response body
+- `jwks_spoof` — JWT verification accepts attacker-influenced key material (kid/jku/jwk/alg-confusion)
+- `tls_validation_bypass` — TLS peer verification explicitly disabled when fetching security-critical endpoints (JWKS, OIDC discovery URLs, etc.)
 
 ## Confidence floor rules
 
@@ -19,7 +21,6 @@ For the following patterns, confidence **does not vary** between workers — the
 - **MD5/SHA1 for password hash** (any password hasher using `md5`/`sha1`) → **confidence ≥ 9**.
 - **`verify_peer: false`** / `CURLOPT_SSL_VERIFYPEER = false` in production services → **confidence ≥ 8**.
 - **`==` instead of `hash_equals()`** when comparing tokens/hashes → **confidence ≥ 9**.
-- **JWT with `alg: none`** or missing algorithm validation → **confidence ≥ 10**.
 
 ## Hardcoded secrets
 
@@ -33,17 +34,12 @@ For the following patterns, confidence **does not vary** between workers — the
 
 - `md5($password)`, `sha1($password)` for password storage (even with salt — weak)
 - `md5($apiKey)` for HMAC — use `hash_hmac('sha256', ...)` with `hash_equals`
-- JWT with `alg: none` or `HS256` without a strong secret
 - 3DES, RC4, ECB mode for symmetric encryption
 - SSL/TLS with deprecated protocols, SSLv3, TLS 1.0 (depends on configuration, not code)
 
 ## JWT advanced
 
-- `kid` header injection: attacker controls `kid` → forge HMAC via path traversal to a public file as the key.
-- `jwk` / `x5u` header injection: attacker embeds their public key in the header → signs their own JWT.
-- Algorithm confusion (RS256→HS256): server does not validate `alg` → attacker declares HS256 + uses RSA public key as HMAC secret.
-- `aud` / `iss` mismatch: no check → a token from another service is accepted.
-- `nbf` / `iat` skew without leeway → false-positive rejection; or missing check → past tokens accepted.
+JWT-specific cryptographic patterns: see `integrations/jwt-generic/crypto.md` (auto-loaded when JWT use is detected). Includes algorithm confusion, `kid`/`jwk`/`jku`/`x5u` header injection, `aud`/`iss`/`nbf`/`iat` claim validation, JWKS endpoint hygiene (TLS validation, cache TTL), HS256 key length, JWE.
 
 ## Weak random
 

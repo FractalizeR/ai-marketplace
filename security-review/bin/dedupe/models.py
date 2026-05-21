@@ -98,10 +98,13 @@ SINK_KIND_TO_FAMILY: dict[str, str] = {
     "csrf_missing": "authz",
     "cors_misconfig": "authz",
     "oauth_state_missing": "authz",
+    "oidc_misconfig": "authz",
     # Crypto.
     "weak_hash": "crypto",
     "hardcoded_secret": "crypto",
     "weak_random": "crypto",
+    "jwks_spoof": "crypto",
+    "tls_validation_bypass": "crypto",
     # Disclosure.
     "pii_in_logs": "disclosure",
     "stacktrace_exposed": "disclosure",

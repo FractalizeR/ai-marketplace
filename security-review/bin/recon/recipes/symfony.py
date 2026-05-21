@@ -187,6 +187,8 @@ from recon.recipes.api_platform_detect import (  # noqa: E402
     collect_api_platform_resources,
     detect_api_platform,
 )
+from recon.recipes.jwt_generic_detect import detect_jwt_generic  # noqa: E402
+from recon.recipes.oauth_oidc_detect import detect_oauth_oidc  # noqa: E402
 
 
 # Source-tree roots scanned for PHP. `templates/`, `config/`, `public/` are
@@ -2602,7 +2604,10 @@ def build_inventory(
     missing_sections: list[str] = []
 
     if plugin_root is None:
-        return _empty_skeleton("plugin_root not provided; recipe requires extractor")
+        return _empty_skeleton(
+            "plugin_root not provided; recipe requires extractor",
+            project_root=project_root,
+        )
 
     files = _list_php_files(project_root)
 
@@ -2743,6 +2748,16 @@ def build_inventory(
         detected_addons.append("api-platform")
     detected_addons.sort()
 
+    # Integration detection (Stage 4): vendor-neutral cross-stack capabilities.
+    # Orthogonal to addons — `jwt-generic` and `oauth-oidc` apply even on a
+    # generic-PHP stack. Cheap composer + env + config probes (no source walk).
+    detected_integrations: list[str] = []
+    if detect_jwt_generic(project_root):
+        detected_integrations.append("jwt-generic")
+    if detect_oauth_oidc(project_root):
+        detected_integrations.append("oauth-oidc")
+    detected_integrations = sorted(set(detected_integrations))
+
     # Compute overall status — flatten payloads across kinds.
     all_bag_payloads: list[SectionPayload] = []
     for names in recon_bags.values():
@@ -2769,12 +2784,21 @@ def build_inventory(
         errors=errors,
         missing_sections=missing_sections,
         detected_addons=detected_addons,
+        detected_integrations=detected_integrations,
     )
 
 
-def _empty_skeleton(reason: str) -> InventoryResult:
+def _empty_skeleton(
+    reason: str, project_root: Optional[Path] = None,
+) -> InventoryResult:
     """Fall-back: emit `unknown` for every section so validator produces a
     medium-confidence CONTEXT.md instead of failing the schema.
+
+    When `project_root` is provided we still run the cheap composer-based
+    addon/integration probes (they don't need the PHP extractor), so the
+    degraded path still produces accurate `detected_addons` /
+    `detected_integrations`. When `project_root` is None we leave both lists
+    empty (legacy behavior).
     """
     core: dict[str, SectionPayload] = {}
     scalar_core = {"auth_layer", "secrets"}
@@ -2799,6 +2823,24 @@ def _empty_skeleton(reason: str) -> InventoryResult:
                 )
             per_kind[name] = per_name
         fs[kind] = per_kind
+
+    detected_addons: list[str] = []
+    detected_integrations: list[str] = []
+    if project_root is not None:
+        # Composer-based probes work without the PHP extractor.
+        if detect_easyadmin(project_root):
+            detected_addons.append("easyadmin")
+        if detect_sonata(project_root):
+            detected_addons.append("sonata")
+        if detect_api_platform(project_root):
+            detected_addons.append("api-platform")
+        detected_addons.sort()
+        if detect_jwt_generic(project_root):
+            detected_integrations.append("jwt-generic")
+        if detect_oauth_oidc(project_root):
+            detected_integrations.append("oauth-oidc")
+        detected_integrations = sorted(set(detected_integrations))
+
     return InventoryResult(
         status="partial",
         core=core,
@@ -2807,4 +2849,6 @@ def _empty_skeleton(reason: str) -> InventoryResult:
         warnings=[reason],
         errors=[],
         missing_sections=list(CORE_SECTION_IDS),
+        detected_addons=detected_addons,
+        detected_integrations=detected_integrations,
     )
