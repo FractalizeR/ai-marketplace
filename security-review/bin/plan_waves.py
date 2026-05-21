@@ -250,7 +250,7 @@ WAVES: tuple[WaveSpec, ...] = (
     ),
     WaveSpec(
         wave_id="W3",
-        themes=("output-render", "frontend-js"),
+        themes=("output-render", "frontend-js", "security-headers"),
         relevant_section_paths=(
             "attack_surface",
             "output_renderers",

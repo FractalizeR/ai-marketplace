@@ -1304,6 +1304,64 @@ class BuildPlanChecklistsTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Security headers theme (3.5.0 — added to W3).
+# ---------------------------------------------------------------------------
+
+
+class SecurityHeadersThemeTests(unittest.TestCase):
+    """Stage 3: `security-headers` is a third theme of W3.
+
+    Verifies the wave declaration carries it, the real-layout resolver picks
+    up `core/security-headers.md`, and the built plan attaches the checklist
+    when W3 triggers (has_output_or_frontend).
+    """
+
+    def test_w3_themes_include_security_headers(self):
+        w3 = next(w for w in pw.WAVES if w.wave_id == "W3")
+        self.assertIn("security-headers", w3.themes)
+
+    def test_resolve_checklists_includes_core_security_headers(self):
+        out = pw.resolve_checklists(
+            ("security-headers",), _ctx("symfony"), PLUGIN_ROOT,
+        )
+        suffixes = [p.split("checklists/", 1)[-1] for p in out]
+        self.assertIn("core/security-headers.md", suffixes)
+
+    def test_w3_plan_includes_security_headers_checklist(self):
+        p = _build_context(
+            framework="symfony",
+            attack_surface=_attack_surface(("http_route", "src/Controller/Web.php")),
+            output_renderers=textwrap.dedent("""\
+                status: ok
+                items:
+                  - kind: template
+                    file: templates/home.html.twig
+            """).strip(),
+        )
+        try:
+            ctx = pw.parse_context(p)
+            plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT)
+            w3 = next(s for s in plan if s["wave_id"] == "W3")
+            suffixes = [c.split("checklists/", 1)[-1] for c in w3["checklists"]]
+            self.assertIn("core/security-headers.md", suffixes)
+            # Other W3 themes still resolve.
+            self.assertIn("core/output-render.md", suffixes)
+            self.assertIn("core/frontend-js.md", suffixes)
+        finally:
+            p.unlink()
+
+    def test_clickjacking_family_registered(self):
+        from dedupe.models import (
+            SINK_KIND_TO_FAMILY,
+            KNOWN_SINK_KINDS,
+            KNOWN_ROOT_CAUSE_FAMILIES,
+        )
+        self.assertIn("clickjacking_unprotected", KNOWN_SINK_KINDS)
+        self.assertIn("clickjacking", KNOWN_ROOT_CAUSE_FAMILIES)
+        self.assertEqual(SINK_KIND_TO_FAMILY["clickjacking_unprotected"], "clickjacking")
+
+
+# ---------------------------------------------------------------------------
 # WINF (exploratory).
 # ---------------------------------------------------------------------------
 
