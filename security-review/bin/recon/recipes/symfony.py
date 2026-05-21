@@ -172,6 +172,7 @@ RECON_BAGS_SCHEMA: dict[str, dict[str, dict[str, SectionSpec]]] = {
 # Note: `var/` is symfony-specific (cache+logs). Generic recipe drops it.
 from recon.recipes._shared import (  # noqa: E402  (re-export)
     EXCLUDE_PATHS,
+    expand_provider_implications,
     is_excluded as _shared_is_excluded,
     to_relative as _shared_to_relative,
 )
@@ -189,6 +190,11 @@ from recon.recipes.api_platform_detect import (  # noqa: E402
 )
 from recon.recipes.jwt_generic_detect import detect_jwt_generic  # noqa: E402
 from recon.recipes.oauth_oidc_detect import detect_oauth_oidc  # noqa: E402
+from recon.recipes.auth0_detect import detect_auth0  # noqa: E402
+from recon.recipes.aws_cognito_detect import detect_aws_cognito  # noqa: E402
+from recon.recipes.okta_detect import detect_okta  # noqa: E402
+from recon.recipes.keycloak_detect import detect_keycloak  # noqa: E402
+from recon.recipes.firebase_auth_detect import detect_firebase_auth  # noqa: E402
 
 
 # Source-tree roots scanned for PHP. `templates/`, `config/`, `public/` are
@@ -2756,6 +2762,26 @@ def build_inventory(
         detected_integrations.append("jwt-generic")
     if detect_oauth_oidc(project_root):
         detected_integrations.append("oauth-oidc")
+    # Provider integrations (Stage 5) refine the generic jwt-generic /
+    # oauth-oidc layers; multiple providers can co-exist (rare but legal).
+    if detect_auth0(project_root):
+        detected_integrations.append("auth0")
+    if detect_aws_cognito(project_root):
+        detected_integrations.append("aws-cognito")
+    if detect_okta(project_root):
+        detected_integrations.append("okta")
+    if detect_keycloak(project_root):
+        detected_integrations.append("keycloak")
+    if detect_firebase_auth(project_root):
+        detected_integrations.append("firebase-auth")
+    # A provider integration always IMPLIES the generic layers it refines
+    # (Auth0 IS JWT+OAuth, Cognito IS JWT+OAuth, …). Force-include so the
+    # worker resolver always loads `integrations/jwt-generic/` and
+    # `integrations/oauth-oidc/` alongside the provider-specific files even
+    # when only the provider-narrow signals fired (e.g. composer has
+    # `auth0/auth0-php` but no generic JWT library). See
+    # `_shared.PROVIDER_IMPLIES_INTEGRATIONS`.
+    detected_integrations = expand_provider_implications(detected_integrations)
     detected_integrations = sorted(set(detected_integrations))
 
     # Compute overall status — flatten payloads across kinds.
@@ -2839,6 +2865,19 @@ def _empty_skeleton(
             detected_integrations.append("jwt-generic")
         if detect_oauth_oidc(project_root):
             detected_integrations.append("oauth-oidc")
+        if detect_auth0(project_root):
+            detected_integrations.append("auth0")
+        if detect_aws_cognito(project_root):
+            detected_integrations.append("aws-cognito")
+        if detect_okta(project_root):
+            detected_integrations.append("okta")
+        if detect_keycloak(project_root):
+            detected_integrations.append("keycloak")
+        if detect_firebase_auth(project_root):
+            detected_integrations.append("firebase-auth")
+        # See note in `build_inventory`: provider integrations always imply
+        # their generic layers (jwt-generic, oauth-oidc).
+        detected_integrations = expand_provider_implications(detected_integrations)
         detected_integrations = sorted(set(detected_integrations))
 
     return InventoryResult(

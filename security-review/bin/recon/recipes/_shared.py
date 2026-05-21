@@ -45,6 +45,43 @@ def is_excluded(rel_path: str, exclude: tuple[str, ...]) -> bool:
     return False
 
 
+# Provider integrations imply generic layers (semantic invariant: Auth0 IS
+# JWT+OAuth, Cognito IS JWT+OAuth, etc.). Forced inclusion ensures workers
+# always get the generic checklists alongside provider-specific refinements,
+# even when only the provider-narrow signals fired (e.g. composer has
+# `auth0/auth0-php` but no other JWT library).
+#
+# Lives here (in `_shared.py`) because all three stack recipes (symfony.py,
+# laravel.py, generic_php.py) and `symfony._empty_skeleton` use it.
+PROVIDER_IMPLIES_INTEGRATIONS: dict[str, tuple[str, ...]] = {
+    "auth0": ("jwt-generic", "oauth-oidc"),
+    "aws-cognito": ("jwt-generic", "oauth-oidc"),
+    "okta": ("jwt-generic", "oauth-oidc"),
+    "keycloak": ("jwt-generic", "oauth-oidc"),
+    # Firebase uses JWT but is not a standard OAuth/OIDC provider — its tokens
+    # are Google-signed JWTs verified directly, no OAuth flow.
+    "firebase-auth": ("jwt-generic",),
+}
+
+
+def expand_provider_implications(detected: list[str]) -> list[str]:
+    """Add implied generic integrations for each detected provider.
+
+    Iterates `PROVIDER_IMPLIES_INTEGRATIONS`: for every provider present in
+    `detected`, ensures each implied integration is also present. Order is
+    preserved for already-present items, and implied integrations are
+    appended in declaration order. De-duplication is left to the caller
+    (typically `sorted(set(...))`).
+    """
+    result = list(detected)
+    for provider, implied in PROVIDER_IMPLIES_INTEGRATIONS.items():
+        if provider in result:
+            for imp in implied:
+                if imp not in result:
+                    result.append(imp)
+    return result
+
+
 def to_relative(abs_path: Any, project_root: Path) -> Optional[str]:
     """Convert absolute path → project-relative POSIX path.
 

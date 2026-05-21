@@ -11,6 +11,7 @@ This file describes how the recon agent detects OAuth 2.0 / OpenID Connect clien
    - `bshaffer/oauth2-server-php` — legacy but still common server library.
    - `hybridauth/hybridauth` — generic social-login client.
    - `knpuniversity/oauth2-client-bundle`, `omines/oauth2-client-bundle` — Symfony OAuth2 client bundles.
+   - `nbgrp/oidc-bundle` — generic Symfony OIDC bundle (supports Auth0, Okta, Google, Keycloak, …).
    - `laravel/socialite` — Laravel social-login client.
    - `laravel/passport` — Laravel OAuth2 server.
 2. `composer.json` has any package matching the broad wildcards `*/oauth2-*`, `oauth-*/*`, `*/openid-connect-*`, `*/oidc-*` (catches provider-specific clients of league: `league/oauth2-google`, `league/oauth2-github`, omines spreads, OIDC-specific libraries).
