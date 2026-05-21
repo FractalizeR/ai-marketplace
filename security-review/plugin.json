@@ -1,6 +1,6 @@
 {
   "name": "fr-security-review",
-  "version": "3.4.0",
+  "version": "4.0.0",
   "description": "Framework-aware static-first security audit for PHP/Symfony/Laravel: recipe-driven recon, focused worker waves, deterministic deduplication, GraphQL detection. Schema v2.",
   "author": {
     "name": "Vladislav Rastrusny",
