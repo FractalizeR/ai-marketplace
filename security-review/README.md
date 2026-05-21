@@ -137,7 +137,7 @@ Without `--label`, commands perform self-introspection and pick a label from the
 
 ## Version and compatibility
 
-Current major version is 3.x. Full changelog — in [CHANGELOG.md](CHANGELOG.md).
+Current major version is 4.x. Full changelog — in [CHANGELOG.md](CHANGELOG.md).
 
 - `schema_version: 2` for `<review_root>/CONTEXT.md`. Old v1 artifacts (`<project_root>/SECURITY_CONTEXT.md`) are not read — slash commands detect them and emit a warning.
 - Multi-stack monorepos — out of scope. One primary stack per project.
