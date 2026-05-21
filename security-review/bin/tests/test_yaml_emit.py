@@ -202,9 +202,23 @@ class Errors(unittest.TestCase):
             dump_yaml_subset({"k": {}})
 
     def test_invalid_key_raises(self):
-        for bad in ("with-dash", "with space", "1leading_digit", ""):
+        # Hyphen IS allowed after the first character (kebab-case identifiers
+        # like `api-platform`); leading hyphen is not.
+        for bad in ("-leading-dash", "with space", "1leading_digit", ""):
             with self.assertRaises(ValueError):
                 dump_yaml_subset({bad: 1})
+
+    def test_kebab_case_key_round_trips(self):
+        """Kebab-case keys (e.g. `api-platform`) are valid after the first char.
+
+        Required so `recon_bags.addon["api-platform"]["resources"]` can emit
+        without rewriting the addon name in snake_case (the addon directory
+        and frontmatter `stack.addons` list use kebab-case throughout).
+        """
+        for key in ("api-platform", "foo-bar-baz", "a-b"):
+            out, text = _round_trip({key: {"nested": "ok"}})
+            self.assertEqual(out, {key: {"nested": "ok"}})
+            self.assertIn(f"{key}:", text)
 
     def test_unsupported_type_raises(self):
         with self.assertRaises(ValueError):

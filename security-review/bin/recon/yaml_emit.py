@@ -123,7 +123,12 @@ def _emit_block_scalar(s: str, indent: int) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# Keys may contain ASCII alphanumerics, underscore, and `-` (after the first
+# char). Hyphen is required for kebab-case addon identifiers like
+# `api-platform` used in `recon_bags.addon.<name>`. The matching regex in
+# `validate_context.parse_yaml_subset._parse_dict` must accept the same shape;
+# round-trip is tested in `test_yaml_emit.py::KebabCaseKeys`.
+_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 
 _RESERVED = frozenset({"true", "false", "yes", "no", "on", "off", "null", "~"})
 
@@ -132,7 +137,7 @@ _SPECIAL_CHARS = frozenset(":#[]{},&*!|>%@`")
 
 def _validate_key(k: Any) -> None:
     if not isinstance(k, str) or not _KEY_RE.match(k):
-        raise ValueError(f"Invalid YAML subset key: {k!r} (must match /^[A-Za-z_][A-Za-z0-9_]*$/)")
+        raise ValueError(f"Invalid YAML subset key: {k!r} (must match /^[A-Za-z_][A-Za-z0-9_-]*$/)")
 
 
 def _scalar_repr(v: Any) -> str:

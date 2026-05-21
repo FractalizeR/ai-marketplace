@@ -148,6 +148,20 @@ RECON_BAGS_SCHEMA: dict[str, dict[str, dict[str, SectionSpec]]] = {
                 required=False,
             ),
         },
+        # Kebab-case `api-platform` matches the composer package name and the
+        # Stage 0 addon naming convention. Item shape mirrors the planned
+        # extractor output documented in `addons/api-platform/_detect.md`;
+        # until the extractor lands the bag is emitted as `status=unknown`.
+        "api-platform": {
+            "resources": SectionSpec(
+                shape="list",
+                item_keys=frozenset({
+                    "class", "file", "line",
+                    "operations", "graphql_enabled",
+                }),
+                required=False,
+            ),
+        },
     },
 }
 
@@ -168,6 +182,10 @@ from recon.recipes.easyadmin_detect import (  # noqa: E402
 from recon.recipes.sonata_detect import (  # noqa: E402
     collect_sonata_admin_classes,
     detect_sonata,
+)
+from recon.recipes.api_platform_detect import (  # noqa: E402
+    collect_api_platform_resources,
+    detect_api_platform,
 )
 
 
@@ -301,6 +319,12 @@ def sanity_probes() -> list[SanityProbe]:
             glob_patterns=["src/**/*Admin.php", "app/**/*Admin.php"],
             label="Sonata Admin classes",
             content_filter=r"extends\s+AbstractAdmin",
+        ),
+        SanityProbe(
+            section_path="recon_bags.addon.api-platform.resources",
+            glob_patterns=["src/**/*.php", "app/**/*.php"],
+            label="API Platform ApiResources",
+            content_filter=r"#\[ApiResource",
         ),
         # Wave 2-D (3.4.0): per-route authz fingerprint — same glob universe
         # as the existing http-controller probe (#[Route] attributes are only
@@ -2630,6 +2654,9 @@ def build_inventory(
     sonata_admin_payload = collect_sonata_admin_classes(
         project_root, plugin_root, warnings, exclude=exclude,
     )
+    api_platform_resources_payload = collect_api_platform_resources(
+        project_root, plugin_root, warnings, exclude=exclude,
+    )
 
     core: dict[str, SectionPayload] = {
         "attack_surface": SectionPayload(status="ok", items=attack_items),
@@ -2678,6 +2705,9 @@ def build_inventory(
     addon_sonata: dict[str, SectionPayload] = {
         "admin_classes": sonata_admin_payload,
     }
+    addon_api_platform: dict[str, SectionPayload] = {
+        "resources": api_platform_resources_payload,
+    }
 
     # Optional graphql_layer — present only when a known PHP GraphQL library
     # is in composer.json (api-platform/core, webonyx/graphql-php).
@@ -2694,6 +2724,7 @@ def build_inventory(
         "addon": {
             "easyadmin": addon_easyadmin,
             "sonata": addon_sonata,
+            "api-platform": addon_api_platform,
         },
     }
 
@@ -2708,6 +2739,8 @@ def build_inventory(
         detected_addons.append("easyadmin")
     if detect_sonata(project_root):
         detected_addons.append("sonata")
+    if detect_api_platform(project_root):
+        detected_addons.append("api-platform")
     detected_addons.sort()
 
     # Compute overall status — flatten payloads across kinds.

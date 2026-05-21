@@ -1,13 +1,16 @@
-"""Unit tests for addon detector modules (Stage 1).
+"""Unit tests for addon detector modules (Stage 1 + Stage 2).
 
 Covers the lightweight composer-based detectors:
 - recon.recipes.easyadmin_detect.detect_easyadmin
 - recon.recipes.sonata_detect.detect_sonata
+- recon.recipes.api_platform_detect.detect_api_platform
+  + collect_api_platform_resources (placeholder pending extractor)
 
-These probes are intentionally cheap — they only inspect `composer.json`,
-not the source tree — so the tests use ephemeral directories with hand-written
-composer.json files. The heavier `collect_*` enumerations have separate
-coverage in `test_recipe_symfony.py` (driven by full fixtures).
+These probes are intentionally cheap — they only inspect `composer.json`
+and `config/packages/api_platform.{yaml,php}`, not the source tree — so the
+tests use ephemeral directories with hand-written fixtures. The heavier
+`collect_*` enumerations have separate coverage in `test_recipe_symfony.py`
+(driven by full fixtures).
 """
 
 from __future__ import annotations
@@ -25,6 +28,10 @@ if str(_BIN) not in sys.path:
 
 from recon.recipes.easyadmin_detect import detect_easyadmin  # noqa: E402
 from recon.recipes.sonata_detect import detect_sonata  # noqa: E402
+from recon.recipes.api_platform_detect import (  # noqa: E402
+    collect_api_platform_resources,
+    detect_api_platform,
+)
 from validate_context import parse_yaml_subset, FRONTMATTER_RE  # noqa: E402
 
 
@@ -131,6 +138,107 @@ class DetectSonataTests(unittest.TestCase):
             _write_composer(root, require={"easycorp/easyadmin-bundle": "^4.10"})
             self.assertTrue(detect_easyadmin(root))
             self.assertFalse(detect_sonata(root))
+
+
+class DetectApiPlatformTests(unittest.TestCase):
+    def test_returns_true_when_core_in_require(self):
+        """v3.x composer package: `api-platform/core`."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_composer(root, require={"api-platform/core": "^3.2"})
+            self.assertTrue(detect_api_platform(root))
+
+    def test_returns_true_when_symfony_in_require(self):
+        """v4.x transition package: `api-platform/symfony` (bundle extracted from core)."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_composer(root, require={"api-platform/symfony": "^4.0"})
+            self.assertTrue(detect_api_platform(root))
+
+    def test_returns_true_when_core_in_require_dev(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_composer(root, require_dev={"api-platform/core": "^3.2"})
+            self.assertTrue(detect_api_platform(root))
+
+    def test_returns_true_via_yaml_config_only(self):
+        """`config/packages/api_platform.yaml` is a positive signal even without composer entry.
+
+        Symfony Flex sometimes pins meta-packages while still auto-wiring
+        config files. The yaml presence is documented as an OR signal.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_composer(root, require={"symfony/framework-bundle": "^7.0"})
+            (root / "config" / "packages").mkdir(parents=True)
+            (root / "config" / "packages" / "api_platform.yaml").write_text(
+                "api_platform:\n    title: 'My API'\n", encoding="utf-8",
+            )
+            self.assertTrue(detect_api_platform(root))
+
+    def test_returns_true_via_php_config_only(self):
+        """Same as yaml branch but the PHP config form (modern Flex)."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_composer(root, require={"symfony/framework-bundle": "^7.0"})
+            (root / "config" / "packages").mkdir(parents=True)
+            (root / "config" / "packages" / "api_platform.php").write_text(
+                "<?php return [];\n", encoding="utf-8",
+            )
+            self.assertTrue(detect_api_platform(root))
+
+    def test_returns_false_when_no_signal(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_composer(root, require={"symfony/framework-bundle": "^7.0"})
+            self.assertFalse(detect_api_platform(root))
+
+    def test_returns_false_when_no_composer_json(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertFalse(detect_api_platform(Path(td)))
+
+
+class CollectApiPlatformResourcesPlaceholderTests(unittest.TestCase):
+    """Stage 2 invariants for the collector before the PHP extractor lands.
+
+    The bag wiring (schema + symfony.build_inventory integration) is in place,
+    but the actual extractor `api-platform-resources` is deferred. Until then
+    the collector returns a placeholder payload with a known reason — workers
+    fall back to grep on `#[ApiResource]` (documented in addon checklists).
+    """
+
+    def test_status_none_when_api_platform_not_detected(self):
+        """No api-platform signal → no work to do; status=none."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_composer(root, require={"symfony/framework-bundle": "^7.0"})
+            warnings: list[str] = []
+            payload = collect_api_platform_resources(
+                root, root, warnings,
+            )
+            self.assertEqual(payload.status, "none")
+            self.assertIsNotNone(payload.reason)
+            self.assertIn("api-platform", payload.reason)
+            self.assertEqual(warnings, [])
+
+    def test_status_unknown_when_api_platform_detected(self):
+        """api-platform present but extractor missing → status=unknown placeholder.
+
+        Drives `inventory.status=partial` so the worker is alerted the bag
+        is intentionally empty pending extractor work (vs silently missing).
+        """
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_composer(root, require={"api-platform/core": "^3.2"})
+            warnings: list[str] = []
+            payload = collect_api_platform_resources(
+                root, root, warnings,
+            )
+            self.assertEqual(payload.status, "unknown")
+            self.assertIsNotNone(payload.reason)
+            self.assertIn("extractor", payload.reason.lower())
+            # No warnings appended; placeholder is intentional, not a failure.
+            self.assertEqual(warnings, [])
 
 
 class StackBlockPropagatesAddons(unittest.TestCase):
@@ -267,6 +375,67 @@ class FrontmatterAddonsEndToEnd(unittest.TestCase):
         text = self._run_and_read("symfony_minimal")
         addons = self._extract_addons(text)
         self.assertEqual(addons, [])
+
+    def test_api_platform_inline_composer_lists_addon(self):
+        """Synthetic-composer end-to-end: copy symfony_minimal, inject the
+        api-platform composer dep, re-run recon → `api-platform` in addons.
+
+        Avoids adding a heavy new fixture for a placeholder bag (the extractor
+        is not yet implemented, so resources.items would be empty either way).
+        """
+        import shutil as _shutil
+        import subprocess as _subprocess
+        if _shutil.which("php") is None:
+            self.skipTest("php not on PATH")
+        fix_path = self.fixtures_dir / "symfony_minimal"
+        if not fix_path.is_dir():
+            self.skipTest("symfony_minimal fixture not present")
+        with tempfile.TemporaryDirectory() as td:
+            # Copy fixture into a temp project root we can mutate.
+            proj = Path(td) / "proj"
+            _shutil.copytree(fix_path, proj)
+            composer_path = proj / "composer.json"
+            data = json.loads(composer_path.read_text(encoding="utf-8"))
+            data.setdefault("require", {})["api-platform/core"] = "^3.2"
+            composer_path.write_text(json.dumps(data), encoding="utf-8")
+
+            review_root = Path(td) / "review"
+            review_root.mkdir()
+            proc = _subprocess.run(
+                [
+                    sys.executable,
+                    str(_BIN / "recon_inventory.py"),
+                    str(proj),
+                    "--recipe", "symfony",
+                    "--review-root", str(review_root),
+                    "--no-console",
+                ],
+                capture_output=True, text=True, timeout=60,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            text = (review_root / "CONTEXT.md").read_text(encoding="utf-8")
+            addons = self._extract_addons(text)
+            self.assertIn("api-platform", addons)
+            # Bag must round-trip through the YAML emitter with the kebab key.
+            payload = _section_payload(
+                text, "recon_bags.addon.api-platform.resources",
+            )
+            self.assertIsInstance(
+                payload, dict,
+                f"missing api-platform bag in:\n{text}",
+            )
+            # Until the extractor lands, status is `unknown` with a reason.
+            self.assertEqual(payload.get("status"), "unknown")
+            self.assertIn("extractor", (payload.get("reason") or "").lower())
+            # Validator must accept the kebab-case key `api-platform` in
+            # recon_bags.addon.api-platform.resources (regression guard for the
+            # _validate_recon_bags walker — see Fix 1 in yaml_emit.py).
+            from validate_context import validate_context_file  # noqa: E402
+            res = validate_context_file(review_root / "CONTEXT.md")
+            self.assertTrue(
+                res.ok(),
+                msg=f"validate_context failed: {res.errors}",
+            )
 
 
 class AvailableRecipesExcludesDetectModules(unittest.TestCase):

@@ -62,13 +62,13 @@ See `core/crypto.md` → JWT advanced (kid/jwk header injection, algorithm confu
 - **`kid` / `jwk` passthrough**: if the project has a **custom Authenticator** (not the bundle default) that passes the `kid` header into `JwtEncoderInterface` without a whitelist → kid header injection is possible (see core).
 - **`Lcobucci\JWT\Configuration` directly (without the bundle)**: validation constraints (`SignedWith`, `IssuedBy`, `PermittedFor`) are optional — if the developer created `Configuration::forSymmetricSigner(...)` and forgot `setValidationConstraints([...])`, any signature/iss/aud is accepted. Grep for `Configuration::forSymmetricSigner` / `forAsymmetricSigner` without a subsequent `setValidationConstraints`.
 
-## GraphQL field authz (api-platform / overblog/graphql-bundle / webonyx)
+## GraphQL field authz (overblog/graphql-bundle / webonyx)
 
-- **api-platform `#[ApiResource]` without `security` / `securityPostDenormalize`**: `#[ApiResource(operations: [new Get(), new GetCollection(), new Post()])]` without `security: "is_granted('ROLE_USER')"` (or `securityPostDenormalize` for a check after denormalization) → query/mutation accessible to everyone, Entity fields are serialized by `#[Groups]` without an owner check. Sink_kind: `missing_authz`.
-- **api-platform per-operation security missing**: `Post`/`Patch`/`Delete` operation without `security: "is_granted(...)"` or with `security: "is_granted('PUBLIC_ACCESS')"` on a mutating endpoint → write without authz.
 - **overblog/graphql-bundle resolver without `#[Security('is_granted(...)')]`**: a resolver method (`#[GraphQL\Field]`, `#[GraphQL\Mutation]`) or a field in the schema YAML without `accessControl: "is_granted('ROLE_USER')"` / `access: "is_granted(...)"` → field/resolver accessible to anonymous users. Also `accessControl: "true"` (literal `true` without an expression) — pseudo-check.
 - **webonyx native (`webonyx/graphql-php`)**: a resolver function (`'resolve' => fn($root, $args, $context) => ...`) does not check `$context['user']` / does not invoke a voter → field-level authz is missing. Especially dangerous for resolvers returning the entity directly without projection.
-- **Introspection in prod**: api-platform / overblog enable `query Introspection { __schema { types { name fields { name } } } }` by default. If bundle config does not disable introspection in prod (`overblog_graphql.definitions.introspection.enabled: false` for overblog, or absence of `enable_graphiql: false` + `enable_docs: false` + `enable_swagger_ui: false` for api-platform) → confidence floor **≥ 8** (information disclosure: attacker maps the entire schema, including admin-only fields and mutations). Sink_kind: `stacktrace_exposed` or `other:graphql_introspection_enabled` (root_cause_family: `disclosure`).
+- **Introspection in prod (overblog)**: overblog enables `query Introspection { __schema { types { name fields { name } } } }` by default. If bundle config does not disable introspection in prod (`overblog_graphql.definitions.introspection.enabled: false`) → confidence floor **≥ 8** (information disclosure: attacker maps the entire schema, including admin-only fields and mutations). Sink_kind: `stacktrace_exposed` or `other:graphql_introspection_enabled` (root_cause_family: `disclosure`).
+
+> API Platform-specific GraphQL patterns: see `addons/api-platform/auth.md` (auto-loaded when api-platform addon is detected).
 
 ## Symfony Form CSRF
 

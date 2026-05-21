@@ -40,18 +40,19 @@
 - Value resolvers with user-controlled criteria — may return any entity
 - `MapRequestPayload` / `MapQueryString` without Symfony Validator validation or without `data_class` — accepts arbitrary fields (overlap with mass_assignment, see `injection.md`)
 
-## GraphQL data exposure (api-platform / overblog/graphql-bundle / webonyx)
+## GraphQL data exposure (overblog/graphql-bundle / webonyx)
 
 GraphQL endpoints act as a universal data-access layer: one HTTP request with an arbitrary selection set. Without explicit limits this becomes a DoS and enumeration vector. Field-level authz is covered in `auth.md` → GraphQL field authz; here — DoS, batching, and introspection as an enumeration vector.
 
 - **Query depth/complexity without a limit**:
-  - api-platform: absence of `api_platform.graphql.collection.pagination.maximum_items_per_page` and a custom `query_complexity` limit → client sends `query { user { friends { friends { friends { ... } } } } }` of depth N → N JOINs / batched queries.
   - webonyx: absence of `MaxQueryDepth` / `MaxQueryComplexity` rule in `GraphQL\Server`/`GraphQL::executeQuery()` → DoS via nested selections.
   - overblog/graphql-bundle: absence of `overblog_graphql.security.query_max_complexity` / `query_max_depth` in config → same.
   - Sink_kind: `other:graphql_unbounded_query` (root_cause_family: `business_logic`) or the closest `missing_authz` if depth bypasses pagination. Confidence ≥ 7 for prod endpoints without limits.
 - **Alias batching DoS**: one HTTP request contains N aliases of one field (`{ a1: user(id:1) {...} a2: user(id:2) {...} ... a1000: user(id:1000) {...} }`) → N SQL queries / N resolver invocations per single HTTP request. Without an alias cap (overblog `query_max_complexity` helps partially) or rate limit on alias count → bypass of the regular per-request rate limit.
 - **Introspection in prod as an enumeration vector**: attacker maps the **entire** schema via `__schema { types { name fields { name type { name } } } }` → knows PII fields, role fields, admin-only mutations → targeted attack. Introspection itself is information disclosure (see `auth.md` → GraphQL for the floor), plus it accelerates any downstream attacks. Sink_kind: `other:graphql_introspection_enabled` (root_cause_family: `disclosure`).
-- **Resolver returns entity entirely without projection**: api-platform Resource without `#[Groups]`, overblog resolver returns `$entity->toArray()` / `$em->getRepository(...)->find($id)` directly → all fields (including `passwordHash`, `apiToken`, `mfaSecret`) leave to the client. Sink_kind: `secret_in_response` or `sensitive_field_unmasked` — see `output-render.md` → GraphQL output filtering in detail.
+- **Resolver returns entity entirely without projection**: overblog resolver returns `$entity->toArray()` / `$em->getRepository(...)->find($id)` directly → all fields (including `passwordHash`, `apiToken`, `mfaSecret`) leave to the client. Sink_kind: `secret_in_response` or `sensitive_field_unmasked` — see `output-render.md` → GraphQL output filtering in detail.
+
+> API Platform-specific GraphQL patterns: see `addons/api-platform/data-access.md` (auto-loaded when api-platform addon is detected).
 
 ## Recipe-driven recall (`routes_authz_matrix`)
 
