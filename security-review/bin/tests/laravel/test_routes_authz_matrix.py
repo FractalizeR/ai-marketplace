@@ -1,4 +1,4 @@
-"""Tests for `framework_specific.laravel.routes_authz_matrix` emitter.
+"""Tests for `recon_bags.stack.laravel.routes_authz_matrix` emitter.
 
 Coverage:
   * Routes via Route::middleware('auth')->group(...) — middleware inheritance.
@@ -159,7 +159,7 @@ class RoutesAuthzMatrixBuilderTests(unittest.TestCase):
             self.assertIsNone(it["firewall"])
 
     def test_item_keys_match_schema(self):
-        spec_keys = laravel.FRAMEWORK_SPECIFIC_SCHEMA["routes_authz_matrix"].item_keys
+        spec_keys = laravel.RECON_BAGS_SCHEMA["stack"]["laravel"]["routes_authz_matrix"].item_keys
         for row in self.items:
             self.assertEqual(
                 set(row.keys()), set(spec_keys),

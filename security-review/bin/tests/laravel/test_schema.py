@@ -1,8 +1,8 @@
-"""Schema-shape tests for Wave 2-E Laravel framework_specific.* keys.
+"""Schema-shape tests for Wave 2-E Laravel recon_bags.* keys.
 
 Validates:
   * `routes_authz_matrix`, `sensitive_columns`, `runtime` are declared in
-    `FRAMEWORK_SPECIFIC_SCHEMA`.
+    `RECON_BAGS_SCHEMA`.
   * Each section has the exact set of allowed item_keys / data_keys per the
     contract in NEXT_RELEASE_PLAN.md.
   * All three sections are optional (`required=False`) — Wave 2.5 sync-step
@@ -23,13 +23,13 @@ from recon.recipes import laravel  # noqa: E402
 
 class FrameworkSpecificSchemaWave2ETests(unittest.TestCase):
     def test_three_new_sections_in_schema(self):
-        schema = laravel.FRAMEWORK_SPECIFIC_SCHEMA
+        schema = laravel.RECON_BAGS_SCHEMA["stack"]["laravel"]
         self.assertIn("routes_authz_matrix", schema)
         self.assertIn("sensitive_columns", schema)
         self.assertIn("runtime", schema)
 
     def test_three_new_sections_are_optional(self):
-        schema = laravel.FRAMEWORK_SPECIFIC_SCHEMA
+        schema = laravel.RECON_BAGS_SCHEMA["stack"]["laravel"]
         for key in ("routes_authz_matrix", "sensitive_columns", "runtime"):
             self.assertFalse(
                 schema[key].required,
@@ -37,7 +37,7 @@ class FrameworkSpecificSchemaWave2ETests(unittest.TestCase):
             )
 
     def test_routes_authz_matrix_item_keys(self):
-        spec = laravel.FRAMEWORK_SPECIFIC_SCHEMA["routes_authz_matrix"]
+        spec = laravel.RECON_BAGS_SCHEMA["stack"]["laravel"]["routes_authz_matrix"]
         self.assertEqual(spec.shape, "list")
         self.assertEqual(
             spec.item_keys,
@@ -49,7 +49,7 @@ class FrameworkSpecificSchemaWave2ETests(unittest.TestCase):
         )
 
     def test_sensitive_columns_item_keys(self):
-        spec = laravel.FRAMEWORK_SPECIFIC_SCHEMA["sensitive_columns"]
+        spec = laravel.RECON_BAGS_SCHEMA["stack"]["laravel"]["sensitive_columns"]
         self.assertEqual(spec.shape, "list")
         self.assertEqual(
             spec.item_keys,
@@ -60,7 +60,7 @@ class FrameworkSpecificSchemaWave2ETests(unittest.TestCase):
         )
 
     def test_runtime_data_keys(self):
-        spec = laravel.FRAMEWORK_SPECIFIC_SCHEMA["runtime"]
+        spec = laravel.RECON_BAGS_SCHEMA["stack"]["laravel"]["runtime"]
         self.assertEqual(spec.shape, "scalar")
         self.assertEqual(spec.data_keys, frozenset({"octane", "octane_server"}))
 
@@ -69,7 +69,7 @@ class FutureKeysAllowlistConsistencyTests(unittest.TestCase):
     """Allowlist FUTURE_FRAMEWORK_KEYS_3_4 must be EMPTY after Wave 2.5.
 
     Wave 2-E declared `routes_authz_matrix`, `sensitive_columns`, `runtime`
-    in laravel.FRAMEWORK_SPECIFIC_SCHEMA (and Wave 2-D the first two for
+    in laravel.RECON_BAGS_SCHEMA (and Wave 2-D the first two for
     symfony). With both recipes carrying the keys, the transitional bridge
     is no longer needed; the allowlist is shrunk to ∅. This test guards
     against accidental re-introduction of obsolete entries.

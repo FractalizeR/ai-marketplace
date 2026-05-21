@@ -1,4 +1,4 @@
-"""Wave 2-D (3.4.0) — `framework_specific.symfony.routes_authz_matrix` emitter.
+"""Wave 2-D (3.4.0) — `recon_bags.stack.symfony.routes_authz_matrix` emitter.
 
 Drives `_build_routes_authz_matrix` against the synthetic
 `fixtures/symfony_routes_authz` project. Tests are skipped when `php` is
@@ -126,7 +126,7 @@ class RoutesAuthzMatrixSchemaInvariants(unittest.TestCase):
         )
 
     def test_each_item_has_contract_keys(self) -> None:
-        spec = recipe_symfony.FRAMEWORK_SPECIFIC_SCHEMA["routes_authz_matrix"]
+        spec = recipe_symfony.RECON_BAGS_SCHEMA["stack"]["symfony"]["routes_authz_matrix"]
         expected = spec.item_keys or frozenset()
         for item in (self.payload.items or []):
             self.assertEqual(

@@ -63,7 +63,7 @@ def _read_context(review_root: Path) -> tuple[dict, str]:
 
 def _section_payload(text: str, section_id: str) -> dict | None:
     """Return the parsed payload for `## ... <!-- section_id: X --> ... yaml ...`.
-    For `framework_specific.<key>` use dot-notation.
+    For `recon_bags.<key>` use dot-notation.
     """
     import re
     if "." not in section_id:
@@ -137,7 +137,7 @@ class InventoryRecallNoConsole(unittest.TestCase):
         )
 
     def test_voters_collected_with_attributes_and_subjects(self):
-        payload = _section_payload(self.text, "framework_specific.symfony.voters")
+        payload = _section_payload(self.text, "recon_bags.stack.symfony.voters")
         self.assertEqual(payload["status"], "ok")
         items = payload["items"]
         self.assertEqual(len(items), 1)
@@ -146,7 +146,7 @@ class InventoryRecallNoConsole(unittest.TestCase):
         self.assertEqual(items[0]["subjects"], ["App\\Entity\\Post"])
 
     def test_forms_collected(self):
-        payload = _section_payload(self.text, "framework_specific.symfony.forms")
+        payload = _section_payload(self.text, "recon_bags.stack.symfony.forms")
         items = payload["items"]
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["class"], "App\\Form\\PostType")
@@ -175,14 +175,14 @@ class InventoryRecallNoConsole(unittest.TestCase):
         self.assertEqual(payload["data"]["provider"], "app_user_provider")
 
     def test_firewalls_parsed_from_security_yaml(self):
-        payload = _section_payload(self.text, "framework_specific.symfony.firewalls")
+        payload = _section_payload(self.text, "recon_bags.stack.symfony.firewalls")
         self.assertEqual(payload["status"], "ok")
         names = {fw["name"] for fw in payload["data"]["firewalls"]}
         self.assertEqual(names, {"dev", "main"})
         self.assertEqual(payload["source_files"], ["config/packages/security.yaml"])
 
     def test_messenger_transports_parsed_from_yaml(self):
-        payload = _section_payload(self.text, "framework_specific.symfony.messenger_transports")
+        payload = _section_payload(self.text, "recon_bags.stack.symfony.messenger_transports")
         self.assertEqual(payload["status"], "ok")
         names = {t["name"] for t in payload["data"]["transports"]}
         self.assertEqual(names, {"async", "sync"})
@@ -192,13 +192,13 @@ class InventoryRecallNoConsole(unittest.TestCase):
         # symfony_minimal fixture has no `serializer:` key — the field must be
         # absent rather than defaulted to a string. The worker uses absence vs
         # presence to decide whether to read messenger.yaml directly.
-        payload = _section_payload(self.text, "framework_specific.symfony.messenger_transports")
+        payload = _section_payload(self.text, "recon_bags.stack.symfony.messenger_transports")
         for t in payload["data"]["transports"]:
             self.assertNotIn("serializer", t,
                              f"unexpected serializer in {t!r} when yaml has none")
 
     def test_twig_overrides_parsed_from_yaml(self):
-        payload = _section_payload(self.text, "framework_specific.symfony.twig_overrides")
+        payload = _section_payload(self.text, "recon_bags.stack.symfony.twig_overrides")
         self.assertEqual(payload["status"], "ok")
         # Our fixture has 1 |raw filter in templates/post/show.html.twig.
         self.assertGreaterEqual(payload["data"]["raw_filter_count"], 1)
@@ -448,7 +448,7 @@ class AdminFixtureRecall(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("php"), "php not on PATH")
 class EasyadminCrudControllersSection(unittest.TestCase):
-    """`framework_specific.symfony.easyadmin_crud_controllers` recipe section."""
+    """`recon_bags.addon.easyadmin.crud_controllers` recipe section."""
 
     @classmethod
     def setUpClass(cls):
@@ -464,7 +464,7 @@ class EasyadminCrudControllersSection(unittest.TestCase):
 
     def test_section_present_with_two_admin_fixture_controllers(self):
         payload = _section_payload(
-            self.text, "framework_specific.symfony.easyadmin_crud_controllers",
+            self.text, "recon_bags.addon.easyadmin.crud_controllers",
         )
         self.assertIsNotNone(payload, "easyadmin_crud_controllers section missing")
         self.assertEqual(payload["status"], "ok")
@@ -472,7 +472,7 @@ class EasyadminCrudControllersSection(unittest.TestCase):
 
     def test_entity_fqcn_resolved_per_controller(self):
         payload = _section_payload(
-            self.text, "framework_specific.symfony.easyadmin_crud_controllers",
+            self.text, "recon_bags.addon.easyadmin.crud_controllers",
         )
         by_class = {it["class"]: it for it in payload["items"]}
         self.assertEqual(
@@ -486,7 +486,7 @@ class EasyadminCrudControllersSection(unittest.TestCase):
 
     def test_configure_fields_modifiers_propagated_from_extractor(self):
         payload = _section_payload(
-            self.text, "framework_specific.symfony.easyadmin_crud_controllers",
+            self.text, "recon_bags.addon.easyadmin.crud_controllers",
         )
         post = next(it for it in payload["items"]
                     if it["class"].endswith("PostCrudController"))
@@ -499,7 +499,7 @@ class EasyadminCrudControllersSection(unittest.TestCase):
 
     def test_configure_actions_disabled_propagated(self):
         payload = _section_payload(
-            self.text, "framework_specific.symfony.easyadmin_crud_controllers",
+            self.text, "recon_bags.addon.easyadmin.crud_controllers",
         )
         user = next(it for it in payload["items"]
                     if it["class"].endswith("UserCrudController"))
@@ -513,7 +513,7 @@ class EasyadminCrudControllersSection(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
             text = (review_root / "CONTEXT.md").read_text()
         payload = _section_payload(
-            text, "framework_specific.symfony.easyadmin_crud_controllers",
+            text, "recon_bags.addon.easyadmin.crud_controllers",
         )
         self.assertIsNotNone(payload)
         self.assertEqual(payload["status"], "none")
@@ -521,7 +521,7 @@ class EasyadminCrudControllersSection(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("php"), "php not on PATH")
 class SonataAdminClassesSection(unittest.TestCase):
-    """`framework_specific.symfony.sonata_admin_classes` recipe section.
+    """`recon_bags.addon.sonata.admin_classes` recipe section.
 
     Sonata fixture has two admin classes: ArticleAdmin (covered by ArticleVoter)
     and UserAdmin (no voter — drives admin_authz_coverage=partial).
@@ -541,7 +541,7 @@ class SonataAdminClassesSection(unittest.TestCase):
 
     def test_section_present_with_two_admin_classes(self):
         payload = _section_payload(
-            self.text, "framework_specific.symfony.sonata_admin_classes",
+            self.text, "recon_bags.addon.sonata.admin_classes",
         )
         self.assertIsNotNone(payload, "sonata_admin_classes section missing")
         self.assertEqual(payload["status"], "ok")
@@ -549,7 +549,7 @@ class SonataAdminClassesSection(unittest.TestCase):
 
     def test_entity_fqcn_resolved_per_admin_class(self):
         payload = _section_payload(
-            self.text, "framework_specific.symfony.sonata_admin_classes",
+            self.text, "recon_bags.addon.sonata.admin_classes",
         )
         by_class = {it["class"]: it for it in payload["items"]}
         self.assertEqual(
@@ -563,7 +563,7 @@ class SonataAdminClassesSection(unittest.TestCase):
 
     def test_form_fields_extracted(self):
         payload = _section_payload(
-            self.text, "framework_specific.symfony.sonata_admin_classes",
+            self.text, "recon_bags.addon.sonata.admin_classes",
         )
         by_class = {it["class"]: it for it in payload["items"]}
         article_fields = by_class["App\\Admin\\ArticleAdmin"]["form_fields"]
@@ -580,14 +580,14 @@ class SonataAdminClassesSection(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
             text = (review_root / "CONTEXT.md").read_text()
         payload = _section_payload(
-            text, "framework_specific.symfony.sonata_admin_classes",
+            text, "recon_bags.addon.sonata.admin_classes",
         )
         self.assertIsNotNone(payload)
         self.assertEqual(payload["status"], "none")
 
     def test_admin_authz_coverage_marks_useradmin_unwired(self):
         payload = _section_payload(
-            self.text, "framework_specific.symfony.admin_authz_coverage",
+            self.text, "recon_bags.stack.symfony.admin_authz_coverage",
         )
         self.assertEqual(payload["status"], "partial")
         data = payload["data"]
@@ -706,7 +706,7 @@ class AdminAuthzCoverageUnit(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("php"), "php not on PATH")
 class AdminAuthzCoverageE2E(unittest.TestCase):
-    """`framework_specific.symfony.admin_authz_coverage` end-to-end on admin fixture."""
+    """`recon_bags.stack.symfony.admin_authz_coverage` end-to-end on admin fixture."""
 
     def test_admin_fixture_post_wired_user_unwired(self):
         with tempfile.TemporaryDirectory() as td:
@@ -714,7 +714,7 @@ class AdminAuthzCoverageE2E(unittest.TestCase):
             proc = _run_recipe(FIX_ADM, review_root, "--no-console")
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
             text = (review_root / "CONTEXT.md").read_text()
-        payload = _section_payload(text, "framework_specific.symfony.admin_authz_coverage")
+        payload = _section_payload(text, "recon_bags.stack.symfony.admin_authz_coverage")
         self.assertIsNotNone(payload, "admin_authz_coverage section missing")
         self.assertEqual(payload["status"], "partial")
         self.assertEqual(payload["data"]["crud_controllers_with_voter"], ["PostCrudController"])
@@ -731,7 +731,7 @@ class AdminAuthzCoverageE2E(unittest.TestCase):
             proc = _run_recipe(FIX_MIN, review_root, "--no-console")
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
             text = (review_root / "CONTEXT.md").read_text()
-        payload = _section_payload(text, "framework_specific.symfony.admin_authz_coverage")
+        payload = _section_payload(text, "recon_bags.stack.symfony.admin_authz_coverage")
         self.assertIsNotNone(payload)
         self.assertEqual(payload["status"], "none")
 
@@ -907,8 +907,11 @@ class RecipeUnitContract(unittest.TestCase):
             self.assertEqual(r.status, "partial")
             for sid, payload in r.core.items():
                 self.assertEqual(payload.status, "unknown", msg=f"{sid}")
-            for k, payload in r.framework_specific.items():
-                self.assertEqual(payload.status, "unknown", msg=k)
+            # recon_bags is now `{kind: {name: {bag_key: payload}}}` — walk 3 levels.
+            for kind, names in r.recon_bags.items():
+                for name, bag in names.items():
+                    for k, payload in bag.items():
+                        self.assertEqual(payload.status, "unknown", msg=f"{kind}/{name}/{k}")
 
 
 @unittest.skipUnless(shutil.which("php"), "php not on PATH")

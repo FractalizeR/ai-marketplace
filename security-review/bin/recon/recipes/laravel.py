@@ -24,7 +24,7 @@ build_inventory pipeline:
    source_files. Status remains pending_enrichment so worker classifies candidates.
 8. fintech_markers — composer-dep substring match + bcmath/Stripe/PayPal grep markers.
 9. frontend_assets — vite/webpack/Inertia detection.
-10. framework_specific.laravel.*: policies, service_providers, middleware_groups,
+10. recon_bags.stack.laravel.*: policies, service_providers, middleware_groups,
     form_requests, graphql_layer (when GraphQL library detected).
 """
 
@@ -51,56 +51,61 @@ LANGUAGE = "php"
 
 
 # ---------------------------------------------------------------------------
-# Schema bag — what `framework_specific.laravel.*` keys may contain.
+# Schema bag — 3-level shape: {kind: {name: {bag_key: SectionSpec}}}.
+# Mirrors the runtime emit structure produced by build_inventory().
 # ---------------------------------------------------------------------------
 
-FRAMEWORK_SPECIFIC_SCHEMA: dict[str, SectionSpec] = {
-    "policies": SectionSpec(
-        shape="list",
-        item_keys=frozenset({"class", "file", "model", "line"}),
-    ),
-    "service_providers": SectionSpec(
-        shape="list",
-        item_keys=frozenset({"class", "file", "line", "deferred"}),
-    ),
-    "middleware_groups": SectionSpec(
-        shape="scalar",
-        data_keys=frozenset({"groups", "global", "route"}),
-    ),
-    "form_requests": SectionSpec(
-        shape="list",
-        item_keys=frozenset({"class", "file", "line", "authorize"}),
-    ),
-    "graphql_layer": SectionSpec(
-        shape="scalar",
-        data_keys=frozenset({"library_name", "schema_files", "resolvers_dir"}),
-        required=False,
-    ),
-    # 3.4.0 Wave 2-E: routes/authz cross-product matrix.
-    "routes_authz_matrix": SectionSpec(
-        shape="list",
-        item_keys=frozenset({
-            "route_name", "file", "line", "methods", "path",
-            "effective_middleware", "matched_access_control", "firewall",
-            "csrf_protection", "authz_evidence",
-        }),
-        required=False,
-    ),
-    # 3.4.0 Wave 2-E: sensitive (token/secret/credential) Eloquent columns.
-    "sensitive_columns": SectionSpec(
-        shape="list",
-        item_keys=frozenset({
-            "entity_class", "file", "field_name", "column_type",
-            "name_pattern_matched", "encryption_status", "encryption_evidence",
-        }),
-        required=False,
-    ),
-    # 3.4.0 Wave 2-E: long-running runtime detection (Octane + server flavor).
-    "runtime": SectionSpec(
-        shape="scalar",
-        data_keys=frozenset({"octane", "octane_server"}),
-        required=False,
-    ),
+RECON_BAGS_SCHEMA: dict[str, dict[str, dict[str, SectionSpec]]] = {
+    "stack": {
+        "laravel": {
+            "policies": SectionSpec(
+                shape="list",
+                item_keys=frozenset({"class", "file", "model", "line"}),
+            ),
+            "service_providers": SectionSpec(
+                shape="list",
+                item_keys=frozenset({"class", "file", "line", "deferred"}),
+            ),
+            "middleware_groups": SectionSpec(
+                shape="scalar",
+                data_keys=frozenset({"groups", "global", "route"}),
+            ),
+            "form_requests": SectionSpec(
+                shape="list",
+                item_keys=frozenset({"class", "file", "line", "authorize"}),
+            ),
+            "graphql_layer": SectionSpec(
+                shape="scalar",
+                data_keys=frozenset({"library_name", "schema_files", "resolvers_dir"}),
+                required=False,
+            ),
+            # 3.4.0 Wave 2-E: routes/authz cross-product matrix.
+            "routes_authz_matrix": SectionSpec(
+                shape="list",
+                item_keys=frozenset({
+                    "route_name", "file", "line", "methods", "path",
+                    "effective_middleware", "matched_access_control", "firewall",
+                    "csrf_protection", "authz_evidence",
+                }),
+                required=False,
+            ),
+            # 3.4.0 Wave 2-E: sensitive (token/secret/credential) Eloquent columns.
+            "sensitive_columns": SectionSpec(
+                shape="list",
+                item_keys=frozenset({
+                    "entity_class", "file", "field_name", "column_type",
+                    "name_pattern_matched", "encryption_status", "encryption_evidence",
+                }),
+                required=False,
+            ),
+            # 3.4.0 Wave 2-E: long-running runtime detection (Octane + server flavor).
+            "runtime": SectionSpec(
+                shape="scalar",
+                data_keys=frozenset({"octane", "octane_server"}),
+                required=False,
+            ),
+        },
+    },
 }
 
 
@@ -200,29 +205,29 @@ def sanity_probes() -> list[SanityProbe]:
             label="Eloquent models",
         ),
         SanityProbe(
-            section_path="framework_specific.laravel.policies",
+            section_path="recon_bags.stack.laravel.policies",
             glob_patterns=["app/Policies/**/*.php"],
             label="Policies",
         ),
         SanityProbe(
-            section_path="framework_specific.laravel.service_providers",
+            section_path="recon_bags.stack.laravel.service_providers",
             glob_patterns=["app/Providers/**/*.php"],
             label="Service providers",
         ),
         SanityProbe(
-            section_path="framework_specific.laravel.form_requests",
+            section_path="recon_bags.stack.laravel.form_requests",
             glob_patterns=["app/Http/Requests/**/*.php"],
             label="Form requests",
         ),
         # 3.4.0 Wave 2-E: routes/authz matrix sourced from controllers + routes.
         SanityProbe(
-            section_path="framework_specific.laravel.routes_authz_matrix",
+            section_path="recon_bags.stack.laravel.routes_authz_matrix",
             glob_patterns=["app/Http/Controllers/**/*.php", "routes/*.php"],
             label="laravel.routes_authz_matrix",
         ),
         # 3.4.0 Wave 2-E: sensitive columns sourced from models + migrations.
         SanityProbe(
-            section_path="framework_specific.laravel.sensitive_columns",
+            section_path="recon_bags.stack.laravel.sensitive_columns",
             glob_patterns=[
                 "app/Models/**/*.php",
                 "app/**/Models/**/*.php",
@@ -2117,7 +2122,7 @@ def build_inventory(
     sources_used: list[str] = []
     warnings: list[str] = []
     errors: list[str] = []
-    framework_specific: dict[str, SectionPayload] = {}
+    stack_laravel: dict[str, SectionPayload] = {}
 
     # Bulk class extraction — used by multiple section builders.
     classes_app = _extract_classes(
@@ -2185,34 +2190,34 @@ def build_inventory(
         })
     frontend_assets = SectionPayload(status="ok", items=frontend_items)
 
-    # ----- framework_specific.laravel.* -----
-    framework_specific["policies"] = _build_policies(project_root, classes_app)
-    framework_specific["service_providers"] = _build_service_providers(project_root, classes_app)
-    framework_specific["middleware_groups"] = _build_middleware_groups(project_root)
-    framework_specific["form_requests"] = _build_form_requests(project_root, classes_app)
+    # ----- recon_bags.stack.laravel.* -----
+    stack_laravel["policies"] = _build_policies(project_root, classes_app)
+    stack_laravel["service_providers"] = _build_service_providers(project_root, classes_app)
+    stack_laravel["middleware_groups"] = _build_middleware_groups(project_root)
+    stack_laravel["form_requests"] = _build_form_requests(project_root, classes_app)
     # GraphQL (optional — only when library detected).
     gql = detect_graphql(project_root)
     if gql is not None:
-        framework_specific["graphql_layer"] = SectionPayload(
+        stack_laravel["graphql_layer"] = SectionPayload(
             status="ok",
             data=gql,
             source_files=["composer.json"],
         )
 
     # 3.4.0 Wave 2-E sections.
-    framework_specific["routes_authz_matrix"] = _build_routes_authz_matrix(
+    stack_laravel["routes_authz_matrix"] = _build_routes_authz_matrix(
         project_root, classes_app, diff_files=diff_files,
     )
-    framework_specific["sensitive_columns"] = _build_sensitive_columns(project_root)
-    framework_specific["runtime"] = _build_runtime(project_root)
+    stack_laravel["sensitive_columns"] = _build_sensitive_columns(project_root)
+    stack_laravel["runtime"] = _build_runtime(project_root)
 
     # ----- diff_files post-pass: stamp touched_by_diff on list items -----
     if diff_files is not None:
         norm = {p.lstrip("./") for p in diff_files}
         for payload in (attack_surface, data_access, output_renderers,
-                        framework_specific.get("policies"),
-                        framework_specific.get("service_providers"),
-                        framework_specific.get("form_requests")):
+                        stack_laravel.get("policies"),
+                        stack_laravel.get("service_providers"),
+                        stack_laravel.get("form_requests")):
             if payload is None or not payload.items:
                 continue
             for item in payload.items:
@@ -2239,7 +2244,7 @@ def build_inventory(
     return InventoryResult(
         status="ok",
         core=core,
-        framework_specific=framework_specific,
+        recon_bags={"stack": {"laravel": stack_laravel}},
         sources_used=sources_used,
         warnings=warnings,
         errors=errors,

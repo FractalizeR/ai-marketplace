@@ -1,4 +1,4 @@
-"""Tests for `framework_specific.laravel.runtime` Octane detection.
+"""Tests for `recon_bags.stack.laravel.runtime` Octane detection.
 
 Octane in composer.json (require/require-dev) → octane=true.
 config/octane.php parsed for `'server' => 'xxx'` literal first, then for

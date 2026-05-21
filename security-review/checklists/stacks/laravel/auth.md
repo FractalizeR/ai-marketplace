@@ -104,9 +104,9 @@
 - **Persisted-queries-only mode bypass** — even if `lighthouse.persisted_queries=true`, alias `__schema { types { name } }` may pass as a valid operation depending on middleware ordering. Verify that introspection is disabled (`lighthouse.security.disable_introspection=true`) on prod.
 - **Lighthouse `@inject(context: "user.id")` for tenant scoping** — but resolver gets `$args['user_id']` directly from the client → tenant bypass.
 
-## Octane singleton-bleed (gate: `framework_specific.laravel.runtime.octane=true`)
+## Octane singleton-bleed (gate: `recon_bags.stack.laravel.runtime.octane=true`)
 
-> **Apply this subsection only if** `framework_specific.laravel.runtime.status == ok` **and** `runtime.data.octane == true`. Otherwise skip the entire section (Symfony+FrankenPHP/Roadrunner are analogous, but not covered by this plugin version — accepted limitation).
+> **Apply this subsection only if** `recon_bags.stack.laravel.runtime.status == ok` **and** `runtime.data.octane == true`. Otherwise skip the entire section (Symfony+FrankenPHP/Roadrunner are analogous, but not covered by this plugin version — accepted limitation).
 >
 > **Graceful fallback:** if the section is missing/`status != ok` — skip Octane items entirely. Do not try to guess from `composer.json` — a false positive is more expensive than a false negative.
 

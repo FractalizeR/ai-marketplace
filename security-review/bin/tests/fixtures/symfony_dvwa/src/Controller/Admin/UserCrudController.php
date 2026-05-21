@@ -28,7 +28,7 @@ class UserCrudController extends AbstractCrudController
         //
         // VULN: mass_assignment id=DVWA-12
         // `roles` is editable with `ArrayField` and the controller has no voter
-        // (`framework_specific.symfony.admin_authz_coverage.crud_controllers_without_voter`
+        // (`recon_bags.stack.symfony.admin_authz_coverage.crud_controllers_without_voter`
         // will list `UserCrudController`). Any admin escalates any user to
         // ROLE_ADMIN by editing the entity. Sink_kind=mass_assignment.
         return [

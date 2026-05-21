@@ -215,21 +215,37 @@ class RegistryShape(unittest.TestCase):
             self.assertEqual(mod.RECIPE_NAME, name)
 
     def test_symfony_schema_keys_match_plan(self):
-        from recon.recipes.symfony import FRAMEWORK_SPECIFIC_SCHEMA
+        from recon.recipes.symfony import RECON_BAGS_SCHEMA
         # rev 3.7 plan section A: voters, forms, serializer_groups, twig_overrides,
         # doctrine_listeners, firewalls, messenger_transports.
         # v3.1: graphql_layer added (optional, present-if-detected).
-        # v3.2: easyadmin_crud_controllers added (recipe-level enumeration of
-        # AbstractCrudController subclasses with configure_fields/actions).
+        # v3.2: easyadmin_crud_controllers (→ addon.easyadmin.crud_controllers)
+        # added (recipe-level enumeration of AbstractCrudController subclasses
+        # with configure_fields/actions).
         # v3.2: admin_authz_coverage added (CRUD ↔ voter cross-check).
-        # v3.2.4: sonata_admin_classes added (parallel admin-bundle for Sonata).
+        # v3.2.4: sonata_admin_classes (→ addon.sonata.admin_classes) added
+        # (parallel admin-bundle for Sonata).
         # v3.4.0 (Wave 2-D): routes_authz_matrix, sensitive_columns.
-        expected = {"voters", "forms", "serializer_groups", "twig_overrides",
-                    "doctrine_listeners", "firewalls", "messenger_transports",
-                    "graphql_layer", "easyadmin_crud_controllers",
-                    "sonata_admin_classes", "admin_authz_coverage",
-                    "routes_authz_matrix", "sensitive_columns"}
-        self.assertEqual(set(FRAMEWORK_SPECIFIC_SCHEMA.keys()), expected)
+        # Stage 1: schema is 3-level `{kind: {name: {bag_key: ...}}}`. Addons
+        # split off into their own namespace under `addon.<addon_name>`.
+        expected_stack_symfony = {
+            "voters", "forms", "serializer_groups", "twig_overrides",
+            "doctrine_listeners", "firewalls", "messenger_transports",
+            "graphql_layer", "admin_authz_coverage",
+            "routes_authz_matrix", "sensitive_columns",
+        }
+        self.assertEqual(
+            set(RECON_BAGS_SCHEMA["stack"]["symfony"].keys()),
+            expected_stack_symfony,
+        )
+        self.assertEqual(
+            set(RECON_BAGS_SCHEMA["addon"]["easyadmin"].keys()),
+            {"crud_controllers"},
+        )
+        self.assertEqual(
+            set(RECON_BAGS_SCHEMA["addon"]["sonata"].keys()),
+            {"admin_classes"},
+        )
 
 
 class InventoryShape(unittest.TestCase):
@@ -242,15 +258,18 @@ class InventoryShape(unittest.TestCase):
             self.assertEqual(r.status, "partial")
             for sid, payload in r.core.items():
                 self.assertEqual(payload.status, "unknown", f"core/{sid}")
-            for k, payload in r.framework_specific.items():
-                self.assertEqual(payload.status, "unknown", f"fs/{k}")
+            # recon_bags is now `{kind: {name: {bag_key: payload}}}` — walk 3 levels.
+            for kind, names in r.recon_bags.items():
+                for name, bag in names.items():
+                    for k, payload in bag.items():
+                        self.assertEqual(payload.status, "unknown", f"fs/{kind}/{name}/{k}")
 
-    def test_generic_php_stub_has_no_framework_specific(self):
+    def test_generic_php_stub_has_no_recon_bags(self):
         # generic_php is still a stub (out of S2 scope).
         from recon.recipes.generic_php import build_inventory
         with tempfile.TemporaryDirectory() as td:
             r = build_inventory(Path(td))
-            self.assertEqual(r.framework_specific, {})
+            self.assertEqual(r.recon_bags, {})
 
 
 if __name__ == "__main__":

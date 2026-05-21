@@ -54,7 +54,7 @@ from typing import Any, Literal, Optional
 #
 # Concepts decouple WaveSpec from per-stack section paths. A wave declares
 # concepts it cares about; CONCEPT_RESOLVERS maps (stack, concept) → list of
-# `framework_specific.<stack>.*` paths. Adding a new recipe (Laravel, Django)
+# `recon_bags.stack.<stack>.*` paths. Adding a new recipe (Laravel, Django)
 # means extending CONCEPT_RESOLVERS, not editing WaveSpec.
 #
 # To extend: add a new entry to Concept, then declare paths under each stack
@@ -95,65 +95,65 @@ ALL_CONCEPTS: tuple[Concept, ...] = (
 
 # Mapping (stack, concept) → list of dot-notation paths.
 # Entries omitted for (stack, concept) that the recipe doesn't surface (e.g.
-# `generic_php` exposes no framework_specific bag, so all its mappings are
+# `generic_php` exposes no recon_bags bag, so all its mappings are
 # empty by virtue of absence).
 CONCEPT_RESOLVERS: dict[tuple[str, str], tuple[str, ...]] = {
     # --- Symfony ---
     ("symfony", "auth_guards"): (
-        "framework_specific.symfony.voters",
-        "framework_specific.symfony.firewalls",
+        "recon_bags.stack.symfony.voters",
+        "recon_bags.stack.symfony.firewalls",
     ),
     ("symfony", "request_inputs"): (
-        "framework_specific.symfony.forms",
+        "recon_bags.stack.symfony.forms",
     ),
     ("symfony", "output_renderers"): (
-        "framework_specific.symfony.twig_overrides",
+        "recon_bags.stack.symfony.twig_overrides",
     ),
     ("symfony", "messaging"): (
-        "framework_specific.symfony.messenger_transports",
+        "recon_bags.stack.symfony.messenger_transports",
     ),
     ("symfony", "graphql_layer"): (
-        "framework_specific.symfony.graphql_layer",
+        "recon_bags.stack.symfony.graphql_layer",
     ),
     ("symfony", "admin_surface"): (
-        "framework_specific.symfony.easyadmin_crud_controllers",
-        "framework_specific.symfony.sonata_admin_classes",
-        "framework_specific.symfony.admin_authz_coverage",
+        "recon_bags.addon.easyadmin.crud_controllers",
+        "recon_bags.addon.sonata.admin_classes",
+        "recon_bags.stack.symfony.admin_authz_coverage",
     ),
     ("symfony", "route_authz_matrix"): (
-        "framework_specific.symfony.routes_authz_matrix",
+        "recon_bags.stack.symfony.routes_authz_matrix",
     ),
     ("symfony", "sensitive_data_model"): (
-        "framework_specific.symfony.sensitive_columns",
+        "recon_bags.stack.symfony.sensitive_columns",
     ),
     # serialization & console_entries: Symfony recipe doesn't surface dedicated
-    # framework_specific bags for these — concepts resolve to () and the wave
+    # recon_bags bags for these — concepts resolve to () and the wave
     # uses only its core paths.
     # long_running_runtime: Symfony does not declare runtime; Octane gate is a
     # Laravel-only concept (see plan §C-agent Octane gate).
 
     # --- Laravel ---
     ("laravel", "auth_guards"): (
-        "framework_specific.laravel.policies",
-        "framework_specific.laravel.middleware_groups",
+        "recon_bags.stack.laravel.policies",
+        "recon_bags.stack.laravel.middleware_groups",
     ),
     ("laravel", "request_inputs"): (
-        "framework_specific.laravel.form_requests",
+        "recon_bags.stack.laravel.form_requests",
     ),
     ("laravel", "graphql_layer"): (
-        "framework_specific.laravel.graphql_layer",
+        "recon_bags.stack.laravel.graphql_layer",
     ),
     ("laravel", "route_authz_matrix"): (
-        "framework_specific.laravel.routes_authz_matrix",
+        "recon_bags.stack.laravel.routes_authz_matrix",
     ),
     ("laravel", "sensitive_data_model"): (
-        "framework_specific.laravel.sensitive_columns",
+        "recon_bags.stack.laravel.sensitive_columns",
     ),
     ("laravel", "long_running_runtime"): (
-        "framework_specific.laravel.runtime",
+        "recon_bags.stack.laravel.runtime",
     ),
     # output_renderers: Blade templates live in core `output_renderers`; no
-    # dedicated framework_specific bag needed.
+    # dedicated recon_bags bag needed.
     # messaging: queue jobs surface in core `attack_surface` (kind: message_handler);
     # no dedicated bag.
     # serialization & console_entries: same as Symfony — core sections suffice.
@@ -161,7 +161,7 @@ CONCEPT_RESOLVERS: dict[tuple[str, str], tuple[str, ...]] = {
 
 
 def resolve_concept_paths(stack: str, concept: str) -> list[str]:
-    """Return framework_specific paths for (stack, concept), or [] when absent."""
+    """Return recon_bags paths for (stack, concept), or [] when absent."""
     return list(CONCEPT_RESOLVERS.get((stack, concept), ()))
 
 # Reuse the YAML subset parser & section extraction from validate_context.
@@ -179,10 +179,10 @@ class WaveSpec:
     wave_id: str
     themes: tuple[str, ...]
     # Core (stack-agnostic) section paths the wave cares about.
-    # Per-stack `framework_specific.*` paths are derived from
+    # Per-stack `recon_bags.*` paths are derived from
     # `relevant_concepts` via CONCEPT_RESOLVERS at plan time.
     relevant_section_paths: tuple[str, ...]
-    # Concepts (closed enum) that resolve to per-stack framework_specific
+    # Concepts (closed enum) that resolve to per-stack recon_bags
     # paths. Empty tuple = wave is purely core-section-driven.
     relevant_concepts: tuple[str, ...]
     # Filter for attack_surface items by `kind`. None = no filter.
@@ -368,7 +368,7 @@ def resolved_section_paths(wave: WaveSpec, stack: str) -> list[str]:
     """Return final list of section paths for `wave` under `stack`.
 
     Combines the wave's stack-agnostic `relevant_section_paths` with
-    framework_specific paths derived from `relevant_concepts` via
+    recon_bags paths derived from `relevant_concepts` via
     CONCEPT_RESOLVERS. Order is preserved; duplicates are dropped.
     """
     out: list[str] = []
@@ -417,7 +417,7 @@ def lookup_kind_for_file(file_path: str, ctx: ParsedContext) -> Optional[str]:
     """Find `kind` of an attack-surface item by file path.
 
     Resolution: scan ctx.sections["attack_surface"]["items"] (canonical), then
-    framework_specific.<stack>.* sections that carry items with `kind`.
+    recon_bags.<kind>.<name>.<bag_key> sections that carry items with `kind`.
     Returns the first match's `kind` or None.
 
     `file_path` is normalized through `_normalize_path` before comparison
@@ -435,23 +435,26 @@ def lookup_kind_for_file(file_path: str, ctx: ParsedContext) -> Optional[str]:
                 k = item.get("kind")
                 if isinstance(k, str) and k:
                     return k
-    # framework_specific.<stack>.<section> may also carry items with `kind`.
-    fw_root = ctx.sections.get("framework_specific")
+    # recon_bags.<kind>.<name>.<bag_key> may also carry items with `kind`.
+    fw_root = ctx.sections.get("recon_bags")
     if isinstance(fw_root, dict):
-        for stack_payload in fw_root.values():
-            if not isinstance(stack_payload, dict):
+        for kind_payload in fw_root.values():          # level 1: kind {stack,addon,integration}
+            if not isinstance(kind_payload, dict):
                 continue
-            for sec_payload in stack_payload.values():
-                if not isinstance(sec_payload, dict):
+            for name_payload in kind_payload.values():  # level 2: name {symfony, easyadmin, ...}
+                if not isinstance(name_payload, dict):
                     continue
-                for item in sec_payload.get("items") or []:
-                    if not isinstance(item, dict):
+                for bag_payload in name_payload.values():  # level 3: bag_key {voters, forms, ...}
+                    if not isinstance(bag_payload, dict):
                         continue
-                    f = _item_file(item, stack=stack)
-                    if f and _normalize_path(f) == target:
-                        k = item.get("kind")
-                        if isinstance(k, str) and k:
-                            return k
+                    for item in bag_payload.get("items") or []:
+                        if not isinstance(item, dict):
+                            continue
+                        f = _item_file(item, stack=stack)
+                        if f and _normalize_path(f) == target:
+                            k = item.get("kind")
+                            if isinstance(k, str) and k:
+                                return k
     return None
 
 
@@ -491,7 +494,7 @@ def _is_tests_path(path: str) -> bool:
 @dataclass
 class ParsedContext:
     frontmatter: dict[str, Any]
-    # For top-level sections (anchor → fenced yaml dict). framework_specific is
+    # For top-level sections (anchor → fenced yaml dict). recon_bags is
     # stored under its anchor; nested dot-notation paths are resolved on demand.
     sections: dict[str, dict[str, Any]]
 
@@ -551,7 +554,7 @@ class ParsedContext:
         """Resolve dot-notation path → payload dict.
 
         "attack_surface"                     → top-level core section payload.
-        "framework_specific.symfony.voters"  → nested key under framework_specific.
+        "recon_bags.stack.symfony.voters"  → nested key under recon_bags.
         Returns None when the path doesn't resolve to a dict.
         """
         parts = path.split(".")

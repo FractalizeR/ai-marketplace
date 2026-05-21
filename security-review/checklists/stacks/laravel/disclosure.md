@@ -65,9 +65,9 @@
 - **Mail rendering token** — Notification template Blade renders `{{ $token }}` for password reset, but `$token` also lands in the success response (`{'sent_to': 'a@b.com', 'reset_token': '...'}`) — debug helper, forgotten in prod.
 - **OAuth client secret in response** — `Passport::client()->create(...)` returns a model with a `secret` column (plaintext). If the controller does `return response()->json($client)` — leak of client_secret to the client. Sanctum/Passport hash on store but return plaintext once; a repeated leak is unacceptable.
 
-## Octane log context bleed (gate: `framework_specific.laravel.runtime.octane=true`)
+## Octane log context bleed (gate: `recon_bags.stack.laravel.runtime.octane=true`)
 
-> **Apply only if** `framework_specific.laravel.runtime.octane == true`. Otherwise skip the entire section (graceful fallback).
+> **Apply only if** `recon_bags.stack.laravel.runtime.octane == true`. Otherwise skip the entire section (graceful fallback).
 
 - **`Log::context(['tenant_id' => $tenantId])`** — context is statically attached to the channel → accumulates between requests → log entries of a foreign tenant land in the context of another. Especially critical with centralized log aggregation (ELK/Loki), where tenant_id is used for access control in Kibana.
 - **`Log::shareContext(['user' => $user])`** without an explicit `Log::flushSharedContext()` in request middleware — shared context survives the request boundary.
