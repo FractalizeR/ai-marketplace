@@ -160,7 +160,7 @@ class DvwaInventoryRecall(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_forms_section_records_csrf_and_allow_extra_fields_flags(self):
-        payload = _section_payload(self.text, "framework_specific.symfony.forms")
+        payload = _section_payload(self.text, "recon_bags.stack.symfony.forms")
         self.assertIsNotNone(payload, "forms section missing")
         forms = {it["class"]: it for it in payload["items"]}
         self.assertIn("App\\Form\\UserType", forms)
@@ -178,7 +178,7 @@ class DvwaInventoryRecall(unittest.TestCase):
 
     def test_easyadmin_crud_controllers_includes_both_admin_classes(self):
         payload = _section_payload(self.text,
-                                   "framework_specific.symfony.easyadmin_crud_controllers")
+                                   "recon_bags.addon.easyadmin.crud_controllers")
         self.assertIsNotNone(payload)
         classes = {it["class"] for it in payload["items"]}
         self.assertIn("App\\Controller\\Admin\\UserCrudController", classes)
@@ -190,7 +190,7 @@ class DvwaInventoryRecall(unittest.TestCase):
         TextField with no modifiers (worker matches `name` against the
         sensitive-name regex, then checks `modifiers`)."""
         payload = _section_payload(self.text,
-                                   "framework_specific.symfony.easyadmin_crud_controllers")
+                                   "recon_bags.addon.easyadmin.crud_controllers")
         user_crud = next(it for it in payload["items"]
                          if it["class"].endswith("UserCrudController"))
         fields = {f["name"]: f for f in user_crud["configure_fields"]}
@@ -202,7 +202,7 @@ class DvwaInventoryRecall(unittest.TestCase):
         """DVWA-12 trigger — UserCrudController has no UserVoter (only OrderVoter
         exists), so admin_authz_coverage must classify it as without_voter."""
         payload = _section_payload(self.text,
-                                   "framework_specific.symfony.admin_authz_coverage")
+                                   "recon_bags.stack.symfony.admin_authz_coverage")
         self.assertIsNotNone(payload)
         self.assertEqual(payload["status"], "partial")
         self.assertIn("UserCrudController", payload["data"]["crud_controllers_without_voter"])
@@ -214,7 +214,7 @@ class DvwaInventoryRecall(unittest.TestCase):
 
     def test_twig_overrides_records_global_autoescape_off(self):
         payload = _section_payload(self.text,
-                                   "framework_specific.symfony.twig_overrides")
+                                   "recon_bags.stack.symfony.twig_overrides")
         self.assertIsNotNone(payload)
         # twig_overrides is a scalar section — `data` is its keyed payload.
         data = payload.get("data", {})
@@ -231,7 +231,7 @@ class DvwaInventoryRecall(unittest.TestCase):
 
     def test_messenger_transports_records_native_php_serializer(self):
         payload = _section_payload(self.text,
-                                   "framework_specific.symfony.messenger_transports")
+                                   "recon_bags.stack.symfony.messenger_transports")
         self.assertIsNotNone(payload)
         data = payload.get("data", {})
         transports = data.get("transports") or []

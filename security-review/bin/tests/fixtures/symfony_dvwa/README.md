@@ -46,9 +46,9 @@ golden_findings.yaml                     # 15 expected findings with sink_kind /
 - `serialization` catches `unserialize($_COOKIE)` (DVWA-07);
 - `file_operations` catches `file_get_contents` (DVWA-05);
 - `http_clients` catches `HttpClientInterface` / `HttpClient::create` (DVWA-services pivot);
-- `framework_specific.symfony.forms` contains `UserType` with `csrf_protection: false`, `allow_extra_fields: true` (DVWA-08, DVWA-09);
-- `framework_specific.symfony.easyadmin_crud_controllers` contains the User + Order CrudControllers;
-- `framework_specific.symfony.admin_authz_coverage.crud_controllers_without_voter` includes `UserCrudController` (DVWA-12 trigger).
+- `recon_bags.stack.symfony.forms` contains `UserType` with `csrf_protection: false`, `allow_extra_fields: true` (DVWA-08, DVWA-09);
+- `recon_bags.addon.easyadmin.crud_controllers` contains the User + Order CrudControllers;
+- `recon_bags.stack.symfony.admin_authz_coverage.crud_controllers_without_voter` includes `UserCrudController` (DVWA-12 trigger).
 
 ### Worker recall (manual)
 

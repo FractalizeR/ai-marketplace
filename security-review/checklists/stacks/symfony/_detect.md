@@ -17,11 +17,11 @@ stack:
 
 `plan_waves.resolve_checklists(themes, ctx, plugin_root)` (where `ctx.stack == "symfony"`) then adds to each theme the file `stacks/symfony/{theme}.md`, if it exists.
 
-## What lands in the `framework_specific.symfony` bag
+## What lands in the `recon_bags.stack.symfony` bag
 
 The recipe fills in (or marks `status: unknown` with reason) the keys: `voters` (classes `extends Voter`/`extends VoterInterface` and their attributes); `forms` (classes `extends AbstractType` with `data_class`, `csrf_protection`, `allow_extra_fields`); `serializer_groups` (classes with `#[Groups]` attributes; JMS XML/YAML — known limitation of static parsing); `twig_overrides` (global `autoescape` settings and counter of `|raw` filter usages); `doctrine_listeners` (kernel/doctrine event subscribers); `firewalls` (`config/packages/security.yaml`: firewalls + access_control rules); `messenger_transports` (`config/packages/messenger.yaml` or `framework.yaml`: transports + retry strategy).
 
-See `bin/recon/recipes/symfony.py::FRAMEWORK_SPECIFIC_SCHEMA` for the exact shape.
+See `bin/recon/recipes/symfony.py::RECON_BAGS_SCHEMA` for the exact shape.
 
 ## What "framework: none/unknown" means
 

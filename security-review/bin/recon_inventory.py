@@ -136,26 +136,41 @@ def _section_md(section_id: str, payload: SectionPayload) -> str:
     )
 
 
-def _framework_specific_md(framework: str, fs_payloads: dict[str, SectionPayload]) -> str:
-    """Emit framework_specific bag as one section with `<framework>: { keys }` shape.
+def _recon_bags_md(
+    recon_bags: dict[str, dict[str, dict[str, SectionPayload]]],
+) -> str:
+    """Emit recon_bags section as `{kind: {name: {bag_key: payload}}}` shape.
 
     Pending bag-keys carry their own enrichment_marker so recon-agent can Edit
-    each independently.
+    each independently. Empty `kind` / `name` levels are dropped (no point
+    emitting `addon: {}` when no addons are present).
     """
-    if not fs_payloads:
-        return ""
+    # Drop empty levels.
+    nested: dict = {}
     markers = []
-    nested: dict = {framework: {}}
-    for k, payload in fs_payloads.items():
-        nested[framework][k] = _payload_to_dict(payload)
-        if payload.status == "pending_enrichment":
-            scope = f"framework_specific.{framework}.{k}"
-            markers.append(f"<!-- enrichment_marker: {_enrichment_marker(scope)} -->")
+    for kind, names in recon_bags.items():
+        if not names:
+            continue
+        per_kind: dict = {}
+        for name, bag_keys in names.items():
+            if not bag_keys:
+                continue
+            per_key: dict = {}
+            for k, payload in bag_keys.items():
+                per_key[k] = _payload_to_dict(payload)
+                if payload.status == "pending_enrichment":
+                    scope = f"recon_bags.{kind}.{name}.{k}"
+                    markers.append(f"<!-- enrichment_marker: {_enrichment_marker(scope)} -->")
+            per_kind[name] = per_key
+        if per_kind:
+            nested[kind] = per_kind
+    if not nested:
+        return ""
     yaml_text = dump_yaml_subset(nested)
     marker_block = ("\n".join(markers) + "\n") if markers else ""
     return (
-        f"## Framework Specific\n"
-        f"<!-- section_id: framework_specific -->\n"
+        f"## Recon Bags\n"
+        f"<!-- section_id: recon_bags -->\n"
         f"{marker_block}\n"
         f"```yaml\n{yaml_text}```\n\n"
     )
@@ -208,22 +223,39 @@ def _git_rev(project_root: Path) -> tuple[str, Optional[str]]:
         return "unknown", f"git_rev_unavailable: {e}"
 
 
-def _stack_block(recipe, project_root: Path) -> dict:
+def _stack_block(
+    recipe,
+    project_root: Path,
+    *,
+    detected_addons: Optional[list[str]] = None,
+) -> dict:
+    """Build the `stack:` frontmatter block.
+
+    `detected_addons` (Stage 1+): sorted, unique addon names from the recipe's
+    InventoryResult. Emitted as `stack.addons` so plan_waves' 5-layer
+    resolver loads addon checklists. Omitted from the dict when the list is
+    empty — keeps frontmatter clean for projects with no addons.
+    """
     match: Optional[StackMatch] = recipe.detect(project_root)
     framework = "none" if recipe.RECIPE_NAME == "generic_php" else recipe.RECIPE_NAME
+    addons = sorted(set(detected_addons or []))
     if match is None:
-        return {
+        block: dict = {
             "language": getattr(recipe, "LANGUAGE", "unknown"),
             "framework": "unknown",
             "framework_version": None,
             "detected_via": "none",
         }
-    return {
-        "language": getattr(recipe, "LANGUAGE", "unknown"),
-        "framework": framework,
-        "framework_version": match.version,
-        "detected_via": ", ".join(match.evidence) if match.evidence else "heuristic",
-    }
+    else:
+        block = {
+            "language": getattr(recipe, "LANGUAGE", "unknown"),
+            "framework": framework,
+            "framework_version": match.version,
+            "detected_via": ", ".join(match.evidence) if match.evidence else "heuristic",
+        }
+    if addons:
+        block["addons"] = addons
+    return block
 
 
 def _tool_versions(project_root: Path) -> dict:
@@ -395,7 +427,9 @@ def cmd_inventory(
         "project_fingerprint": pf,
         "code_fingerprint": cf,
         "scope": "changes" if diff_files is not None else "project",
-        "stack": _stack_block(recipe, project_root),
+        "stack": _stack_block(
+            recipe, project_root, detected_addons=result.detected_addons,
+        ),
         "recipe_used": recipe.RECIPE_NAME,
         "tool_versions": _tool_versions(project_root),
         "sources_used": sources_used_dedup,
@@ -408,9 +442,7 @@ def cmd_inventory(
     body_parts = []
     for sid, payload in result.core.items():
         body_parts.append(_section_md(sid, payload))
-    body_parts.append(
-        _framework_specific_md(recipe.RECIPE_NAME, result.framework_specific)
-    )
+    body_parts.append(_recon_bags_md(result.recon_bags))
 
     ensure_review_root(review_root)
     out = _write_context_atomic(review_root, frontmatter, "".join(body_parts))

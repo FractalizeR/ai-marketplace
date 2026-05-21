@@ -4,8 +4,8 @@
 Validations:
   1. Frontmatter — required keys, types, schema_version=2.
   2. Sections — every required core section present with anchor; valid status
-     and shape (list or scalar). framework_specific bag validated against
-     `FRAMEWORK_SPECIFIC_SCHEMA` of the recipe in `recipe_used`.
+     and shape (list or scalar). recon_bags bag validated against
+     `RECON_BAGS_SCHEMA` of the recipe in `recipe_used`.
   3. Sanity probes — recipe-driven (probes from recipe.sanity_probes()):
      - Hallucination: declared files that don't exist on disk.
      - Coverage diff ladder (rev 3.5):
@@ -303,7 +303,7 @@ V2_SCHEMA_REVISION_MAX = 99
 
 # 3.4.0 transitional allowlist — emptied in Wave 2.5 once symfony + laravel
 # recipes declared `routes_authz_matrix`, `sensitive_columns`, `runtime` in
-# their FRAMEWORK_SPECIFIC_SCHEMA. Kept as an empty set so callers may add
+# their RECON_BAGS_SCHEMA. Kept as an empty set so callers may add
 # future transitional keys without re-introducing the constant.
 FUTURE_FRAMEWORK_KEYS_3_4: frozenset[str] = frozenset()
 
@@ -555,105 +555,155 @@ def _validate_core_sections(text: str, res: ValidationResult) -> None:
         _validate_payload_shape(section_id, expected_type, payload, res)
 
 
-def _validate_framework_specific(
+def _validate_recon_bags(
     text: str, fm: dict, res: ValidationResult,
     recipe_loader=None,
 ) -> None:
+    """Validate the recon_bags section against the recipe's 3-level schema.
+
+    Expected shape on disk:
+        recon_bags:
+          stack:
+            <stack_name>:                 # e.g. symfony, laravel
+              <bag_key>: SectionPayload
+          addon:
+            <addon_name>:                 # e.g. easyadmin, sonata
+              <bag_key>: SectionPayload
+          integration:
+            <integration_name>:           # placeholder for Stage 4+
+              <bag_key>: SectionPayload
+
+    The recipe's RECON_BAGS_SCHEMA must mirror this shape exactly:
+        {kind: {name: {bag_key: SectionSpec}}}
+
+    Unknown kinds / names / keys → error (closed schema). Missing
+    required keys → error.
+    """
     sections = extract_sections(text)
-    fs = sections.get("framework_specific")
+    fs = sections.get("recon_bags")
     if fs is None:
-        # Allowed when recipe has no FRAMEWORK_SPECIFIC_SCHEMA (e.g. generic_php).
+        # Allowed when recipe has no RECON_BAGS_SCHEMA (e.g. generic_php).
         return
     payload = _section_payload(fs.body)
     if payload is None:
-        res.errors.append("Section 'framework_specific': cannot parse fenced yaml block")
+        res.errors.append("Section 'recon_bags': cannot parse fenced yaml block")
         return
     recipe_used = fm.get("recipe_used")
     if not isinstance(recipe_used, str) or recipe_used in (None, "", "none"):
-        res.warnings.append("framework_specific present but no recipe_used in frontmatter; skipping bag validation")
-        return
-    if recipe_used not in payload:
-        res.errors.append(f"framework_specific bag missing key for recipe '{recipe_used}'")
-        return
-    bag = payload[recipe_used]
-    if not isinstance(bag, dict):
-        res.errors.append(f"framework_specific.{recipe_used} must be a mapping")
+        res.warnings.append("recon_bags present but no recipe_used in frontmatter; skipping bag validation")
         return
     schema, schema_err = _load_recipe_schema(recipe_used, recipe_loader)
     if schema is None:
         detail = f": {schema_err}" if schema_err else ""
-        res.warnings.append(f"could not load FRAMEWORK_SPECIFIC_SCHEMA for recipe '{recipe_used}'{detail}")
+        res.warnings.append(f"could not load RECON_BAGS_SCHEMA for recipe '{recipe_used}'{detail}")
         return
-    # L9: defensive — bag key clash with core section_id is almost certainly an
-    # author error in the recipe (FS keys live under `framework_specific.<recipe>`
-    # so dot-notation never collides, but the flat key shouldn't shadow either).
-    overlap = set(schema.keys()) & set(CORE_SECTIONS_V2.keys())
-    if overlap:
+    if not isinstance(schema, dict):
         res.warnings.append(
-            f"recipe '{recipe_used}' FRAMEWORK_SPECIFIC_SCHEMA keys overlap with core sections: "
-            f"{sorted(overlap)} (rename to avoid confusion)"
+            f"RECON_BAGS_SCHEMA for recipe '{recipe_used}' is not a mapping; skipping bag validation"
         )
-    # H5: closed schema. Unknown bag keys → error (prevents silent typos like
-    # `voterz` losing the section). Required keys missing → error too.
-    declared = set(bag.keys())
-    for key, spec in schema.items():
-        if spec.required and key not in declared:
-            res.errors.append(
-                f"framework_specific.{recipe_used}.{key} required by recipe schema but missing"
+        return
+
+    # Allowed kinds and which kinds the schema declares.
+    allowed_kinds = {"stack", "addon", "integration"}
+    schema_kinds = set(schema.keys())
+    unknown_schema_kinds = schema_kinds - allowed_kinds
+    if unknown_schema_kinds:
+        res.warnings.append(
+            f"recipe '{recipe_used}' RECON_BAGS_SCHEMA declares unknown kinds "
+            f"{sorted(unknown_schema_kinds)} (allowed: {sorted(allowed_kinds)})"
+        )
+
+    # 1. Required keys present (walk schema).
+    for kind, names in schema.items():
+        if not isinstance(names, dict):
+            continue
+        for name, bag_keys in names.items():
+            if not isinstance(bag_keys, dict):
+                continue
+            payload_bag = (
+                payload.get(kind, {}).get(name, {})
+                if isinstance(payload.get(kind), dict) else {}
             )
-    for key, sub_payload in bag.items():
-        if key not in schema:
-            # 3.4.0 transitional: keys in FUTURE_FRAMEWORK_KEYS_3_4 are
-            # documented but not yet declared by every recipe. Demote
-            # error → warning so a 3.4.0-emitted CONTEXT.md doesn't fail
-            # against a 3.3.0 recipe schema. Remove this allowlist branch
-            # once Wave 2 lands and all recipes declare these keys.
-            if key in FUTURE_FRAMEWORK_KEYS_3_4:
-                res.warnings.append(
-                    f"framework_specific.{recipe_used}.{key} is not declared in "
-                    f"recipe schema yet (transitional 3.4.0 allowlist; recipe "
-                    f"will declare it in Wave 2)"
+            if not isinstance(payload_bag, dict):
+                payload_bag = {}
+            for key, spec in bag_keys.items():
+                if spec.required and key not in payload_bag:
+                    res.errors.append(
+                        f"recon_bags.{kind}.{name}.{key} required by recipe schema but missing"
+                    )
+
+    # 2. Walk emitted payload, validate each leaf against the schema.
+    for kind, names in payload.items():
+        if kind not in allowed_kinds:
+            res.errors.append(
+                f"recon_bags.{kind} is not an allowed kind "
+                f"(allowed: {sorted(allowed_kinds)})"
+            )
+            continue
+        if not isinstance(names, dict):
+            res.errors.append(f"recon_bags.{kind} must be a mapping")
+            continue
+        schema_for_kind = schema.get(kind, {}) if isinstance(schema.get(kind), dict) else {}
+        for name, bag in names.items():
+            if name not in schema_for_kind:
+                res.errors.append(
+                    f"recon_bags.{kind}.{name} is not declared in recipe schema "
+                    f"(allowed: {sorted(schema_for_kind.keys())})"
                 )
                 continue
-            res.errors.append(
-                f"framework_specific.{recipe_used}.{key} is not declared in recipe schema "
-                f"(allowed keys: {sorted(schema.keys())})"
-            )
-            continue
-        spec = schema[key]
-        if not isinstance(sub_payload, dict):
-            res.errors.append(f"framework_specific.{recipe_used}.{key} must be a mapping")
-            continue
-        expected_shape = SECTION_TYPE_LIST if spec.shape == "list" else SECTION_TYPE_SCALAR
-        section_label = f"framework_specific.{recipe_used}.{key}"
-        _validate_payload_shape(section_label, expected_shape, sub_payload, res)
-        # Per-item / per-data key validation when status=ok.
-        if sub_payload.get("status") == "ok":
-            if spec.shape == "list" and spec.item_keys is not None:
-                items = sub_payload.get("items", [])
-                if isinstance(items, list):
-                    for idx, item in enumerate(items):
-                        if not isinstance(item, dict):
-                            continue
-                        unknown = set(item.keys()) - spec.item_keys
-                        if unknown:
-                            res.warnings.append(
-                                f"{section_label}.items[{idx}]: unknown keys {sorted(unknown)} "
-                                f"(allowed: {sorted(spec.item_keys)})"
-                            )
-            elif spec.shape == "scalar" and spec.data_keys is not None:
-                data = sub_payload.get("data", {})
-                if isinstance(data, dict):
-                    unknown = set(data.keys()) - spec.data_keys
-                    if unknown:
+            if not isinstance(bag, dict):
+                res.errors.append(f"recon_bags.{kind}.{name} must be a mapping")
+                continue
+            bag_schema = schema_for_kind[name]
+            if not isinstance(bag_schema, dict):
+                continue
+            for key, sub_payload in bag.items():
+                if key not in bag_schema:
+                    if key in FUTURE_FRAMEWORK_KEYS_3_4:
                         res.warnings.append(
-                            f"{section_label}.data: unknown keys {sorted(unknown)} "
-                            f"(allowed: {sorted(spec.data_keys)})"
+                            f"recon_bags.{kind}.{name}.{key} is not declared in "
+                            f"recipe schema yet (transitional 3.4.0 allowlist)"
                         )
+                        continue
+                    res.errors.append(
+                        f"recon_bags.{kind}.{name}.{key} is not declared in recipe schema "
+                        f"(allowed keys: {sorted(bag_schema.keys())})"
+                    )
+                    continue
+                spec = bag_schema[key]
+                if not isinstance(sub_payload, dict):
+                    res.errors.append(f"recon_bags.{kind}.{name}.{key} must be a mapping")
+                    continue
+                expected_shape = SECTION_TYPE_LIST if spec.shape == "list" else SECTION_TYPE_SCALAR
+                section_label = f"recon_bags.{kind}.{name}.{key}"
+                _validate_payload_shape(section_label, expected_shape, sub_payload, res)
+                # Per-item / per-data key validation when status=ok.
+                if sub_payload.get("status") == "ok":
+                    if spec.shape == "list" and spec.item_keys is not None:
+                        items = sub_payload.get("items", [])
+                        if isinstance(items, list):
+                            for idx, item in enumerate(items):
+                                if not isinstance(item, dict):
+                                    continue
+                                unknown = set(item.keys()) - spec.item_keys
+                                if unknown:
+                                    res.warnings.append(
+                                        f"{section_label}.items[{idx}]: unknown keys {sorted(unknown)} "
+                                        f"(allowed: {sorted(spec.item_keys)})"
+                                    )
+                    elif spec.shape == "scalar" and spec.data_keys is not None:
+                        data = sub_payload.get("data", {})
+                        if isinstance(data, dict):
+                            unknown = set(data.keys()) - spec.data_keys
+                            if unknown:
+                                res.warnings.append(
+                                    f"{section_label}.data: unknown keys {sorted(unknown)} "
+                                    f"(allowed: {sorted(spec.data_keys)})"
+                                )
 
 
 def _load_recipe_schema(recipe_used: str, recipe_loader=None):
-    """Return (FRAMEWORK_SPECIFIC_SCHEMA dict | None, error_message | None)."""
+    """Return (RECON_BAGS_SCHEMA dict | None, error_message | None)."""
     try:
         if recipe_loader is not None:
             mod = recipe_loader(recipe_used)
@@ -661,7 +711,7 @@ def _load_recipe_schema(recipe_used: str, recipe_loader=None):
             mod = importlib.import_module(f"recon.recipes.{recipe_used}")
     except (ModuleNotFoundError, ImportError) as e:
         return None, f"import error: {e}"
-    schema = getattr(mod, "FRAMEWORK_SPECIFIC_SCHEMA", None)
+    schema = getattr(mod, "RECON_BAGS_SCHEMA", None)
     return schema, None
 
 
@@ -679,7 +729,7 @@ def _payload_at_path(text: str, section_path: str) -> Optional[dict]:
     """Resolve dot-notation path to a payload dict.
 
     "attack_surface"                      → top-level core section payload.
-    "framework_specific.symfony.voters"  → nested key under framework_specific.
+    "recon_bags.stack.symfony.voters"  → nested key under recon_bags.
     """
     parts = section_path.split(".")
     sections = extract_sections(text)
@@ -903,7 +953,7 @@ def validate_context_file(path: Path, recipe_loader=None) -> ValidationResult:
         return res
     _enforce_ceiling(fm, res)
     _validate_core_sections(text, res)
-    _validate_framework_specific(text, fm, res, recipe_loader=recipe_loader)
+    _validate_recon_bags(text, fm, res, recipe_loader=recipe_loader)
     return res
 
 

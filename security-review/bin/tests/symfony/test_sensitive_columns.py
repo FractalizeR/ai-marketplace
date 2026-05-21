@@ -1,4 +1,4 @@
-"""Wave 2-D (3.4.0) — `framework_specific.symfony.sensitive_columns` emitter.
+"""Wave 2-D (3.4.0) — `recon_bags.stack.symfony.sensitive_columns` emitter.
 
 Pure-Python emitter (no PHP runtime needed) — uses regex-based scanning of
 Doctrine entity files. Tests are NOT skip-gated on `php` availability.
@@ -93,7 +93,7 @@ class SensitiveColumnsSchemaInvariants(unittest.TestCase):
         cls.payload = recipe_symfony._build_sensitive_columns(FIX)
 
     def test_each_item_has_contract_keys(self) -> None:
-        spec = recipe_symfony.FRAMEWORK_SPECIFIC_SCHEMA["sensitive_columns"]
+        spec = recipe_symfony.RECON_BAGS_SCHEMA["stack"]["symfony"]["sensitive_columns"]
         expected = spec.item_keys or frozenset()
         for item in (self.payload.items or []):
             self.assertEqual(

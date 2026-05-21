@@ -3,7 +3,7 @@
 Covers:
   - Frontmatter validation (required keys, schema_version, recon_confidence shapes).
   - Core sections v2 (shape, status, required-presence).
-  - framework_specific bag validation against recipe FRAMEWORK_SPECIFIC_SCHEMA.
+  - recon_bags bag validation against recipe RECON_BAGS_SCHEMA.
   - Recipe-driven sanity probes (coverage diff ladder, hallucination check).
   - Ceiling enforcement (level cannot exceed ceiling).
   - CLI: --review-root contract.
@@ -337,18 +337,23 @@ class CoreSectionsV2(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# framework_specific bag validation.
+# recon_bags bag validation.
 # ---------------------------------------------------------------------------
 
 
 class FrameworkSpecificBag(unittest.TestCase):
+    """Validation tests for the Stage-1 3-level recon_bags shape.
+
+    Shape: `recon_bags.{kind: stack|addon|integration}.{name}.{bag_key}: payload`.
+    """
+
     def test_unknown_bag_key_errors(self):
         # H5: unknown keys are now errors (closed schema), not warnings.
         # Bag missing all required keys → also errors.
         body = all_core_sections_pending()
         body += (
-            "## Framework Specific\n<!-- section_id: framework_specific -->\n\n"
-            "```yaml\nsymfony:\n  unknown_bag_key:\n    status: ok\n    items: []\n```\n\n"
+            "## Recon Bags\n<!-- section_id: recon_bags -->\n\n"
+            "```yaml\nstack:\n  symfony:\n    unknown_bag_key:\n      status: ok\n      items: []\n```\n\n"
         )
         with tempfile.TemporaryDirectory() as td:
             p = write_context(Path(td), VALID_FRONTMATTER_V2, body)
@@ -361,11 +366,11 @@ class FrameworkSpecificBag(unittest.TestCase):
 
     def test_required_bag_key_missing_errors(self):
         body = all_core_sections_pending()
-        # symfony FRAMEWORK_SPECIFIC_SCHEMA requires voters, forms, etc.
+        # symfony RECON_BAGS_SCHEMA["stack"]["symfony"] requires voters, forms, etc.
         # Provide only `voters` → others missing.
         body += (
-            "## Framework Specific\n<!-- section_id: framework_specific -->\n\n"
-            "```yaml\nsymfony:\n  voters:\n    status: ok\n    items: []\n```\n\n"
+            "## Recon Bags\n<!-- section_id: recon_bags -->\n\n"
+            "```yaml\nstack:\n  symfony:\n    voters:\n      status: ok\n      items: []\n```\n\n"
         )
         with tempfile.TemporaryDirectory() as td:
             p = write_context(Path(td), VALID_FRONTMATTER_V2, body)
@@ -382,18 +387,18 @@ class FrameworkSpecificBag(unittest.TestCase):
         body = all_core_sections_pending()
         # Build body with all required symfony bag keys present, voters items
         # contain an unknown 'extra_field' key.
-        bag = "symfony:\n"
+        bag = "stack:\n  symfony:\n"
         for k in ("voters", "forms", "serializer_groups", "doctrine_listeners"):
-            bag += f"  {k}:\n    status: pending_enrichment\n    enrichment_hint: \"x\"\n    items: []\n"
+            bag += f"    {k}:\n      status: pending_enrichment\n      enrichment_hint: \"x\"\n      items: []\n"
         for k in ("twig_overrides", "firewalls", "messenger_transports"):
-            bag += f"  {k}:\n    status: pending_enrichment\n    enrichment_hint: \"x\"\n    source_files: []\n"
+            bag += f"    {k}:\n      status: pending_enrichment\n      enrichment_hint: \"x\"\n      source_files: []\n"
         # Override voters with status=ok + items having unknown key.
         bag = bag.replace(
-            "voters:\n    status: pending_enrichment\n    enrichment_hint: \"x\"\n    items: []",
-            "voters:\n    status: ok\n    items:\n      - class: X\n        file: src/X.php\n        attributes: []\n        extra_field: nope",
+            "voters:\n      status: pending_enrichment\n      enrichment_hint: \"x\"\n      items: []",
+            "voters:\n      status: ok\n      items:\n        - class: X\n          file: src/X.php\n          attributes: []\n          extra_field: nope",
         )
         body += (
-            "## Framework Specific\n<!-- section_id: framework_specific -->\n\n"
+            "## Recon Bags\n<!-- section_id: recon_bags -->\n\n"
             f"```yaml\n{bag}```\n\n"
         )
         with tempfile.TemporaryDirectory() as td:
@@ -404,24 +409,29 @@ class FrameworkSpecificBag(unittest.TestCase):
                 msg=f"warnings: {res.warnings}",
             )
 
-    def test_missing_recipe_key_in_bag_errors(self):
+    def test_unknown_stack_name_errors(self):
+        # `recipe_used` is symfony but bag is under `stack.laravel` — laravel
+        # isn't declared in symfony's RECON_BAGS_SCHEMA, so it's an error.
         body = all_core_sections_pending()
         body += (
-            "## Framework Specific\n<!-- section_id: framework_specific -->\n\n"
-            "```yaml\nlaravel:\n  policies:\n    status: ok\n    items: []\n```\n\n"
+            "## Recon Bags\n<!-- section_id: recon_bags -->\n\n"
+            "```yaml\nstack:\n  laravel:\n    policies:\n      status: ok\n      items: []\n```\n\n"
         )
         with tempfile.TemporaryDirectory() as td:
             p = write_context(Path(td), VALID_FRONTMATTER_V2, body)
             res = vc.validate_context_file(p)
             self.assertFalse(res.ok())
-            self.assertTrue(any("missing key for recipe 'symfony'" in e for e in res.errors))
+            self.assertTrue(
+                any("stack.laravel" in e and "not declared" in e for e in res.errors),
+                msg=f"errors: {res.errors}",
+            )
 
     def test_known_bag_key_validated_for_shape(self):
         # voters is list-shape; status=ok without items is invalid.
         body = all_core_sections_pending()
         body += (
-            "## Framework Specific\n<!-- section_id: framework_specific -->\n\n"
-            "```yaml\nsymfony:\n  voters:\n    status: ok\n```\n\n"
+            "## Recon Bags\n<!-- section_id: recon_bags -->\n\n"
+            "```yaml\nstack:\n  symfony:\n    voters:\n      status: ok\n```\n\n"
         )
         with tempfile.TemporaryDirectory() as td:
             p = write_context(Path(td), VALID_FRONTMATTER_V2, body)
@@ -454,7 +464,7 @@ class SanityProbesIntegration(unittest.TestCase):
         # Synthesize a CONTEXT.md with status=ok matching all glob targets:
         # symfony recipe sanity probes look for *Controller.php (http_route),
         # *Handler.php (message_handler), *Repository.php (data_access),
-        # *Voter*.php (framework_specific.symfony.voters),
+        # *Voter*.php (recon_bags.stack.symfony.voters),
         # *Listener.php / *Subscriber.php (event_listener).
         attack_surface_decls = [
             ("http_route", "src/Controller/PostController.php"),
@@ -486,8 +496,8 @@ class SanityProbesIntegration(unittest.TestCase):
                 f"```yaml\nstatus: unknown\nreason: \"S1 stub\"\n```\n\n"
             )
         body += (
-            "## Framework Specific\n<!-- section_id: framework_specific -->\n\n"
-            "```yaml\nsymfony:\n  voters:\n    status: ok\n    items:\n      - file: src/Security/Voter/PostVoter.php\n```\n\n"
+            "## Recon Bags\n<!-- section_id: recon_bags -->\n\n"
+            "```yaml\nstack:\n  symfony:\n    voters:\n      status: ok\n      items:\n        - file: src/Security/Voter/PostVoter.php\n```\n\n"
         )
         with tempfile.TemporaryDirectory() as td:
             review_root = Path(td) / "review"
@@ -830,7 +840,7 @@ class CapabilityFlagsTests(unittest.TestCase):
 
 
 class ClosedSchemaUnknownKeysTests(unittest.TestCase):
-    """Closed-schema invariant: unknown framework_specific bag keys → error.
+    """Closed-schema invariant: unknown recon_bags bag keys → error.
 
     Wave 2.5 removed the 3.4.0 transitional allowlist (FUTURE_FRAMEWORK_KEYS_3_4)
     after symfony + laravel recipes declared `routes_authz_matrix`,
@@ -841,8 +851,8 @@ class ClosedSchemaUnknownKeysTests(unittest.TestCase):
     def test_unknown_non_future_key_still_errors(self):
         body = all_core_sections_pending()
         body += (
-            "## Framework Specific\n<!-- section_id: framework_specific -->\n\n"
-            "```yaml\nsymfony:\n  voterz:\n    status: ok\n    items: []\n```\n\n"
+            "## Recon Bags\n<!-- section_id: recon_bags -->\n\n"
+            "```yaml\nstack:\n  symfony:\n    voterz:\n      status: ok\n      items: []\n```\n\n"
         )
         with tempfile.TemporaryDirectory() as td:
             p = write_context(Path(td), VALID_FRONTMATTER_V2, body)

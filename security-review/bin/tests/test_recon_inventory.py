@@ -200,11 +200,11 @@ class Inventory(unittest.TestCase):
                 "attack_surface", "data_access", "auth_layer", "authz_usage",
                 "output_renderers", "serialization", "file_operations",
                 "http_clients", "secrets", "fintech_markers", "frontend_assets",
-                "framework_specific",
+                "recon_bags",
             ):
                 self.assertIn(f"<!-- section_id: {sid} -->", text, f"missing anchor {sid}")
 
-    def test_framework_specific_omitted_for_generic_php(self):
+    def test_recon_bags_omitted_for_generic_php(self):
         with tempfile.TemporaryDirectory() as td:
             review_root = Path(td) / "review"
             _run_cli(
@@ -212,7 +212,7 @@ class Inventory(unittest.TestCase):
                 "--review-root", str(review_root), "--no-console",
             )
             text = (review_root / "CONTEXT.md").read_text()
-            self.assertNotIn("<!-- section_id: framework_specific -->", text)
+            self.assertNotIn("<!-- section_id: recon_bags -->", text)
 
     def test_unknown_recipe_exits_2(self):
         with tempfile.TemporaryDirectory() as td:

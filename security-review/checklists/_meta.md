@@ -140,7 +140,7 @@ Floor rules may live in any layer — wherever they are most specific. If a patt
 
 ## Cross-theme duplication (admin-CRUD)
 
-The checklists `stacks/symfony/auth.md` AND `stacks/symfony/data-access.md` both contain a section on admin-bundle CRUD (EasyAdmin/Sonata) — intentionally. A worker running in W1 (auth) and W2 (injection/data-access) gets admin context both times. This is the only sanctioned case of duplication between files of the same stack (handled in dedupe via `flag=[CROSS_SINK_MERGE]` for findings on the same line).
+Within `stacks/symfony/addons/{easyadmin,sonata}/`, both `auth.md` and `data-access.md` contain admin-CRUD sections — this is the sanctioned cross-theme duplication for admin-surface findings. A worker running in W1 (auth) and W2 (injection/data-access) gets admin context both times. The dedupe parser handles `[CROSS_SINK_MERGE]` on these collisions (findings on the same line with different `sink_kind`).
 
 ## Cross-theme duplication (GraphQL)
 

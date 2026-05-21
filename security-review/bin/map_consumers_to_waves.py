@@ -7,7 +7,7 @@ services), then asks this CLI for the corresponding wave assignment instead
 of guessing heuristically.
 
 Resolution per consumer file:
-1. Look up the file in CONTEXT.md `attack_surface` (and framework_specific
+1. Look up the file in CONTEXT.md `attack_surface` (and recon_bags
    sub-sections that carry items with `kind`). The first match wins.
 2. Map the resolved `kind` to wave_ids via `plan_waves.consumer_kinds_to_waves()`.
 3. Files not present in any indexed section, or whose `kind` is not covered

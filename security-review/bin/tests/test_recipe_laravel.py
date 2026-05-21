@@ -271,25 +271,25 @@ class BuildInventorySmokeTests(unittest.TestCase):
         self.assertIn("resources/views/welcome.blade.php", files)
         self.assertIn("resources/views/posts/show.blade.php", files)
 
-    def test_framework_specific_policies(self):
-        items = self.result.framework_specific["policies"].items
+    def test_recon_bags_policies(self):
+        items = self.result.recon_bags["stack"]["laravel"]["policies"].items
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["class"], "App\\Policies\\PostPolicy")
         self.assertEqual(items[0]["model"], "Post")
 
-    def test_framework_specific_form_requests(self):
-        items = self.result.framework_specific["form_requests"].items
+    def test_recon_bags_form_requests(self):
+        items = self.result.recon_bags["stack"]["laravel"]["form_requests"].items
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["class"], "App\\Http\\Requests\\UpdatePostRequest")
 
-    def test_framework_specific_service_providers(self):
-        items = self.result.framework_specific["service_providers"].items
+    def test_recon_bags_service_providers(self):
+        items = self.result.recon_bags["stack"]["laravel"]["service_providers"].items
         classes = {i["class"] for i in items}
         self.assertIn("App\\Providers\\AppServiceProvider", classes)
         self.assertIn("App\\Providers\\RouteServiceProvider", classes)
 
-    def test_framework_specific_middleware_groups(self):
-        payload = self.result.framework_specific["middleware_groups"]
+    def test_recon_bags_middleware_groups(self):
+        payload = self.result.recon_bags["stack"]["laravel"]["middleware_groups"]
         self.assertEqual(payload.status, "ok")
         self.assertIn("web", payload.data["groups"])
         self.assertIn("api", payload.data["groups"])
@@ -299,7 +299,7 @@ class BuildInventorySmokeTests(unittest.TestCase):
 
     def test_no_graphql_layer_when_no_lib(self):
         """Fixture has no GraphQL deps — graphql_layer must be absent."""
-        self.assertNotIn("graphql_layer", self.result.framework_specific)
+        self.assertNotIn("graphql_layer", self.result.recon_bags["stack"]["laravel"])
 
     def test_frontend_assets_is_list_shape(self):
         """Schema v2 requires frontend_assets to be a list-section (validate_context.py:275)."""
@@ -650,7 +650,7 @@ class CollectorRegressionTests(unittest.TestCase):
 
 class FrameworkSpecificSchemaTests(unittest.TestCase):
     def test_schema_keys(self):
-        keys = set(laravel.FRAMEWORK_SPECIFIC_SCHEMA.keys())
+        keys = set(laravel.RECON_BAGS_SCHEMA["stack"]["laravel"].keys())
         self.assertEqual(
             keys,
             {"policies", "service_providers", "middleware_groups",
@@ -660,7 +660,7 @@ class FrameworkSpecificSchemaTests(unittest.TestCase):
         )
 
     def test_graphql_layer_optional(self):
-        spec = laravel.FRAMEWORK_SPECIFIC_SCHEMA["graphql_layer"]
+        spec = laravel.RECON_BAGS_SCHEMA["stack"]["laravel"]["graphql_layer"]
         self.assertEqual(spec.shape, "scalar")
         self.assertFalse(spec.required)
 
@@ -678,12 +678,12 @@ class SanityProbesTests(unittest.TestCase):
         # Probe sections must be paths the recipe actually emits.
         emitted_paths = {
             "attack_surface", "data_access",
-            "framework_specific.laravel.policies",
-            "framework_specific.laravel.service_providers",
-            "framework_specific.laravel.form_requests",
+            "recon_bags.stack.laravel.policies",
+            "recon_bags.stack.laravel.service_providers",
+            "recon_bags.stack.laravel.form_requests",
             # 3.4.0 — Wave 2-E:
-            "framework_specific.laravel.routes_authz_matrix",
-            "framework_specific.laravel.sensitive_columns",
+            "recon_bags.stack.laravel.routes_authz_matrix",
+            "recon_bags.stack.laravel.sensitive_columns",
         }
         for probe in probes:
             self.assertIn(probe.section_path, emitted_paths)

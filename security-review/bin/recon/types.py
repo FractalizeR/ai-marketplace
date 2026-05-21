@@ -42,15 +42,29 @@ class SectionPayload:
 
 @dataclass
 class InventoryResult:
-    """Output of recipe.build_inventory()."""
+    """Output of recipe.build_inventory().
+
+    `recon_bags` shape: `{kind: {name: {bag_key: SectionPayload}}}`.
+    `kind` is one of {"stack", "addon", "integration"}. `name` is the
+    stack/addon/integration identifier (e.g. "symfony", "easyadmin").
+    Empty kind / name dicts are allowed and dropped at emit time.
+
+    `detected_addons` (Stage 1+): sorted list of addon names that the recipe
+    confirmed are present in the project (e.g. ["easyadmin", "sonata"]).
+    The utility (`recon_inventory`) propagates this into
+    `frontmatter.stack.addons`, which drives addon-layer checklist
+    resolution in plan_waves. Recipes that have no addon concept return
+    an empty list.
+    """
 
     status: InventoryStatus
     core: dict[str, SectionPayload] = field(default_factory=dict)
-    framework_specific: dict[str, SectionPayload] = field(default_factory=dict)
+    recon_bags: dict[str, dict[str, dict[str, SectionPayload]]] = field(default_factory=dict)
     sources_used: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     missing_sections: list[str] = field(default_factory=list)
+    detected_addons: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -58,7 +72,7 @@ class SanityProbe:
     """One sanity check: glob filesystem and compare to declared section.
 
     section_path supports dot-notation:
-      "attack_surface" or "framework_specific.symfony.voters".
+      "attack_surface" or "recon_bags.stack.symfony.voters".
     kind_filter (optional) filters items by `kind` for attack_surface.
     content_filter (optional) is a regex; when set, only files whose
     text matches are counted as filesystem matches. Used to disambiguate
@@ -84,7 +98,7 @@ class StackMatch:
 
 
 # ---------------------------------------------------------------------------
-# Section shape spec — used by recipe FRAMEWORK_SPECIFIC_SCHEMA.
+# Section shape spec — used by recipe RECON_BAGS_SCHEMA.
 # ---------------------------------------------------------------------------
 
 

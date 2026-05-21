@@ -200,7 +200,7 @@ git diff --diff-filter=D --name-only "${BASE_BRANCH}...HEAD" \
 For each removed file:
 
 1. **Classify kind**: voter / policy / middleware. Source of truth:
-   - **If** `<REVIEW_ROOT>/CONTEXT.md` from the **base branch** exists (for example, a past run saved `CONTEXT.prev.md`) — look at the sections `framework_specific.symfony.voters`, `framework_specific.laravel.policies`, `framework_specific.laravel.middleware_groups` and match the path.
+   - **If** `<REVIEW_ROOT>/CONTEXT.md` from the **base branch** exists (for example, a past run saved `CONTEXT.prev.md`) — look at the sections `recon_bags.stack.symfony.voters`, `recon_bags.stack.laravel.policies`, `recon_bags.stack.laravel.middleware_groups` and match the path.
    - **Otherwise** (CONTEXT base unavailable) — fallback by naming heuristic: `*Voter.php`, `*Policy.php`, `*Middleware.php`. Document in the output that the fallback fired.
 
 2. **Collect consumers** of these classes through the built-in `Grep` tool:
@@ -292,9 +292,9 @@ Stack: <framework>
 Diff touched:
   - attack_surface: <N touched of M total>
   - data_access: <N touched>
-  - authz_usage / framework_specific.<stack>.<authz key>: <touched listing>
+  - authz_usage / recon_bags.stack.<stack>.<authz key>: <touched listing>
   - serialization / file_operations / http_clients: <touched listing>
-  - secrets / fintech_markers / framework_specific.<stack>.* config: <touched|untouched>
+  - secrets / fintech_markers / recon_bags.stack.<stack>.* config: <touched|untouched>
 ```
 
 If `--interactive` — checkpoint as in `security-project`.
@@ -335,7 +335,7 @@ For each changed file that **is a PHP entry point** (controller with route attri
 
 4. **Add FQN to `entry_points_in_scope`** of the corresponding waves. If MCP is available — verify via `mcp__phpstorm__search_symbol`.
 
-**Config files (yaml/xml) — forward-grep is not done.** When centralized configs change (for example `config/packages/security.yaml`, `config/routes/*` for Symfony), the recipe will already set `touched_by_diff: true` on corresponding items of sections (`framework_specific.<stack>.firewalls` / `attack_surface` / `authz_usage` / etc.) during recon. The mode=changes worker will take them from CONTEXT.md by contract and trace data flow from them.
+**Config files (yaml/xml) — forward-grep is not done.** When centralized configs change (for example `config/packages/security.yaml`, `config/routes/*` for Symfony), the recipe will already set `touched_by_diff: true` on corresponding items of sections (`recon_bags.stack.<stack>.firewalls` / `attack_surface` / `authz_usage` / etc.) during recon. The mode=changes worker will take them from CONTEXT.md by contract and trace data flow from them.
 
 **Known limitation (documented in plan):** property injection, service locator, message bus dispatch (`MessageBusInterface` and analogs), chains of services 2+ steps long, `__invoke`, dynamic methods — not covered. For critical reviews `/security-project` in full is recommended.
 
@@ -358,7 +358,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/map_consumers_to_waves.py \
   --consumers-file /tmp/consumers.txt
 ```
 
-The utility reads CONTEXT.md, looks for each consumer in `attack_surface` (and framework_specific.<stack>.* sections with `kind`), maps kind → wave_ids via the static inverse index from WAVES. Output:
+The utility reads CONTEXT.md, looks for each consumer in `attack_surface` (and recon_bags.stack.<stack>.* sections with `kind`), maps kind → wave_ids via the static inverse index from WAVES. Output:
 
 ```json
 {

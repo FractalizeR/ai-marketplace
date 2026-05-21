@@ -136,7 +136,7 @@ class RoundTripStructures(unittest.TestCase):
 
     def test_deeply_nested(self):
         d = {
-            "framework_specific": {
+            "recon_bags": {
                 "symfony": {
                     "voters": {
                         "status": "ok",

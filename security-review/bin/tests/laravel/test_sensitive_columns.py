@@ -1,4 +1,4 @@
-"""Tests for `framework_specific.laravel.sensitive_columns` emitter.
+"""Tests for `recon_bags.stack.laravel.sensitive_columns` emitter.
 
 Coverage:
   * $casts entries with name patterns matching credentials.
@@ -143,7 +143,7 @@ class SensitiveColumnsBuilderTests(unittest.TestCase):
             self.assertEqual(payload.items, [])
 
     def test_item_keys_match_schema(self):
-        spec_keys = laravel.FRAMEWORK_SPECIFIC_SCHEMA["sensitive_columns"].item_keys
+        spec_keys = laravel.RECON_BAGS_SCHEMA["stack"]["laravel"]["sensitive_columns"].item_keys
         for row in self.items:
             self.assertEqual(
                 set(row.keys()), set(spec_keys),

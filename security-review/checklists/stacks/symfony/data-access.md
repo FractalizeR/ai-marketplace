@@ -55,14 +55,14 @@ GraphQL endpoints act as a universal data-access layer: one HTTP request with an
 
 ## Recipe-driven recall (`routes_authz_matrix`)
 
-Wave 1-C added the concept `route_authz_matrix` → the recipe resolves it into `framework_specific.symfony.routes_authz_matrix`. Wave 2-D will actually start emitting this section from the recipe; until then the section may be absent. The checklist must work in both branches — **graceful fallback** to grep when the section is absent.
+Wave 1-C added the concept `route_authz_matrix` → the recipe resolves it into `recon_bags.stack.symfony.routes_authz_matrix`. Wave 2-D will actually start emitting this section from the recipe; until then the section may be absent. The checklist must work in both branches — **graceful fallback** to grep when the section is absent.
 
-**Branch 1 — section is present (`framework_specific.symfony.routes_authz_matrix.status == ok`):**
+**Branch 1 — section is present (`recon_bags.stack.symfony.routes_authz_matrix.status == ok`):**
 
 - Walk `routes_authz_matrix.items[*]` directly. Each item contains at least: `route` (path/name), `methods` (GET/POST/...), `controller`, `authz_evidence` (an array of records like `{kind, source, strength}` where `kind ∈ {is_granted_attribute, deny_unless_granted_call, access_control_yaml, voter_call, none}`, `strength ∈ {hard_deny, soft, missing}`).
 - **For each route with a mutating method (POST/PUT/PATCH/DELETE):**
   - If `authz_evidence` is empty or contains only records with `strength == soft` (e.g., only `IS_AUTHENTICATED_REMEMBERED` without a role check) → worker reports `missing_authz`, **confidence ≥ 8**.
-  - If the route accepts an entity (`#[MapEntity]` / ParamConverter / `$repo->find($request->get('id'))` in the controller body) and `authz_evidence` is empty, **and** the entity lies in `framework_specific.symfony.data_access.items` (or the Doctrine entity bag equivalent) → worker reports `idor_lookup` / `missing_authz`, **confidence ≥ 8**.
+  - If the route accepts an entity (`#[MapEntity]` / ParamConverter / `$repo->find($request->get('id'))` in the controller body) and `authz_evidence` is empty, **and** the entity lies in `recon_bags.stack.symfony.sensitive_columns.items` (or the Doctrine entity bag equivalent) → worker reports `idor_lookup` / `missing_authz`, **confidence ≥ 8**.
   - Additionally: if the route is protected only by `IS_AUTHENTICATED_REMEMBERED` for a sensitive operation (see `auth.md` → IS_AUTHENTICATED_REMEMBERED vs FULLY) — a separate finding `missing_authz`, confidence ≥ 7.
 - This does not exempt you from reading the source — recipe evidence only marks **what to look at first** and fixes the floor.
 
@@ -77,30 +77,6 @@ Wave 1-C added the concept `route_authz_matrix` → the recipe resolves it into 
 
 In both branches the principle is the same: a mutating route without explicit authz protection + entity lookup → IDOR/missing_authz; the difference is only in the floor (8 with the section present, 7 with fallback) and in search speed.
 
-## Admin bundle CRUD controllers (tenancy / mass_assignment) — cross-theme with auth
+## Admin bundle CRUD controllers (tenancy / mass_assignment)
 
-Admin bundles (EasyAdmin, SonataAdmin) auto-generate forms from field configuration. Without defenses, any Entity field becomes editable via admin UI — a classic mass-assignment on the admin surface. The threat is real even for admin-only URLs: the admin surface is reachable via XSS, CSRF, a compromised account, and also across tenants in multi-tenant systems.
-
-### EasyAdmin
-
-Forms are generated from `configureFields()`.
-
-- **Identity fields editable in the form**: tenant-owner / external identifier / shared secret fields (e.g., `tenantId`, `ownerId`, `apiKey`, `domain` — actual names taken from the project Entity) in `configureFields()` without `->setDisabled()` / `->onlyOnIndex()` / `->hideOnForm()` → admin of one company changes owner → breaks tenant isolation.
-- **Role/permission fields editable**: fields like `roles`, `permissions`, `isAdmin`, `isActive` in the form without a voter guard → privilege escalation.
-- **Missing `createIndexQueryBuilder()` override in per-tenant admins**: admin sees Entity of all tenants, not just their own. Must be `andWhere` by the tenant key of the current user.
-- **Missing `createEditFormBuilder()` / `createNewFormBuilder()` override** — allows editing of any entity by id from URL (IDOR on the admin surface).
-- **`AssociationField` without query-filter**: dropdown of related entity shows objects of all tenants. Needs `->setQueryBuilder(fn($qb) => $qb->andWhere(...))`.
-- **Actions without `createEntityActions` / voter**: `delete`/`edit`/`impersonate` accessible to all admins regardless of resource owner.
-- **Batch actions**: bulk operations without per-entity authz check — break IDOR protection, even if single-action enforces it.
-
-### SonataAdmin
-
-Forms are generated from `configureFormFields()` in classes `extends AbstractAdmin`.
-
-- **Identity fields editable in the form**: tenant-owner / external identifier / shared secret fields in `configureFormFields()` without `->setDisabled(true)` / removal from the form → admin of one company changes owner → breaks tenant isolation.
-- **Role/permission fields editable**: fields like `roles`, `permissions`, `isAdmin`, `isActive` added via `->add()` without restrictions → privilege escalation.
-- **Missing `createQuery()` override in per-tenant admins**: `configureQuery()` (Sonata 4+) / `createQuery()` does not filter by tenant key → admin sees Entity of all tenants.
-- **Missing `preUpdate()` / `prePersist()` guard** — no check that the entity belongs to the current tenant before saving (IDOR on the admin surface).
-- **`ModelAutocompleteType` / `ModelListType` without `callback` filter**: dropdown and autocomplete lists show objects of all tenants. Needs `'callback' => function($admin, $property, $value) { ... }` with a tenant filter.
-- **Custom actions without `isGranted()` check**: actions in `configureDashboardAction()` / `configureRoutes()` accessible to all admins without ownership check.
-- **Batch actions**: `configureBatchActions()` without per-entity authz check in `batchAction*()` methods.
+> EasyAdmin/Sonata-specific patterns: see `addons/easyadmin/data-access.md` and `addons/sonata/data-access.md` (auto-loaded when the addon is detected).

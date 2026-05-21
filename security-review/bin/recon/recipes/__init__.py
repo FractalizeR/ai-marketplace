@@ -2,7 +2,7 @@
 
 Recipes are Python modules in `bin/recon/recipes/`. Each defines:
 - RECIPE_NAME, LANGUAGE
-- FRAMEWORK_SPECIFIC_SCHEMA: dict[str, SectionSpec]
+- RECON_BAGS_SCHEMA: dict[str, SectionSpec]
 - detect(project_root) -> StackMatch | None
 - build_inventory(project_root, diff_files=None, *,
                   plugin_root=None, no_console=False, exclude=None) -> InventoryResult
@@ -45,11 +45,20 @@ def load_recipe(name: str) -> ModuleType:
 
 
 def available_recipes() -> list[str]:
-    """List recipe modules present in this package (excluding the registry)."""
+    """List recipe modules present in this package (excluding the registry).
+
+    Filters:
+    - Leading underscore (`_*.py`): private helpers / shared utilities.
+    - `*_detect.py` suffix: addon/integration detectors imported by stack
+      recipes; they expose `detect_<addon>` rather than the recipe contract
+      (RECIPE_NAME / build_inventory / sanity_probes).
+    """
     here = Path(__file__).resolve().parent
     out = []
     for f in sorted(here.glob("*.py")):
         if f.name.startswith("_"):
+            continue
+        if f.stem.endswith("_detect"):
             continue
         out.append(f.stem)
     return out

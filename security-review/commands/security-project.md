@@ -238,7 +238,7 @@ Found (top-level core sections):
   - file_operations / http_clients: <N> / <M>
   - secrets: <status>
   - fintech_markers: <present|none>
-Framework-specific (if present): <list of framework_specific.<stack>.* keys with statuses>
+Framework-specific (if present): <list of recon_bags.stack.<stack>.* keys with statuses>
 Missing sections / warnings: [<list>]
 ```
 

@@ -360,9 +360,9 @@ class WorkerAgentContract(unittest.TestCase):
         self.assertIn("touched_by_diff", self.text)
         self.assertNotIn("git diff origin/main...HEAD --name-only", self.text)
 
-    def test_framework_specific_reading_documented(self) -> None:
-        # Worker must know how to resolve framework_specific.{stack}.* via dot-notation.
-        self.assertIn("framework_specific", self.text)
+    def test_recon_bags_reading_documented(self) -> None:
+        # Worker must know how to resolve recon_bags.{kind}.{name}.* via dot-notation.
+        self.assertIn("recon_bags", self.text)
         self.assertIn("dot-notation", self.text.lower())
 
     def test_mcp_phpstorm_documented_as_conditional(self) -> None:

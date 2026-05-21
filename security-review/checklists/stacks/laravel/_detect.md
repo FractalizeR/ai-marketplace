@@ -17,7 +17,7 @@ stack:
 
 `plan_waves.resolve_checklists(themes, ctx, plugin_root)` (where `ctx.stack == "laravel"`) then adds to each theme the file `stacks/laravel/{theme}.md`, if it exists.
 
-## What lands in the `framework_specific.laravel` bag
+## What lands in the `recon_bags.stack.laravel` bag
 
 The recipe fills in (or marks `status: unknown` with reason) the keys:
 
@@ -27,7 +27,7 @@ The recipe fills in (or marks `status: unknown` with reason) the keys:
 - `form_requests` — classes from `app/Http/Requests/*` extending `Illuminate\Foundation\Http\FormRequest`;
 - `graphql_layer` — present-if-detected: scalar `{library_name, schema_files, resolvers_dir}` for `nuwave/lighthouse`, `rebing/graphql-laravel`, `api-platform/core`, `webonyx/graphql-php`. See `bin/recon/graphql_detect.py`.
 
-See `bin/recon/recipes/laravel.py::FRAMEWORK_SPECIFIC_SCHEMA` for the exact shape.
+See `bin/recon/recipes/laravel.py::RECON_BAGS_SCHEMA` for the exact shape.
 
 ## Known detection limitations
 

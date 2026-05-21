@@ -15,7 +15,7 @@ Perform a security-focused code review to identify exploitable vulnerabilities w
 The orchestrator passes you:
 
 - `review_root`: absolute or relative path to the `security-review-{label}/` directory. It contains `CONTEXT.md` (schema v2 — **read in full**) and (after the first worker) the `waves/` subdirectory.
-- `relevant_section_paths`: list of **dot-notation paths** in `CONTEXT.md` critical for this wave (attention priority, NOT a ban on reading the rest). Examples: `attack_surface`, `authz_usage`, `framework_specific.symfony.voters`, `framework_specific.laravel.policies`. See the "READING CONTEXT.md" section.
+- `relevant_section_paths`: list of **dot-notation paths** in `CONTEXT.md` critical for this wave (attention priority, NOT a ban on reading the rest). Examples: `attack_surface`, `authz_usage`, `recon_bags.stack.symfony.voters`, `recon_bags.stack.laravel.policies`. See the "READING CONTEXT.md" section.
 - `checklists`: absolute paths to `checklists/*.md` (core + framework-specific) — **load each one**.
 - `entry_points_in_scope`: list of FQN/ID entry points for data flow tracing.
 - `target_files`: files that must be analyzed.
@@ -53,13 +53,13 @@ source_files: [...]
 
 Top-level core sections (examples): `attack_surface`, `data_access`, `auth_layer`, `authz_usage`, `output_renderers`, `serialization`, `file_operations`, `http_clients`, `secrets`, `fintech_markers`, `frontend_assets`.
 
-Framework-specific sections live under `framework_specific.{stack}.*`. The stack name is in frontmatter.stack.framework. Specific keys depend on the stack (for Symfony: `voters`, `forms`, `firewalls`, `serializer_groups`, `twig_overrides`, `doctrine_listeners`, `messenger_transports`). For other stacks the keys will be different — take them from the checklists and `relevant_section_paths`.
+Framework-specific sections live under `recon_bags.{kind}.{name}.*`, where `{kind} ∈ {stack, addon, integration}` (stack = main framework, addon = bundles like EasyAdmin/Sonata, integration = third-party providers). The stack name is in frontmatter.stack.framework. Specific keys depend on the stack (for Symfony: `voters`, `forms`, `firewalls`, `serializer_groups`, `twig_overrides`, `doctrine_listeners`, `messenger_transports`). For other stacks the keys will be different — take them from the checklists and `relevant_section_paths`.
 
 **Dot-notation path resolution:**
 - `attack_surface` → top-level section.
-- `framework_specific.symfony.voters` → section `framework_specific.symfony` → key `voters` inside payload.
+- `recon_bags.stack.symfony.voters` → section `recon_bags.stack.symfony` → key `voters` inside payload.
 
-If a section passed to you is missing from CONTEXT.md (for example, framework_specific.{stack}.* for pure-PHP projects) — skip it without error, continue working with the rest.
+If a section passed to you is missing from CONTEXT.md (for example, recon_bags.{kind}.{name}.* for pure-PHP projects) — skip it without error, continue working with the rest.
 
 ## KEY INSTRUCTION ON OPEN-ENDED CATEGORY LIST
 
@@ -422,7 +422,7 @@ Before completion **mandatorily**:
 
 1. Read `<review_root>/CONTEXT.md` in full
 2. Load all passed checklists (absolute paths from the prompt)
-3. Resolve `relevant_section_paths` — for each dot-notation path find the corresponding payload in CONTEXT.md (including `framework_specific.{stack}.*`); skip missing ones without error.
+3. Resolve `relevant_section_paths` — for each dot-notation path find the corresponding payload in CONTEXT.md (including `recon_bags.{kind}.{name}.*`); skip missing ones without error.
 4. For each entry point in scope — trace data flow
 5. For `mode=changes` — verify that the exploit path contains a changed node (`touched_by_diff: true` or a file from `target_files`)
 6. For each finding normalize sink_snippet by the rules above (LLM-side, no hashing)

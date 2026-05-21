@@ -73,8 +73,8 @@ def _all_sections(**overrides: str) -> str:
     for sid, default in _DEFAULT_SECTION_BODIES.items():
         body = overrides.get(sid, default)
         parts.append(_section(sid, body))
-    if "framework_specific" in overrides:
-        parts.append(_section("framework_specific", overrides["framework_specific"]))
+    if "recon_bags" in overrides:
+        parts.append(_section("recon_bags", overrides["recon_bags"]))
     return "".join(parts)
 
 
@@ -358,35 +358,36 @@ class DotNotationTests(unittest.TestCase):
         finally:
             p.unlink()
 
-    def test_framework_specific_dot_path(self):
+    def test_recon_bags_dot_path(self):
         fs = textwrap.dedent("""\
-            symfony:
-              voters:
-                status: ok
-                items:
-                  - class: App\\Security\\UserVoter
-                    file: src/Security/UserVoter.php
-                    line: 12
+            stack:
+              symfony:
+                voters:
+                  status: ok
+                  items:
+                    - class: App\\Security\\UserVoter
+                      file: src/Security/UserVoter.php
+                      line: 12
         """).strip()
-        p = _build_context(framework_specific=fs)
+        p = _build_context(recon_bags=fs)
         try:
             ctx = pw.parse_context(p)
-            payload = ctx.payload_at("framework_specific.symfony.voters")
+            payload = ctx.payload_at("recon_bags.stack.symfony.voters")
             self.assertIsNotNone(payload)
             self.assertEqual(payload["status"], "ok")
-            items = ctx.section_items("framework_specific.symfony.voters")
+            items = ctx.section_items("recon_bags.stack.symfony.voters")
             self.assertEqual(len(items), 1)
             self.assertEqual(items[0]["file"], "src/Security/UserVoter.php")
         finally:
             p.unlink()
 
     def test_dot_path_missing_returns_none(self):
-        p = _build_context()  # no framework_specific
+        p = _build_context()  # no recon_bags
         try:
             ctx = pw.parse_context(p)
-            self.assertIsNone(ctx.payload_at("framework_specific.symfony.voters"))
-            self.assertEqual(ctx.section_items("framework_specific.symfony.voters"), [])
-            self.assertEqual(ctx.section_status("framework_specific.symfony.voters"), "missing")
+            self.assertIsNone(ctx.payload_at("recon_bags.stack.symfony.voters"))
+            self.assertEqual(ctx.section_items("recon_bags.stack.symfony.voters"), [])
+            self.assertEqual(ctx.section_status("recon_bags.stack.symfony.voters"), "missing")
         finally:
             p.unlink()
 
@@ -829,25 +830,26 @@ class ChangesChannel2Tests(unittest.TestCase):
             p.unlink()
 
     def test_scalar_dot_notation_firewalls_channel2(self):
-        """framework_specific.symfony.firewalls (scalar, dot-notation) —
+        """recon_bags.stack.symfony.firewalls (scalar, dot-notation) —
         source_files intersection pulls files for W1."""
         fs = textwrap.dedent("""\
-            symfony:
-              firewalls:
-                status: ok
-                data:
-                  firewalls:
-                    main: lazy
-                source_files:
-                  - config/packages/security.yaml
-                  - config/packages/dev/security.yaml
+            stack:
+              symfony:
+                firewalls:
+                  status: ok
+                  data:
+                    firewalls:
+                      main: lazy
+                  source_files:
+                    - config/packages/security.yaml
+                    - config/packages/dev/security.yaml
         """).strip()
         p = _build_context(
             framework="symfony",
             attack_surface="status: ok\nitems: []",
             data_access="status: ok\nitems: []",
             authz_usage="status: ok\nitems: []",
-            framework_specific=fs,
+            recon_bags=fs,
         )
         try:
             ctx = pw.parse_context(p)
@@ -1636,8 +1638,8 @@ class ConceptResolverTests(unittest.TestCase):
 
     def test_symfony_auth_guards_resolves_to_voters_and_firewalls(self):
         paths = pw.resolve_concept_paths("symfony", "auth_guards")
-        self.assertIn("framework_specific.symfony.voters", paths)
-        self.assertIn("framework_specific.symfony.firewalls", paths)
+        self.assertIn("recon_bags.stack.symfony.voters", paths)
+        self.assertIn("recon_bags.stack.symfony.firewalls", paths)
 
     def test_unknown_stack_returns_empty(self):
         self.assertEqual(pw.resolve_concept_paths("django", "auth_guards"), [])
@@ -1649,8 +1651,8 @@ class ConceptResolverTests(unittest.TestCase):
         w1 = next(w for w in pw.WAVES if w.wave_id == "W1")
         paths = pw.resolved_section_paths(w1, "symfony")
         self.assertIn("authz_usage", paths)
-        self.assertIn("framework_specific.symfony.voters", paths)
-        self.assertIn("framework_specific.symfony.firewalls", paths)
+        self.assertIn("recon_bags.stack.symfony.voters", paths)
+        self.assertIn("recon_bags.stack.symfony.firewalls", paths)
 
     def test_resolved_section_paths_drops_duplicates(self):
         """If a path appears in both core and a concept resolver — emitted once."""
@@ -1663,14 +1665,14 @@ class ConceptResolverTests(unittest.TestCase):
         w1 = next(w for w in pw.WAVES if w.wave_id == "W1")
         paths = pw.resolved_section_paths(w1, "unknown")
         self.assertIn("authz_usage", paths)
-        self.assertNotIn("framework_specific.symfony.voters", paths)
+        self.assertNotIn("recon_bags.stack.symfony.voters", paths)
 
     def test_w1_laravel_includes_middleware_groups(self):
         """Regression: Laravel middleware/auth changes must reach W1 (auth)."""
         w1 = next(w for w in pw.WAVES if w.wave_id == "W1")
         paths = pw.resolved_section_paths(w1, "laravel")
-        self.assertIn("framework_specific.laravel.policies", paths)
-        self.assertIn("framework_specific.laravel.middleware_groups", paths)
+        self.assertIn("recon_bags.stack.laravel.policies", paths)
+        self.assertIn("recon_bags.stack.laravel.middleware_groups", paths)
 
     def test_graphql_layer_concept_present_in_w1_and_w2(self):
         """W1 (auth) and W2 (injection) must consume graphql_layer for Symfony AND Laravel."""
@@ -1683,13 +1685,13 @@ class ConceptResolverTests(unittest.TestCase):
             for wave in (w1, w2):
                 with self.subTest(stack=stack, wave=wave.wave_id):
                     paths = pw.resolved_section_paths(wave, stack)
-                    self.assertIn(f"framework_specific.{stack}.graphql_layer", paths)
+                    self.assertIn(f"recon_bags.stack.{stack}.graphql_layer", paths)
 
     def test_admin_surface_concept_resolves_for_symfony(self):
         """v3.2: admin_surface concept maps to easyadmin_crud_controllers + admin_authz_coverage."""
         paths = pw.resolve_concept_paths("symfony", "admin_surface")
-        self.assertIn("framework_specific.symfony.easyadmin_crud_controllers", paths)
-        self.assertIn("framework_specific.symfony.admin_authz_coverage", paths)
+        self.assertIn("recon_bags.addon.easyadmin.crud_controllers", paths)
+        self.assertIn("recon_bags.stack.symfony.admin_authz_coverage", paths)
 
     def test_admin_surface_consumed_by_w1_and_w2(self):
         """admin_surface must reach W1 (auth/disclosure recall on identity / sensitive
@@ -1701,8 +1703,8 @@ class ConceptResolverTests(unittest.TestCase):
         for wave in (w1, w2):
             with self.subTest(wave=wave.wave_id):
                 paths = pw.resolved_section_paths(wave, "symfony")
-                self.assertIn("framework_specific.symfony.easyadmin_crud_controllers", paths)
-                self.assertIn("framework_specific.symfony.admin_authz_coverage", paths)
+                self.assertIn("recon_bags.addon.easyadmin.crud_controllers", paths)
+                self.assertIn("recon_bags.stack.symfony.admin_authz_coverage", paths)
 
     def test_admin_surface_unknown_stack_returns_empty(self):
         """Stacks without admin enumeration (laravel/django/generic) get no paths."""
@@ -1718,11 +1720,11 @@ class ConceptResolverTests(unittest.TestCase):
         long_running_runtime is laravel-only — symfony resolver returns []."""
         self.assertEqual(
             pw.resolve_concept_paths("symfony", "route_authz_matrix"),
-            ["framework_specific.symfony.routes_authz_matrix"],
+            ["recon_bags.stack.symfony.routes_authz_matrix"],
         )
         self.assertEqual(
             pw.resolve_concept_paths("symfony", "sensitive_data_model"),
-            ["framework_specific.symfony.sensitive_columns"],
+            ["recon_bags.stack.symfony.sensitive_columns"],
         )
         self.assertEqual(
             pw.resolve_concept_paths("symfony", "long_running_runtime"),
@@ -1733,15 +1735,15 @@ class ConceptResolverTests(unittest.TestCase):
         """All three new concepts resolve for laravel (long_running_runtime included)."""
         self.assertEqual(
             pw.resolve_concept_paths("laravel", "route_authz_matrix"),
-            ["framework_specific.laravel.routes_authz_matrix"],
+            ["recon_bags.stack.laravel.routes_authz_matrix"],
         )
         self.assertEqual(
             pw.resolve_concept_paths("laravel", "sensitive_data_model"),
-            ["framework_specific.laravel.sensitive_columns"],
+            ["recon_bags.stack.laravel.sensitive_columns"],
         )
         self.assertEqual(
             pw.resolve_concept_paths("laravel", "long_running_runtime"),
-            ["framework_specific.laravel.runtime"],
+            ["recon_bags.stack.laravel.runtime"],
         )
 
     def test_new_concepts_present_in_w1_w2_w4(self):
@@ -1778,17 +1780,17 @@ class ConceptResolverTests(unittest.TestCase):
             # CONTEXT.md doesn't carry that section; that's how downstream
             # workers know to look.
             self.assertIn(
-                "framework_specific.symfony.routes_authz_matrix",
+                "recon_bags.stack.symfony.routes_authz_matrix",
                 w1["relevant_section_paths"],
             )
             self.assertIn(
-                "framework_specific.symfony.sensitive_columns",
+                "recon_bags.stack.symfony.sensitive_columns",
                 w1["relevant_section_paths"],
             )
             # Sanity: `payload_at` returns None for absent sections — proves
             # the back-compat contract.
             self.assertIsNone(
-                ctx.payload_at("framework_specific.symfony.routes_authz_matrix")
+                ctx.payload_at("recon_bags.stack.symfony.routes_authz_matrix")
             )
         finally:
             p.unlink()
@@ -1796,7 +1798,7 @@ class ConceptResolverTests(unittest.TestCase):
 
 class SymfonyRegressionAfterRewireTests(unittest.TestCase):
     """B4.1 regression: Symfony plan output must contain the same
-    framework_specific paths the WAVES tuple used to hardcode."""
+    recon_bags paths the WAVES tuple used to hardcode."""
 
     def test_w1_symfony_emits_voters_and_firewalls(self):
         p = _build_context()
@@ -1804,8 +1806,8 @@ class SymfonyRegressionAfterRewireTests(unittest.TestCase):
             ctx = pw.parse_context(p)
             plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT)
             w1 = next(s for s in plan if s["wave_id"] == "W1")
-            self.assertIn("framework_specific.symfony.voters", w1["relevant_section_paths"])
-            self.assertIn("framework_specific.symfony.firewalls", w1["relevant_section_paths"])
+            self.assertIn("recon_bags.stack.symfony.voters", w1["relevant_section_paths"])
+            self.assertIn("recon_bags.stack.symfony.firewalls", w1["relevant_section_paths"])
         finally:
             p.unlink()
 
@@ -1815,7 +1817,7 @@ class SymfonyRegressionAfterRewireTests(unittest.TestCase):
             ctx = pw.parse_context(p)
             plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT)
             w2 = next(s for s in plan if s["wave_id"] == "W2")
-            self.assertIn("framework_specific.symfony.forms", w2["relevant_section_paths"])
+            self.assertIn("recon_bags.stack.symfony.forms", w2["relevant_section_paths"])
         finally:
             p.unlink()
 
@@ -1833,7 +1835,7 @@ class SymfonyRegressionAfterRewireTests(unittest.TestCase):
             ctx = pw.parse_context(p)
             plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT)
             w3 = next(s for s in plan if s["wave_id"] == "W3")
-            self.assertIn("framework_specific.symfony.twig_overrides", w3["relevant_section_paths"])
+            self.assertIn("recon_bags.stack.symfony.twig_overrides", w3["relevant_section_paths"])
         finally:
             p.unlink()
 
@@ -1844,14 +1846,14 @@ class SymfonyRegressionAfterRewireTests(unittest.TestCase):
             plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT)
             w4 = next(s for s in plan if s["wave_id"] == "W4")
             self.assertIn(
-                "framework_specific.symfony.messenger_transports",
+                "recon_bags.stack.symfony.messenger_transports",
                 w4["relevant_section_paths"],
             )
         finally:
             p.unlink()
 
-    def test_generic_php_no_framework_specific_paths(self):
-        """Generic PHP — no framework_specific.* paths in any slice."""
+    def test_generic_php_no_recon_bags_paths(self):
+        """Generic PHP — no recon_bags.* paths in any slice."""
         p = _build_generic_php()
         try:
             ctx = pw.parse_context(p)
@@ -1859,7 +1861,7 @@ class SymfonyRegressionAfterRewireTests(unittest.TestCase):
             for slice_ in plan:
                 for path in slice_["relevant_section_paths"]:
                     self.assertFalse(
-                        path.startswith("framework_specific."),
+                        path.startswith("recon_bags."),
                         msg=f"unexpected framework path {path!r} in {slice_['slice_id']}",
                     )
         finally:
@@ -1944,16 +1946,17 @@ class LookupKindForFileTests(unittest.TestCase):
         finally:
             p.unlink()
 
-    def test_lookup_in_framework_specific(self):
+    def test_lookup_in_recon_bags(self):
         p = _build_context(
-            framework_specific=textwrap.dedent("""
+            recon_bags=textwrap.dedent("""
                 status: ok
-                symfony:
-                  voters:
-                    status: ok
-                    items:
-                      - kind: voter
-                        file: src/Security/Voter/PostVoter.php
+                stack:
+                  symfony:
+                    voters:
+                      status: ok
+                      items:
+                        - kind: voter
+                          file: src/Security/Voter/PostVoter.php
             """).strip(),
         )
         try:
@@ -1961,6 +1964,28 @@ class LookupKindForFileTests(unittest.TestCase):
             self.assertEqual(
                 pw.lookup_kind_for_file("src/Security/Voter/PostVoter.php", ctx),
                 "voter",
+            )
+        finally:
+            p.unlink()
+
+    def test_lookup_in_recon_bags_addon(self):
+        p = _build_context(
+            recon_bags=textwrap.dedent("""
+                status: ok
+                addon:
+                  easyadmin:
+                    crud_controllers:
+                      status: ok
+                      items:
+                        - kind: easyadmin_crud_controller
+                          file: src/Controller/Admin/UserCrudController.php
+            """).strip(),
+        )
+        try:
+            ctx = pw.parse_context(p)
+            self.assertEqual(
+                pw.lookup_kind_for_file("src/Controller/Admin/UserCrudController.php", ctx),
+                "easyadmin_crud_controller",
             )
         finally:
             p.unlink()

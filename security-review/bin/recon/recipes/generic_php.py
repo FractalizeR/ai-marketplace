@@ -25,7 +25,7 @@ RECIPE_NAME = "generic_php"
 LANGUAGE = "php"
 
 # No stack-specific bag for generic recipe.
-FRAMEWORK_SPECIFIC_SCHEMA: dict[str, SectionSpec] = {}
+RECON_BAGS_SCHEMA: dict[str, dict[str, dict[str, SectionSpec]]] = {}
 
 # Note: NO `var/` excluded here — generic projects may use var/ for sources.
 EXCLUDE_PATHS: tuple[str, ...] = (
@@ -131,7 +131,7 @@ def build_inventory(
     return InventoryResult(
         status="partial",
         core=core,
-        framework_specific={},
+        recon_bags={},
         sources_used=["recipe_stub:generic_php"],
         warnings=["s1_stub_recipe: generic_php build_inventory returns skeleton only"],
     )

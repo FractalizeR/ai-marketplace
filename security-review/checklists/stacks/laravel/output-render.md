@@ -64,9 +64,9 @@
 - **GraphQL union/interface types** — resolver `__resolveType` returns class name; if the class contains an attacker-injected type (via `MorphMap`) → instance with extra fields.
 - **Introspection enabled on prod** — `lighthouse.security.disable_introspection=false` → `__schema` query reveals the schema (including internal/admin types) → attacker maps the attack surface.
 
-## Octane Inertia / global share singleton bleed (gate: `framework_specific.laravel.runtime.octane=true`)
+## Octane Inertia / global share singleton bleed (gate: `recon_bags.stack.laravel.runtime.octane=true`)
 
-> **Apply only if** `framework_specific.laravel.runtime.octane == true`. Otherwise skip the entire section (graceful fallback).
+> **Apply only if** `recon_bags.stack.laravel.runtime.octane == true`. Otherwise skip the entire section (graceful fallback).
 
 - **`Inertia::share('user', auth()->user())`** in ServiceProvider `boot()` — eager-resolved value is cached in singleton → the old user remains on the next request → cross-tenant leak in SSR payload.
 - **Correct**: `Inertia::share('user', fn() => auth()->user())` — closure is recomputed per-request.

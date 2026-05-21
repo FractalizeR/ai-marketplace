@@ -91,7 +91,7 @@
 
 ## Recipe-driven mass_assignment (`routes_authz_matrix` + `sensitive_columns`)
 
-> **If `framework_specific.laravel.routes_authz_matrix.status == ok`** and **`framework_specific.laravel.sensitive_columns.status == ok`** — use recipe data. Otherwise — graceful fallback to grep.
+> **If `recon_bags.stack.laravel.routes_authz_matrix.status == ok`** and **`recon_bags.stack.laravel.sensitive_columns.status == ok`** — use recipe data. Otherwise — graceful fallback to grep.
 
 **With recipe data:**
 
@@ -111,9 +111,9 @@
   - if `$fillable` contains privilege fields (`role`, `is_admin`, `tenant_id`) — **confidence ≥ 9**.
 - Higher floor if there is no Policy/`authorize()` call in the same controller method (grep `\$this->authorize|Gate::authorize|@can` in the file/method).
 
-## Octane Eloquent global scopes (gate: `framework_specific.laravel.runtime.octane=true`)
+## Octane Eloquent global scopes (gate: `recon_bags.stack.laravel.runtime.octane=true`)
 
-> **Apply only if** `framework_specific.laravel.runtime.octane == true`. Without the recipe section — skip (see graceful fallback in auth.md).
+> **Apply only if** `recon_bags.stack.laravel.runtime.octane == true`. Without the recipe section — skip (see graceful fallback in auth.md).
 
 - **Global scope with `static` cache** — tenant leak between requests:
   ```php

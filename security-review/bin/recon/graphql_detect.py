@@ -1,6 +1,6 @@
 """PHP GraphQL detection layer (recipe-agnostic).
 
-Surfaced by recipes (Symfony, Laravel) as `framework_specific.<stack>.graphql_layer`
+Surfaced by recipes (Symfony, Laravel) as `recon_bags.stack.<stack>.graphql_layer`
 when a known PHP GraphQL library is present in `composer.json`.
 
 Supported libraries (composer package → `library_name` value):

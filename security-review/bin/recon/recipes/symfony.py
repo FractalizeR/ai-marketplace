@@ -18,7 +18,7 @@ build_inventory pipeline:
 7. secrets         — pending_enrichment with bounded regex candidates.
 8. fintech_markers — composer deps + entity decimal columns.
 9. frontend_assets — JS bundles / Stimulus / importmap.
-10. framework_specific.symfony.*: voters, forms, serializer_groups, twig_overrides,
+10. recon_bags.stack.symfony.*: voters, forms, serializer_groups, twig_overrides,
     doctrine_listeners, firewalls, messenger_transports.
 """
 
@@ -44,107 +44,130 @@ LANGUAGE = "php"
 
 
 # ---------------------------------------------------------------------------
-# Schema bag — what `framework_specific.symfony.*` keys may contain.
+# Schema bag — 3-level shape: {kind: {name: {bag_key: SectionSpec}}}.
+# Mirrors the runtime emit structure produced by build_inventory().
 # ---------------------------------------------------------------------------
 
-FRAMEWORK_SPECIFIC_SCHEMA: dict[str, SectionSpec] = {
-    "voters": SectionSpec(
-        shape="list",
-        item_keys=frozenset({"class", "file", "attributes", "subjects", "line"}),
-    ),
-    "forms": SectionSpec(
-        shape="list",
-        item_keys=frozenset({
-            "class", "file", "line", "data_class", "csrf_protection", "allow_extra_fields",
-        }),
-    ),
-    "serializer_groups": SectionSpec(
-        shape="list",
-        item_keys=frozenset({"class", "member", "kind", "groups", "file", "line"}),
-    ),
-    "twig_overrides": SectionSpec(
-        shape="scalar",
-        data_keys=frozenset({"autoescape_default", "raw_filter_count", "raw_filter_locations"}),
-    ),
-    "doctrine_listeners": SectionSpec(
-        shape="list",
-        item_keys=frozenset({"listener", "type", "events", "file", "line"}),
-    ),
-    "firewalls": SectionSpec(
-        shape="scalar",
-        data_keys=frozenset({"firewalls", "access_control"}),
-    ),
-    "messenger_transports": SectionSpec(
-        shape="scalar",
-        data_keys=frozenset({"transports"}),
-    ),
-    "easyadmin_crud_controllers": SectionSpec(
-        shape="list",
-        item_keys=frozenset({
-            "class", "file", "line", "entity_fqcn",
-            "configure_fields", "configure_actions", "page_titles",
-            "unresolved_fields",
-        }),
-        required=False,
-    ),
-    "sonata_admin_classes": SectionSpec(
-        shape="list",
-        item_keys=frozenset({
-            "class", "file", "line", "entity_fqcn",
-            "form_fields", "unresolved_fields",
-        }),
-        required=False,
-    ),
-    "admin_authz_coverage": SectionSpec(
-        shape="scalar",
-        data_keys=frozenset({
-            "crud_controllers_with_voter",
-            "crud_controllers_without_voter",
-            "voters_inspected",
-        }),
-        required=False,
-    ),
-    "graphql_layer": SectionSpec(
-        shape="scalar",
-        data_keys=frozenset({"library_name", "schema_files", "resolvers_dir"}),
-        required=False,
-    ),
-    # Wave 2-D (3.4.0): per-route effective authz fingerprint.
-    # `effective_middleware` is kept as an empty list for cross-stack shape
-    # parity with Laravel — Symfony has no middleware concept.
-    # `authz_evidence` is an array (not a single requires_role) to allow
-    # multiple sources (#[IsGranted], denyAccessUnlessGranted, access_control,
-    # voter wiring) to coexist per-route — workers diff this against admin
-    # routes to detect missing protection.
-    "routes_authz_matrix": SectionSpec(
-        shape="list",
-        item_keys=frozenset({
-            "route_name", "file", "line", "methods", "path",
-            "effective_middleware", "matched_access_control", "firewall",
-            "csrf_protection", "authz_evidence",
-        }),
-        required=False,
-    ),
-    # Wave 2-D (3.4.0): Doctrine entity columns whose property name matches
-    # a sensitive-name regex (token/password/secret/etc). `encryption_status`
-    # collapses Doctrine column type + #[Encrypted] attribute into a tri-state
-    # (encrypted / plaintext / unknown). Workers use this to flag PII/secret
-    # leakage without re-parsing every entity.
-    "sensitive_columns": SectionSpec(
-        shape="list",
-        item_keys=frozenset({
-            "entity_class", "file", "field_name", "column_type",
-            "name_pattern_matched", "encryption_status", "encryption_evidence",
-        }),
-        required=False,
-    ),
+RECON_BAGS_SCHEMA: dict[str, dict[str, dict[str, SectionSpec]]] = {
+    "stack": {
+        "symfony": {
+            "voters": SectionSpec(
+                shape="list",
+                item_keys=frozenset({"class", "file", "attributes", "subjects", "line"}),
+            ),
+            "forms": SectionSpec(
+                shape="list",
+                item_keys=frozenset({
+                    "class", "file", "line", "data_class", "csrf_protection", "allow_extra_fields",
+                }),
+            ),
+            "serializer_groups": SectionSpec(
+                shape="list",
+                item_keys=frozenset({"class", "member", "kind", "groups", "file", "line"}),
+            ),
+            "twig_overrides": SectionSpec(
+                shape="scalar",
+                data_keys=frozenset({"autoescape_default", "raw_filter_count", "raw_filter_locations"}),
+            ),
+            "doctrine_listeners": SectionSpec(
+                shape="list",
+                item_keys=frozenset({"listener", "type", "events", "file", "line"}),
+            ),
+            "firewalls": SectionSpec(
+                shape="scalar",
+                data_keys=frozenset({"firewalls", "access_control"}),
+            ),
+            "messenger_transports": SectionSpec(
+                shape="scalar",
+                data_keys=frozenset({"transports"}),
+            ),
+            "admin_authz_coverage": SectionSpec(
+                shape="scalar",
+                data_keys=frozenset({
+                    "crud_controllers_with_voter",
+                    "crud_controllers_without_voter",
+                    "voters_inspected",
+                }),
+                required=False,
+            ),
+            "graphql_layer": SectionSpec(
+                shape="scalar",
+                data_keys=frozenset({"library_name", "schema_files", "resolvers_dir"}),
+                required=False,
+            ),
+            # Wave 2-D (3.4.0): per-route effective authz fingerprint.
+            # `effective_middleware` is kept as an empty list for cross-stack shape
+            # parity with Laravel — Symfony has no middleware concept.
+            # `authz_evidence` is an array (not a single requires_role) to allow
+            # multiple sources (#[IsGranted], denyAccessUnlessGranted, access_control,
+            # voter wiring) to coexist per-route — workers diff this against admin
+            # routes to detect missing protection.
+            "routes_authz_matrix": SectionSpec(
+                shape="list",
+                item_keys=frozenset({
+                    "route_name", "file", "line", "methods", "path",
+                    "effective_middleware", "matched_access_control", "firewall",
+                    "csrf_protection", "authz_evidence",
+                }),
+                required=False,
+            ),
+            # Wave 2-D (3.4.0): Doctrine entity columns whose property name matches
+            # a sensitive-name regex (token/password/secret/etc). `encryption_status`
+            # collapses Doctrine column type + #[Encrypted] attribute into a tri-state
+            # (encrypted / plaintext / unknown). Workers use this to flag PII/secret
+            # leakage without re-parsing every entity.
+            "sensitive_columns": SectionSpec(
+                shape="list",
+                item_keys=frozenset({
+                    "entity_class", "file", "field_name", "column_type",
+                    "name_pattern_matched", "encryption_status", "encryption_evidence",
+                }),
+                required=False,
+            ),
+        },
+    },
+    "addon": {
+        "easyadmin": {
+            "crud_controllers": SectionSpec(
+                shape="list",
+                item_keys=frozenset({
+                    "class", "file", "line", "entity_fqcn",
+                    "configure_fields", "configure_actions", "page_titles",
+                    "unresolved_fields",
+                }),
+                required=False,
+            ),
+        },
+        "sonata": {
+            "admin_classes": SectionSpec(
+                shape="list",
+                item_keys=frozenset({
+                    "class", "file", "line", "entity_fqcn",
+                    "form_fields", "unresolved_fields",
+                }),
+                required=False,
+            ),
+        },
+    },
 }
 
 
 # Default vendor-exclude paths for grep-based sources (rev 3.5).
+# Sourced from `recon.recipes._shared` so addon detectors (easyadmin_detect,
+# sonata_detect) share the same exclusion list without circular imports.
 # Note: `var/` is symfony-specific (cache+logs). Generic recipe drops it.
-EXCLUDE_PATHS: tuple[str, ...] = (
-    "vendor/", "var/", "node_modules/", "tests/", "test/", "Tests/", "Test/", "*.min.js",
+from recon.recipes._shared import (  # noqa: E402  (re-export)
+    EXCLUDE_PATHS,
+    is_excluded as _shared_is_excluded,
+    to_relative as _shared_to_relative,
+)
+from recon.recipes.easyadmin_detect import (  # noqa: E402
+    collect_easyadmin_crud_controllers,
+    detect_easyadmin,
+)
+from recon.recipes.sonata_detect import (  # noqa: E402
+    collect_sonata_admin_classes,
+    detect_sonata,
 )
 
 
@@ -256,7 +279,7 @@ def sanity_probes() -> list[SanityProbe]:
             label="Doctrine repositories",
         ),
         SanityProbe(
-            section_path="framework_specific.symfony.voters",
+            section_path="recon_bags.stack.symfony.voters",
             glob_patterns=["src/**/*Voter*.php", "app/**/*Voter*.php"],
             label="Security voters",
         ),
@@ -268,17 +291,23 @@ def sanity_probes() -> list[SanityProbe]:
             kind_filter="event_listener",
         ),
         SanityProbe(
-            section_path="framework_specific.symfony.easyadmin_crud_controllers",
+            section_path="recon_bags.addon.easyadmin.crud_controllers",
             glob_patterns=["src/**/*CrudController.php", "app/**/*CrudController.php"],
             label="EasyAdmin CRUD controllers",
             content_filter=r"extends\s+AbstractCrudController",
+        ),
+        SanityProbe(
+            section_path="recon_bags.addon.sonata.admin_classes",
+            glob_patterns=["src/**/*Admin.php", "app/**/*Admin.php"],
+            label="Sonata Admin classes",
+            content_filter=r"extends\s+AbstractAdmin",
         ),
         # Wave 2-D (3.4.0): per-route authz fingerprint — same glob universe
         # as the existing http-controller probe (#[Route] attributes are only
         # parsed in *Controller.php files). content_filter narrows to actual
         # #[Route] usage to avoid flagging WebTestCase fixtures or trait files.
         SanityProbe(
-            section_path="framework_specific.symfony.routes_authz_matrix",
+            section_path="recon_bags.stack.symfony.routes_authz_matrix",
             glob_patterns=["src/**/*Controller.php", "app/**/*Controller.php"],
             label="symfony.routes_authz_matrix",
             content_filter=r"#\[\s*Route\b",
@@ -286,7 +315,7 @@ def sanity_probes() -> list[SanityProbe]:
         # Wave 2-D (3.4.0): sensitive entity columns. Glob covers both
         # canonical (src/Entity/*) and DDD-style (src/<Domain>/Entity/*) layouts.
         SanityProbe(
-            section_path="framework_specific.symfony.sensitive_columns",
+            section_path="recon_bags.stack.symfony.sensitive_columns",
             glob_patterns=["src/Entity/**/*.php", "src/**/Entity/*.php",
                            "app/Entity/**/*.php", "app/**/Entity/*.php"],
             label="symfony.sensitive_columns",
@@ -301,21 +330,14 @@ def sanity_probes() -> list[SanityProbe]:
 
 
 def _is_excluded(rel_path: str, exclude: tuple[str, ...]) -> bool:
-    """Match `rel_path` against EXCLUDE_PATHS entries (matches validator helper)."""
-    import fnmatch
-    rel_with_slash = "/" + rel_path
-    for ex in exclude:
-        if "*" in ex:
-            if fnmatch.fnmatch(rel_path.rsplit("/", 1)[-1], ex):
-                return True
-            continue
-        if ex.endswith("/"):
-            if rel_path.startswith(ex) or ("/" + ex) in rel_with_slash:
-                return True
-        else:
-            if rel_path == ex or rel_path.startswith(ex + "/") or ("/" + ex + "/") in rel_with_slash:
-                return True
-    return False
+    """Match `rel_path` against EXCLUDE_PATHS entries (matches validator helper).
+
+    Thin wrapper around `recon.recipes._shared.is_excluded` so addon detectors
+    (easyadmin_detect, sonata_detect) and this module share one implementation.
+    Kept under the original `_is_excluded` name so internal callers don't need
+    rewiring.
+    """
+    return _shared_is_excluded(rel_path, exclude)
 
 
 def _list_php_files(project_root: Path) -> list[tuple[str, Path]]:
@@ -769,12 +791,12 @@ def _route_item(
 
 
 def _to_relative(abs_path: Any, project_root: Path) -> Optional[str]:
-    if not isinstance(abs_path, str):
-        return None
-    try:
-        return Path(abs_path).resolve().relative_to(project_root.resolve()).as_posix()
-    except (ValueError, OSError):
-        return None
+    """Thin wrapper around `recon.recipes._shared.to_relative`.
+
+    Shared with easyadmin_detect / sonata_detect via `_shared.py` so the three
+    modules can't drift on the macOS `/var ↔ /private/var` symlink edge case.
+    """
+    return _shared_to_relative(abs_path, project_root)
 
 
 def _touched(file_rel: str, diff_files: Optional[set[str]]) -> bool:
@@ -935,7 +957,7 @@ def collect_data_access(
 
 
 # ---------------------------------------------------------------------------
-# auth_layer + framework_specific.symfony.firewalls (parsed from security.yaml).
+# auth_layer + recon_bags.stack.symfony.firewalls (parsed from security.yaml).
 # ---------------------------------------------------------------------------
 
 
@@ -1560,7 +1582,7 @@ def collect_frontend_assets(
 
 
 # ---------------------------------------------------------------------------
-# framework_specific.symfony.* collectors.
+# recon_bags.stack.symfony.* collectors.
 # ---------------------------------------------------------------------------
 
 
@@ -1641,109 +1663,8 @@ def compute_admin_authz_coverage(
     )
 
 
-def collect_sonata_admin_classes(
-    project_root: Path,
-    plugin_root: Path,
-    warnings: list[str],
-    *,
-    exclude: Optional[tuple[str, ...]] = None,
-) -> SectionPayload:
-    """Sonata AdminBundle admin classes — entity_fqcn + form_fields.
-
-    Returns `none` (not `unknown`) when no admin classes are present — that's
-    a normal state for non-Sonata projects, not a recipe failure.
-    """
-    from recon import sandbox
-
-    out, warn = sandbox.run_extractor(
-        plugin_root, project_root, "sonata-admin", project_root, exclude=exclude,
-    )
-    if warn:
-        warnings.append(warn)
-        return SectionPayload(status="unknown", reason=warn)
-    items: list[dict] = []
-    has_unresolved = False
-    for it in (out.get("items") or []):
-        rel = _to_relative(it.get("file"), project_root)
-        if rel is None or _is_excluded(rel, EXCLUDE_PATHS):
-            continue
-        unresolved = bool(it.get("unresolved_fields"))
-        if unresolved:
-            has_unresolved = True
-        items.append({
-            "class": it.get("class") or "",
-            "file": rel,
-            "line": it.get("line") or 0,
-            "entity_fqcn": it.get("entity_fqcn") or None,
-            "form_fields": list(it.get("form_fields") or []),
-            "unresolved_fields": unresolved,
-        })
-    if not items:
-        return SectionPayload(status="none", reason="no AbstractAdmin subclasses found")
-    if has_unresolved:
-        return SectionPayload(
-            status="partial",
-            items=items,
-            reason="at least one admin class delegates configureFormFields() to parent",
-        )
-    return SectionPayload(status="ok", items=items)
-
-
-def collect_easyadmin_crud_controllers(
-    project_root: Path,
-    plugin_root: Path,
-    warnings: list[str],
-    *,
-    exclude: Optional[tuple[str, ...]] = None,
-) -> SectionPayload:
-    """EasyAdmin CRUD controllers — entity_fqcn + configure_fields/actions/titles.
-
-    Returns `none` (not `unknown`) when no CRUD controllers are present — that's
-    a normal state for non-admin projects, not a recipe failure.
-
-    Sets `status=partial` if any controller has `unresolved_fields=true` so the
-    worker knows the field set is best-effort (parent::configureFields delegate).
-    """
-    from recon import sandbox
-
-    out, warn = sandbox.run_extractor(
-        plugin_root, project_root, "easyadmin-crud", project_root, exclude=exclude,
-    )
-    if warn:
-        warnings.append(warn)
-        return SectionPayload(status="unknown", reason=warn)
-    items: list[dict] = []
-    has_unresolved = False
-    for it in (out.get("items") or []):
-        rel = _to_relative(it.get("file"), project_root)
-        if rel is None or _is_excluded(rel, EXCLUDE_PATHS):
-            continue
-        unresolved = bool(it.get("unresolved_fields"))
-        if unresolved:
-            has_unresolved = True
-        # YAML emitter rejects `{}` (Empty dict value at key — use null instead),
-        # so an absent configureCrud method becomes `page_titles: null` in CONTEXT.md.
-        page_titles_raw = it.get("page_titles") or {}
-        page_titles_val = dict(page_titles_raw) if page_titles_raw else None
-        items.append({
-            "class": it.get("class") or "",
-            "file": rel,
-            "line": it.get("line") or 0,
-            "entity_fqcn": it.get("entity_fqcn") or None,
-            "configure_fields": list(it.get("configure_fields") or []),
-            "configure_actions": dict(it.get("configure_actions") or {"disabled": []}),
-            "page_titles": page_titles_val,
-            "unresolved_fields": unresolved,
-        })
-    if not items:
-        return SectionPayload(status="none", reason="no AbstractCrudController subclasses found")
-    if has_unresolved:
-        return SectionPayload(
-            status="partial",
-            items=items,
-            reason="at least one CRUD controller delegates configureFields() to parent",
-        )
-    return SectionPayload(status="ok", items=items)
+# Sonata / EasyAdmin collectors live in sibling addon-detector modules
+# (imported at module top alongside other recon.recipes imports).
 
 
 def collect_voters(
@@ -2696,7 +2617,7 @@ def build_inventory(
     fintech_items = collect_fintech_markers(project_root, files, diff_files)
     frontend_items = collect_frontend_assets(project_root, diff_files)
 
-    # 9. framework_specific.symfony.*.
+    # 9. recon_bags.stack.symfony.*.
     voters_payload = collect_voters(project_root, plugin_root, warnings, exclude=exclude)
     forms_payload = collect_forms(project_root, plugin_root, warnings, exclude=exclude)
     sg_payload = collect_serializer_groups(project_root, plugin_root, warnings, exclude=exclude)
@@ -2739,7 +2660,7 @@ def build_inventory(
     )
     sensitive_columns_payload = _build_sensitive_columns(project_root)
 
-    framework_specific: dict[str, SectionPayload] = {
+    stack_symfony: dict[str, SectionPayload] = {
         "voters": voters_payload,
         "forms": forms_payload,
         "serializer_groups": sg_payload,
@@ -2747,26 +2668,55 @@ def build_inventory(
         "doctrine_listeners": listeners_payload,
         "firewalls": firewalls_payload,
         "messenger_transports": msg_payload,
-        "easyadmin_crud_controllers": easyadmin_crud_payload,
-        "sonata_admin_classes": sonata_admin_payload,
         "admin_authz_coverage": admin_authz_payload,
         "routes_authz_matrix": routes_authz_payload,
         "sensitive_columns": sensitive_columns_payload,
+    }
+    addon_easyadmin: dict[str, SectionPayload] = {
+        "crud_controllers": easyadmin_crud_payload,
+    }
+    addon_sonata: dict[str, SectionPayload] = {
+        "admin_classes": sonata_admin_payload,
     }
 
     # Optional graphql_layer — present only when a known PHP GraphQL library
     # is in composer.json (api-platform/core, webonyx/graphql-php).
     gql = detect_graphql(project_root)
     if gql is not None:
-        framework_specific["graphql_layer"] = SectionPayload(
+        stack_symfony["graphql_layer"] = SectionPayload(
             status="ok",
             data=gql,
             source_files=["composer.json"],
         )
 
-    # Compute overall status.
+    recon_bags: dict[str, dict[str, dict[str, SectionPayload]]] = {
+        "stack": {"symfony": stack_symfony},
+        "addon": {
+            "easyadmin": addon_easyadmin,
+            "sonata": addon_sonata,
+        },
+    }
+
+    # Addon detection (composer-level) feeds `frontmatter.stack.addons`. We
+    # use a positive composer-dep probe (cheaper than walking the bag payload):
+    # an addon is "present" iff its package is in require/require-dev.
+    # `status: none` from the heavy collector is NOT a signal — a project can
+    # legitimately depend on EasyAdmin and define zero CRUD controllers yet,
+    # and we still want addon-layer checklists loaded for follow-up review.
+    detected_addons: list[str] = []
+    if detect_easyadmin(project_root):
+        detected_addons.append("easyadmin")
+    if detect_sonata(project_root):
+        detected_addons.append("sonata")
+    detected_addons.sort()
+
+    # Compute overall status — flatten payloads across kinds.
+    all_bag_payloads: list[SectionPayload] = []
+    for names in recon_bags.values():
+        for bag in names.values():
+            all_bag_payloads.extend(bag.values())
     any_unknown = any(p.status == "unknown" for p in core.values()) or any(
-        p.status == "unknown" for p in framework_specific.values()
+        p.status == "unknown" for p in all_bag_payloads
     )
     if any_unknown or warnings:
         status = "partial"
@@ -2780,11 +2730,12 @@ def build_inventory(
     return InventoryResult(
         status=status,
         core=core,
-        framework_specific=framework_specific,
+        recon_bags=recon_bags,
         sources_used=sources_used,
         warnings=warnings,
         errors=errors,
         missing_sections=missing_sections,
+        detected_addons=detected_addons,
     )
 
 
@@ -2801,18 +2752,24 @@ def _empty_skeleton(reason: str) -> InventoryResult:
             reason=reason,
             source_files=[] if is_scalar else None,
         )
-    fs: dict[str, SectionPayload] = {}
-    for key, spec in FRAMEWORK_SPECIFIC_SCHEMA.items():
-        is_scalar = spec.shape == "scalar"
-        fs[key] = SectionPayload(
-            status="unknown",
-            reason=reason,
-            source_files=[] if is_scalar else None,
-        )
+    fs: dict[str, dict[str, dict[str, SectionPayload]]] = {}
+    for kind, names in RECON_BAGS_SCHEMA.items():
+        per_kind: dict[str, dict[str, SectionPayload]] = {}
+        for name, bag_keys in names.items():
+            per_name: dict[str, SectionPayload] = {}
+            for key, spec in bag_keys.items():
+                is_scalar = spec.shape == "scalar"
+                per_name[key] = SectionPayload(
+                    status="unknown",
+                    reason=reason,
+                    source_files=[] if is_scalar else None,
+                )
+            per_kind[name] = per_name
+        fs[kind] = per_kind
     return InventoryResult(
         status="partial",
         core=core,
-        framework_specific=fs,
+        recon_bags=fs,
         sources_used=[],
         warnings=[reason],
         errors=[],
