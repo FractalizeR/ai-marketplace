@@ -14,13 +14,25 @@ Perform a security-focused code review to identify exploitable vulnerabilities w
 
 The orchestrator passes you:
 
-- `review_root`: absolute or relative path to the `security-review-{label}/` directory. It contains `CONTEXT.md` (schema v2 — **read in full**) and (after the first worker) the `waves/` subdirectory.
+- `review_root`: **absolute** path to the `security-review-{label}/` directory. It contains `CONTEXT.md` (schema v2 — **read in full**) and (after the first worker) the `waves/` subdirectory.
+- `project_root`: **absolute** path to the audited project root (where `composer.json` / framework configs live). **In composite repos this can differ from your cwd** (orchestrator may have been launched from a monorepo root above the PHP subproject). All `target_files`, `entry_points_in_scope` file paths, and file paths inside `CONTEXT.md` are **relative to `project_root`**, NOT to cwd. See the "PATH RESOLUTION" section below.
 - `relevant_section_paths`: list of **dot-notation paths** in `CONTEXT.md` critical for this wave (attention priority, NOT a ban on reading the rest). Examples: `attack_surface`, `authz_usage`, `recon_bags.stack.symfony.voters`, `recon_bags.stack.laravel.policies`. See the "READING CONTEXT.md" section.
 - `checklists`: absolute paths to `checklists/*.md` (core + framework-specific) — **load each one**.
 - `entry_points_in_scope`: list of FQN/ID entry points for data flow tracing.
 - `target_files`: files that must be analyzed.
 - `slice_id`: unique wave identifier for the report file name.
 - `mode`: `project` or `changes`.
+
+### PATH RESOLUTION (project_root vs cwd)
+
+All file paths in `target_files`, `entry_points_in_scope`, and `CONTEXT.md` items are **`project_root`-relative**, regardless of where the orchestrator's cwd is. The recon utility builds them via `Path.relative_to(project_root).as_posix()` (see `bin/recon/yaml_emit.py`).
+
+Concrete rules:
+
+1. **When reading a project file** with `Read`, `Grep`, `Glob`, or `Bash`: prepend `project_root`. Example: target_files contains `src/Controller/Foo.php` and `project_root` is `/foo/api` — call `Read("/foo/api/src/Controller/Foo.php")`. Do NOT call `Read("src/Controller/Foo.php")` blindly — if `project_root != cwd`, it resolves against the wrong root and silently misses the file (or reads a different file).
+2. **When emitting paths in findings** (`sink_file:sink_line`, `source_file:source_line`, paths inside `sink_snippet`, etc.): **keep them `project_root`-relative**. The dedup parser expects this format. Do NOT prepend `project_root` to header paths.
+3. **MCP `mcp__phpstorm__*` tools** typically expect a `projectPath` parameter — pass `project_root` there.
+4. If `project_root == cwd` (single-package repos, the common case) — both interpretations coincide, but the rule above still holds: be explicit about which root you're resolving against.
 
 ### "Slice = priority, not restriction" principle
 

@@ -1,6 +1,6 @@
 ---
 description: "Security review of changes in the current branch relative to master — with reverse-grep and forward-grep heuristics to surface regressions. Artifacts go to `security-review-{label}/`."
-argument-hint: "[--label=<x>] [--review-root=<path>] [--interactive] [--skip-recon] [--force-skip-recon] [--all-opus] [--no-console] [--exclude=<csv>]"
+argument-hint: "[--label=<x>] [--review-root=<out-dir>] [--project-root=<path>] [--interactive] [--skip-recon] [--force-skip-recon] [--all-opus] [--no-console] [--exclude=<csv>]"
 allowed-tools:
   - Read
   - Write
@@ -18,6 +18,7 @@ allowed-tools:
   - Bash(git diff --merge-base *)
   - Bash(git status *)
   - Bash(git log *)
+  - Bash(git -C *)
   - Bash(ls *)
   - Bash(mkdir *)
   - Bash(rm *)
@@ -36,7 +37,8 @@ You are the orchestrator of a security review for the current branch diff. Recon
 Parse flags from `$ARGUMENTS`:
 
 - `--label=<x>` — orchestrator label, forms `<review_root> = security-review-{label}` relative to cwd. If the flag is not passed — do **self-introspection** (see step 0).
-- `--review-root=<path>` — override of the review-root path (for Docker/CI/firejail). Accepts a relative path (resolved from cwd) or absolute. If set — `--label` is ignored.
+- `--review-root=<out-dir>` — override of the **review-root output directory** (artifacts: `CONTEXT.md`, `waves/`, `REPORT.md`). For Docker/CI/firejail isolation. Accepts a relative path (resolved from cwd) or absolute. If set — `--label` is ignored. **This flag does NOT specify what to scan** — use `--project-root=<path>` to point at a non-cwd project (the diff itself limits scope for this command).
+- `--project-root=<path>` — corner of the audited project (where `composer.json` / framework configs live). Defaults to `cwd`. Use in composite repos where CLAUDE.md / cwd is one directory above the actual project root (for example monorepo with `api/` PHP subproject + shared top-level CLAUDE.md). Recon, exclude paths, sanity coverage, and refute path normalization all resolve against this value. Accepts a relative (from cwd) or absolute path.
 - `--interactive`, `--skip-recon`, `--force-skip-recon`, `--all-opus` — as in `security-project`. By default W4/W5 on sonnet (balanced profile); `--all-opus` forces opus everywhere.
 - `--no-console` — static-only recon: the utility does NOT run the project's `bin/console`. Use when auditing hostile/untrusted repos, when runtime credentials are absent, or in CI scenarios. Ceiling=medium (intentionally). Alternative — isolation via firejail/Docker without the flag.
 - `--exclude=<csv>` — additional path prefixes (relative to `<project_root>`) that will NOT be parsed by the PHP extractor (see semantics in `security-project.md`). Combined with whatever is found in `<project_root>/CLAUDE.md` in step 4a.
@@ -45,18 +47,20 @@ Parse flags from `$ARGUMENTS`:
 
 ## STEPS
 
-### 0. Resolve label & review_root
+### 0. Resolve label, review_root, project_root
+
+#### 0.1. Resolve `REVIEW_ROOT`
 
 **If `--review-root=<path>` is set** (absolute or relative):
 
-1. Resolve the path relative to cwd, if it is relative.
-2. Set `REVIEW_ROOT = <resolved path>`.
+1. Resolve the path relative to cwd, if it is relative. Always convert to **absolute** form (no `.`, no `..`, no symlinks left unresolved).
+2. Set `REVIEW_ROOT = <resolved absolute path>`.
 3. `--label` (if any) is **ignored** — the path is explicit.
 
 **Otherwise**, if `--label=<x>` is set:
 
 1. Normalize `<x>` to the dictionary `claude | codex | gemini | deepseek | qwen | other-<short>` (kebab-case, ≤ 16 characters).
-2. `REVIEW_ROOT = security-review-<x>` (relative to cwd).
+2. `REVIEW_ROOT = security-review-<x>`, then resolve to **absolute** relative to cwd.
 
 **Otherwise** (neither `--review-root` nor `--label`):
 
@@ -73,14 +77,57 @@ Do **self-introspection**: determine your model and the harness you are running 
 
 Level — **harness/CLI**, not the exact model. `claude-opus-4-7` vs `claude-sonnet-4-6` is not our concern — what matters is only protection against collisions between parallel runs of **different** models on the same project.
 
-`REVIEW_ROOT = security-review-<label>` relative to cwd.
+`REVIEW_ROOT = security-review-<label>`, resolved to **absolute** relative to cwd.
 
 **Known limitation.** Open-weight fine-tunes may erroneously report themselves as Claude (SFT artifact). If confidence is low — the user will have to pass `--label` explicitly.
 
-After resolution **print a line to the user**:
+#### 0.2. Resolve `PROJECT_ROOT`
+
+**If `--project-root=<path>` is set:** resolve to absolute (relative paths resolve from cwd). Set `PROJECT_ROOT = <resolved absolute path>`. If the resolved path is not an existing directory — abort with a clear error.
+
+**Otherwise:** `PROJECT_ROOT = <cwd, absolute>`.
+
+**Then verify `PROJECT_ROOT` is a git repository** (this command is diff-driven; without git we cannot compute the base diff):
+
+```bash
+git -C "<PROJECT_ROOT>" rev-parse --git-dir > /dev/null 2>&1
+```
+
+If it fails — abort with: `ERROR: --project-root=<path> is not a git repository. /security-changes requires git to compute the diff against the base branch.`
+
+#### 0.3. Validate `REVIEW_ROOT` (sanity guard against misuse)
+
+`--review-root` is for **output artifacts**, not for narrowing the audit. Abort with the error message below if any of these hold:
+
+- the resolved `REVIEW_ROOT` already exists as a non-directory (regular file, symlink to file, special file) — `mkdir -p` in Step 1 would fail downstream, **or**
+- the resolved `REVIEW_ROOT` equals `PROJECT_ROOT` exactly, **or**
+- the resolved `REVIEW_ROOT` is a subpath of `PROJECT_ROOT` AND its **basename** does **not** start with `security-review` (`security-review`, `security-review-claude`, `security-review-foo`, etc.), **or**
+- the resolved `REVIEW_ROOT` basename is one of the known source-tree / framework directory names (case-insensitive): `src`, `app`, `lib`, `source`, `tests`, `test`, `spec`, `vendor`, `node_modules`, `public`, `web`, `bin`, `config`, `assets`, `resources`, `var`, `storage`, `templates`, `views`, `database`, `migrations`, `seeders`, `scripts`, `routes`, `build`, `dist`, `target`, `out`, `coverage`, `.next`, `.nuxt`, `__pycache__`.
+
+Error message:
 
 ```
-review_root: <REVIEW_ROOT> (label: <label or "explicit override">)
+ERROR: --review-root=<path> looks like a project source directory or the project root itself.
+This flag specifies WHERE the review WRITES its artifacts (CONTEXT.md, waves/, REPORT.md, .gitignore=*),
+NOT what to scan.
+
+  • For diff-mode the scope is limited by the diff itself — no scope flag is needed.
+  • To point at a non-cwd project (composite repos) — use --project-root=<path>.
+  • Default review root is security-review-<label>/ inside cwd; usually no flag is needed.
+
+If you really want to write into <REVIEW_ROOT>, rename it to start with `security-review`
+(e.g. `security-review-staging`) and re-run.
+```
+
+#### 0.4. Absolute-path invariant
+
+After step 0 is complete, **all subsequent references to `<REVIEW_ROOT>` and `<PROJECT_ROOT>` MUST use the resolved absolute paths**. Do not re-derive them from the original flag values, do not pass relative forms to subagents (`Task(...)`), and do not let `cd` between steps change their meaning. Subagents inherit cwd from the orchestrator, but they may resolve paths in a different working directory — only absolute strings are safe to forward.
+
+After resolution **print to the user**:
+
+```
+review_root:  <REVIEW_ROOT> (label: <label or "explicit override">)
+project_root: <PROJECT_ROOT>
 ```
 
 ### 1. Ensure review_root layout
@@ -95,32 +142,36 @@ mkdir -p "<REVIEW_ROOT>/waves"
 
 ### 2. Legacy v1 detection (warning, not abort)
 
-If in the project root (cwd) an **old** `SECURITY_CONTEXT.md` is detected:
+If an **old** `SECURITY_CONTEXT.md` is detected (probe both `<cwd>` and `<PROJECT_ROOT>`):
 
 ```bash
-test -f SECURITY_CONTEXT.md && echo "found"
+test -f "<cwd>/SECURITY_CONTEXT.md"          && echo "found-at-cwd"
+test -f "<PROJECT_ROOT>/SECURITY_CONTEXT.md" && echo "found-at-project-root"
 ```
 
-→ Print a warning, **do not touch the file**:
+If either probe succeeds → print a warning, **do not touch the file**. Name the location:
 
 ```
-⚠️  Legacy v1 detected: SECURITY_CONTEXT.md in project root (schema v1)
+⚠️  Legacy v1 detected: SECURITY_CONTEXT.md at <found_path> (schema v1)
     The file is not modified. Fresh recon will be written to <REVIEW_ROOT>/CONTEXT.md.
 ```
 
 ### 3. Determine base branch and diff
 
+All git commands run with `-C "<PROJECT_ROOT>"` so they target the audited project's repository, not whatever git the orchestrator's cwd happens to be in (critical for composite repos with `--project-root`).
+
 ```bash
 # Try origin/master, then origin/main, then master, main
-BASE_BRANCH=$(git rev-parse --verify origin/master 2>/dev/null \
-  || git rev-parse --verify origin/main 2>/dev/null \
-  || git rev-parse --verify master 2>/dev/null \
-  || git rev-parse --verify main 2>/dev/null)
+BASE_BRANCH=$(git -C "<PROJECT_ROOT>" rev-parse --verify origin/master 2>/dev/null \
+  || git -C "<PROJECT_ROOT>" rev-parse --verify origin/main 2>/dev/null \
+  || git -C "<PROJECT_ROOT>" rev-parse --verify master 2>/dev/null \
+  || git -C "<PROJECT_ROOT>" rev-parse --verify main 2>/dev/null)
 ```
 
-Get the list of changed files:
+Get the list of changed files. Paths in the output are **`PROJECT_ROOT`-relative** (matching the format that recon uses inside `CONTEXT.md`):
+
 ```bash
-git diff ${BASE_BRANCH}...HEAD --name-only > "<REVIEW_ROOT>/diff_files.txt"
+git -C "<PROJECT_ROOT>" diff ${BASE_BRANCH}...HEAD --name-only > "<REVIEW_ROOT>/diff_files.txt"
 ```
 
 If the diff is empty — abort with the message "No changes relative to the base branch".
@@ -139,13 +190,17 @@ rm -f "<REVIEW_ROOT>/waves/"*.pre-retry.md
 
 ### 4a. Collecting the exclude list (CLAUDE.md + flag)
 
-Same as `security-project.md` step 3a: read `<project_root>/CLAUDE.md`, find a section of the form `## Code review exclusions` (or equivalent), extract relative path prefixes. Combine with the orchestrator's `--exclude=<csv>`. The result — `EXCLUDE_CSV`. The built-in `DEFAULT_EXCLUDE` is applied by the utility itself.
+Same as `security-project.md` step 3a: read **both** `<cwd>/CLAUDE.md` **and** `<PROJECT_ROOT>/CLAUDE.md` (if `PROJECT_ROOT != cwd` — these are two distinct files, common in monorepos with a top-level CLAUDE.md and a subproject-specific one). Find sections of the form `## Code review exclusions` (or equivalent), extract path prefixes. Combine with the orchestrator's `--exclude=<csv>`.
 
-If something was taken from CLAUDE.md or the flag — print a line:
+**Path semantics.** All paths (from either CLAUDE.md and the `--exclude` flag) are interpreted as **`PROJECT_ROOT`-relative**. The orchestrator does **NOT** strip any prefix; users must write project-root-relative paths. If a path does not resolve to an existing directory inside `PROJECT_ROOT`, skip it with a one-line warning that names its source file. The result — `EXCLUDE_CSV`. The built-in `DEFAULT_EXCLUDE` is applied by the utility itself.
+
+If something was taken from CLAUDE.md or the flag — print a line (mention which file the entries came from when both were read):
 
 ```
-Exclude (CLAUDE.md): <list>
-Exclude (--exclude flag): <list or "none">
+Exclude (CLAUDE.md @ <cwd>):          <list or "none">
+Exclude (CLAUDE.md @ <PROJECT_ROOT>): <list or "none">   # only if PROJECT_ROOT != cwd
+Exclude (--exclude flag):             <list or "none">
+Exclude (skipped, outside PROJECT_ROOT): <list or none>  # warnings for entries that didn't resolve
 ```
 
 ### 4b. Detect removed defenses in diff
@@ -155,7 +210,7 @@ The goal — find in the diff removed lines that were `denyAccessUnlessGranted`,
 #### 4b.1. Collect the full diff
 
 ```bash
-git diff "${BASE_BRANCH}...HEAD" -- '*.php' '*.yaml' '*.yml' '*.blade.php' \
+git -C "<PROJECT_ROOT>" diff "${BASE_BRANCH}...HEAD" -- '*.php' '*.yaml' '*.yml' '*.blade.php' \
   > "<REVIEW_ROOT>/full_diff.patch"
 ```
 
@@ -193,7 +248,7 @@ Covered categories (source of truth — `bin/diff_removed_defenses.py::REMOVED_D
 Find files removed entirely by this diff:
 
 ```bash
-git diff --diff-filter=D --name-only "${BASE_BRANCH}...HEAD" \
+git -C "<PROJECT_ROOT>" diff --diff-filter=D --name-only "${BASE_BRANCH}...HEAD" \
   > "<REVIEW_ROOT>/deleted_files.txt"
 ```
 
@@ -203,11 +258,11 @@ For each removed file:
    - **If** `<REVIEW_ROOT>/CONTEXT.md` from the **base branch** exists (for example, a past run saved `CONTEXT.prev.md`) — look at the sections `recon_bags.stack.symfony.voters`, `recon_bags.stack.laravel.policies`, `recon_bags.stack.laravel.middleware_groups` and match the path.
    - **Otherwise** (CONTEXT base unavailable) — fallback by naming heuristic: `*Voter.php`, `*Policy.php`, `*Middleware.php`. Document in the output that the fallback fired.
 
-2. **Collect consumers** of these classes through the built-in `Grep` tool:
+2. **Collect consumers** of these classes through the built-in `Grep` tool. Search inside `<PROJECT_ROOT>`, not in the orchestrator's cwd (in composite repos these differ):
 
    ```
-   Grep(pattern="use App\\\\Security\\\\<ClassName>;", path=".", glob="*.php", output_mode="files_with_matches")
-   Grep(pattern="<ClassName>::", path=".", glob="*.php", output_mode="files_with_matches")
+   Grep(pattern="use App\\\\Security\\\\<ClassName>;", path="<PROJECT_ROOT>", glob="*.php", output_mode="files_with_matches")
+   Grep(pattern="<ClassName>::", path="<PROJECT_ROOT>", glob="*.php", output_mode="files_with_matches")
    ```
 
    (Do not use shell `grep -rn` — `Bash(grep:*)` is not in allowed-tools.)
@@ -262,13 +317,15 @@ Forward `--diff-files=` to the recon agent (it forwards to the utility as-is —
 
 ```
 Task(subagent_type="security-recon", prompt="""
-  project_root: <cwd>
+  project_root: <PROJECT_ROOT>
   review_root: <REVIEW_ROOT>
   --diff-files=<REVIEW_ROOT>/diff_files.txt
   [--no-console]            # only if the flag was passed to the orchestrator
   [--exclude=<EXCLUDE_CSV>] # only if 4a collected a non-empty list
 """)
 ```
+
+Both paths are forwarded as **absolute** (per the Step 0.4 invariant).
 
 The `--diff-files=` field is the only signal to the recon agent that `scope=changes` is needed. If the field is passed as `diff_files:` without `--`, recon will silently run in project mode and `touched_by_diff` will NOT be set — the entire mode=changes pipeline will break.
 
@@ -277,8 +334,10 @@ After return — check `RECON_OK`. If `RECON_*_FAILED` is received — abort wit
 Run filesystem coverage sanity-check:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>" --sanity
+python3 ${CLAUDE_PLUGIN_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>" --sanity --project-root "<PROJECT_ROOT>"
 ```
+
+`--project-root` is required here — without it `validate_context.py` falls back to inferring from `parent(review_root)`, which fails for composite repos (parent has no `composer.json` / `package.json`) and prints `WARNING: project_root not specified and could not be inferred — sanity coverage skipped`. The fallback exists for legacy CLI callers; the orchestrator must always be explicit.
 
 For `changes` mode the sanity is informational: if recon skipped >20% of controllers/handlers/voters/listeners from the filesystem, reverse/forward-grep may not find consumers for changed services. Behavior by threshold ladder — as in `security-project` (warning 5–20 %, error >20 %).
 
@@ -304,16 +363,16 @@ If `--interactive` — checkpoint as in `security-project`.
 For each changed file in `<REVIEW_ROOT>/diff_files.txt` that **is not** an entry point (controller/command/handler/listener/voter/route-config/security config):
 
 1. Determine the FQN of the class from the file path (PSR-4: `src/Service/PaymentService.php` → `App\Service\PaymentService`).
-2. Find FQN usages through the **built-in `Grep` tool** (it is in the orchestrator's allowed-tools, not shell):
+2. Find FQN usages through the **built-in `Grep` tool** (it is in the orchestrator's allowed-tools, not shell). Use `<PROJECT_ROOT>/src` as the `path` (composite repos: cwd may differ from `<PROJECT_ROOT>`):
 
    ```
-   Grep(pattern="PaymentService", path="src", glob="*.php", output_mode="files_with_matches")
+   Grep(pattern="PaymentService", path="<PROJECT_ROOT>/src", glob="*.php", output_mode="files_with_matches")
    ```
 
 3. Additionally — for this class's public methods (if the name is longer than 6 characters OR CamelCase, for example `findByDynamicCriteria`, but not `find`, `get`, `save`):
 
    ```
-   Grep(pattern="->findByDynamicCriteria\\(", path="src", glob="*.php", output_mode="files_with_matches")
+   Grep(pattern="->findByDynamicCriteria\\(", path="<PROJECT_ROOT>/src", glob="*.php", output_mode="files_with_matches")
    ```
 
 4. If `mcp__phpstorm__search_symbol` is available — verify results via `{type: "method_call"}` (more accurate than regex over PHP).
@@ -397,6 +456,7 @@ For each wave from the plan, additionally feed the reverse/forward-grep entry po
 ```
 Task(subagent_type="security", model=<from plan, field "model">, prompt="""
   review_root: <REVIEW_ROOT>
+  project_root: <PROJECT_ROOT>
   relevant_section_paths: <from plan>
   checklists: <from plan>
   entry_points_in_scope: <from plan + reverse/forward-grep finds>
@@ -407,6 +467,8 @@ Task(subagent_type="security", model=<from plan, field "model">, prompt="""
 ```
 
 **Important:** the `model` parameter is passed as a Task call argument, not in the prompt text. The value is taken from the `"model"` field of the JSON plan.
+
+`project_root` is required (per Step 0.4 absolute-path invariant) so the worker resolves `target_files` / `entry_points_in_scope` / paths inside `CONTEXT.md` correctly when `project_root != cwd` (composite repos). Without it the worker reads files relative to cwd and silently misses them in monorepos.
 
 ### 10a. Safety net + progress (CRITICAL)
 

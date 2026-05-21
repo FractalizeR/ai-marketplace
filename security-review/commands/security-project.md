@@ -1,6 +1,6 @@
 ---
 description: "Two-phase project security audit: recon + parallel waves of focused workers + exploratory wave for cross-layer chains + deterministic dedup. Artifacts go to `security-review-{label}/`."
-argument-hint: "[--label=<x>] [--review-root=<path>] [--interactive] [--skip-recon] [--force-skip-recon] [--quick] [--all-opus] [--scope=<glob>] [--no-console] [--exclude=<csv>]"
+argument-hint: "[--label=<x>] [--review-root=<out-dir>] [--project-root=<path>] [--interactive] [--skip-recon] [--force-skip-recon] [--quick] [--all-opus] [--scope=<glob>] [--no-console] [--exclude=<csv>]"
 allowed-tools:
   - Read
   - Write
@@ -32,7 +32,8 @@ You are the project security review orchestrator. You run recon, manage parallel
 Parse flags from `$ARGUMENTS`:
 
 - `--label=<x>` — orchestrator label, forms `<review_root> = security-review-{label}` relative to cwd. If the flag is not passed — do **self-introspection** (see step 0).
-- `--review-root=<path>` — override of the review-root path (for Docker/CI/firejail). Accepts a relative path (resolved from cwd) or absolute. If set — `--label` is ignored.
+- `--review-root=<out-dir>` — override of the **review-root output directory** (artifacts: `CONTEXT.md`, `waves/`, `REPORT.md`). For Docker/CI/firejail isolation. Accepts a relative path (resolved from cwd) or absolute. If set — `--label` is ignored. **This flag does NOT specify what to scan** — use `--scope=<glob>` to restrict the audit area, and `--project-root=<path>` to point at a non-cwd project.
+- `--project-root=<path>` — corner of the audited project (where `composer.json` / framework configs live). Defaults to `cwd`. Use in composite repos where CLAUDE.md / cwd is one directory above the actual project root (for example monorepo with `api/` PHP subproject + shared top-level CLAUDE.md). Recon, exclude paths, and sanity coverage all resolve against this value. Accepts a relative (from cwd) or absolute path.
 - `--interactive` — checkpoint with the user after recon (via AskUserQuestion)
 - `--skip-recon` — reuse existing `<review_root>/CONTEXT.md` (fingerprint validation)
 - `--force-skip-recon` — continue on code_fingerprint mismatch
@@ -49,18 +50,20 @@ Parse flags from `$ARGUMENTS`:
 
 ## STEPS
 
-### 0. Resolve label & review_root
+### 0. Resolve label, review_root, project_root
+
+#### 0.1. Resolve `REVIEW_ROOT`
 
 **If `--review-root=<path>` is set** (absolute or relative):
 
-1. Resolve the path relative to cwd, if it is relative.
-2. Set `REVIEW_ROOT = <resolved path>`.
+1. Resolve the path relative to cwd, if it is relative. Always convert to **absolute** form (no `.`, no `..`, no symlinks left unresolved).
+2. Set `REVIEW_ROOT = <resolved absolute path>`.
 3. `--label` (if any) is **ignored** — the path is explicit.
 
 **Otherwise**, if `--label=<x>` is set:
 
 1. Normalize `<x>` to the dictionary `claude | codex | gemini | deepseek | qwen | other-<short>` (kebab-case, ≤ 16 characters).
-2. `REVIEW_ROOT = security-review-<x>` (relative to cwd).
+2. `REVIEW_ROOT = security-review-<x>`, then resolve to **absolute** relative to cwd.
 
 **Otherwise** (neither `--review-root` nor `--label`):
 
@@ -77,14 +80,50 @@ Do **self-introspection**: determine your model and the harness you are running 
 
 Level — **harness/CLI**, not the exact model. `claude-opus-4-7` vs `claude-sonnet-4-6` is not our concern — what matters is only protection against collisions between parallel runs of **different** models on the same project.
 
-`REVIEW_ROOT = security-review-<label>` relative to cwd.
+`REVIEW_ROOT = security-review-<label>`, resolved to **absolute** relative to cwd.
 
 **Known limitation.** Open-weight fine-tunes may erroneously report themselves as Claude (SFT artifact). If confidence is low — the user will have to pass `--label` explicitly.
 
-After resolution **print a line to the user**:
+#### 0.2. Resolve `PROJECT_ROOT`
+
+**If `--project-root=<path>` is set:** resolve to absolute (relative paths resolve from cwd). Set `PROJECT_ROOT = <resolved absolute path>`. If the resolved path is not an existing directory — abort with a clear error.
+
+**Otherwise:** `PROJECT_ROOT = <cwd, absolute>`.
+
+#### 0.3. Validate `REVIEW_ROOT` (sanity guard against misuse)
+
+`--review-root` is for **output artifacts**, not for narrowing the audit. Abort with the error message below if any of these hold:
+
+- the resolved `REVIEW_ROOT` already exists as a non-directory (regular file, symlink to file, special file) — `mkdir -p` in Step 1 would fail downstream, **or**
+- the resolved `REVIEW_ROOT` equals `PROJECT_ROOT` exactly, **or**
+- the resolved `REVIEW_ROOT` is a subpath of `PROJECT_ROOT` AND its **basename** does **not** start with `security-review` (`security-review`, `security-review-claude`, `security-review-foo`, etc.), **or**
+- the resolved `REVIEW_ROOT` basename is one of the known source-tree / framework directory names (case-insensitive): `src`, `app`, `lib`, `source`, `tests`, `test`, `spec`, `vendor`, `node_modules`, `public`, `web`, `bin`, `config`, `assets`, `resources`, `var`, `storage`, `templates`, `views`, `database`, `migrations`, `seeders`, `scripts`, `routes`, `build`, `dist`, `target`, `out`, `coverage`, `.next`, `.nuxt`, `__pycache__`.
+
+Error message:
 
 ```
-review_root: <REVIEW_ROOT> (label: <label or "explicit override">)
+ERROR: --review-root=<path> looks like a project source directory or the project root itself.
+This flag specifies WHERE the review WRITES its artifacts (CONTEXT.md, waves/, REPORT.md, .gitignore=*),
+NOT what to scan.
+
+  • To restrict the audited area to a subdirectory — use --scope='<glob>',
+    for example --scope='src/Api/**'.
+  • To point at a non-cwd project (composite repos) — use --project-root=<path>.
+  • Default review root is security-review-<label>/ inside cwd; usually no flag is needed.
+
+If you really want to write into <REVIEW_ROOT>, rename it to start with `security-review`
+(e.g. `security-review-staging`) and re-run.
+```
+
+#### 0.4. Absolute-path invariant
+
+After step 0 is complete, **all subsequent references to `<REVIEW_ROOT>` and `<PROJECT_ROOT>` MUST use the resolved absolute paths**. Do not re-derive them from the original flag values, do not pass relative forms to subagents (`Task(...)`), and do not let `cd` between steps change their meaning. Subagents inherit cwd from the orchestrator, but they may resolve paths in a different working directory — only absolute strings are safe to forward.
+
+After resolution **print to the user**:
+
+```
+review_root:  <REVIEW_ROOT> (label: <label or "explicit override">)
+project_root: <PROJECT_ROOT>
 ```
 
 ### 1. Ensure review_root layout
@@ -101,16 +140,17 @@ This **does not modify the project's `.gitignore`** and does not enter git.
 
 ### 2. Legacy v1 detection (warning, not abort)
 
-If in the project root (cwd) an **old** `SECURITY_CONTEXT.md` is detected (this is the v1 layout, before the v3 redesign):
+If an **old** `SECURITY_CONTEXT.md` is detected (v1 layout, before the v3 redesign) — probe both `<cwd>` and `<PROJECT_ROOT>` (in composite repos the file may sit in either):
 
 ```bash
-test -f SECURITY_CONTEXT.md && echo "found"
+test -f "<cwd>/SECURITY_CONTEXT.md"          && echo "found-at-cwd"
+test -f "<PROJECT_ROOT>/SECURITY_CONTEXT.md" && echo "found-at-project-root"
 ```
 
-→ Print a warning to the user, **do not touch the file**:
+If either probe succeeds → print a warning to the user, **do not touch the file**. Name the location(s) explicitly so the user knows where to look:
 
 ```
-⚠️  Legacy v1 detected: SECURITY_CONTEXT.md in project root (schema v1)
+⚠️  Legacy v1 detected: SECURITY_CONTEXT.md at <found_path> (schema v1)
     The file is not modified. Fresh recon will be written to <REVIEW_ROOT>/CONTEXT.md.
     The old file can be removed manually after a successful run.
 ```
@@ -136,23 +176,34 @@ rm -f "<REVIEW_ROOT>/waves/"*.pre-retry.md
 
 The goal — assemble a single `EXCLUDE_CSV` to forward to the recon utility. Sources:
 
-1. **`<project_root>/CLAUDE.md`** (if the file exists). Read it and find explicit instructions to exclude directories from the security review. Typical signals: a section of the form `## Code review exclusions` / `## Security review exclusions` listing paths; or explicit suggestions "do not analyze legacy/", "exclude src/ThirdParty/", "the generated/ folder is autogen, no review needed". Extract only relative path prefixes (directories and/or specific subdirs), without glob patterns and `*.ext`. If CLAUDE.md is absent or does not contain such a section — the list is empty.
-2. The orchestrator's **`--exclude=<csv>` flag** (if passed) — parse into a list.
+1. **`CLAUDE.md` (up to two files).** Read **both** of these, if they exist:
+   - `<cwd>/CLAUDE.md` — typical placement in single-package repos and in monorepo roots.
+   - `<PROJECT_ROOT>/CLAUDE.md` — placement in composite repos with a PHP subproject (when `--project-root` differs from cwd). If `<PROJECT_ROOT> == <cwd>`, the file is the same — read once, do not duplicate.
 
-Combine both sources, remove duplicates and empties. The result — `EXCLUDE_CSV` (comma-separated string) or empty.
+   In each file find explicit instructions to exclude directories from the security review. Typical signals: a section of the form `## Code review exclusions` / `## Security review exclusions` listing paths; or explicit suggestions "do not analyze legacy/", "exclude src/ThirdParty/", "the generated/ folder is autogen, no review needed". Extract only relative path prefixes (directories and/or specific subdirs), without glob patterns and `*.ext`.
+
+   **Path semantics.** Every path extracted from any CLAUDE.md is interpreted as **`PROJECT_ROOT`-relative** — that is what the recon utility consumes. The orchestrator does **NOT** strip any prefix from the path; the user is responsible for writing project-root-relative paths. If a path (after the `PROJECT_ROOT`-relative interpretation) does not resolve to an existing directory inside `PROJECT_ROOT`, **skip it** with a one-line user warning that names the file the path came from. Common cause in monorepos: putting `api/legacy/` in the top-level CLAUDE.md while `PROJECT_ROOT == <cwd>/api` — the correct form is `legacy/`. Document this in `<cwd>/CLAUDE.md` next to the exclusions list, or move the exclusions to `<PROJECT_ROOT>/CLAUDE.md`.
+
+   If both files are absent or neither contains such a section — the list is empty.
+
+2. The orchestrator's **`--exclude=<csv>` flag** (if passed) — parse into a list. Paths are interpreted relative to `PROJECT_ROOT` (same rule as CLAUDE.md).
+
+Combine all sources, remove duplicates and empties. The result — `EXCLUDE_CSV` (comma-separated string) or empty.
 
 > The built-in `DEFAULT_EXCLUDE` (`vendor/`, `var/cache/`, `var/log/`, `node_modules/`, `storage/framework/cache/`, `storage/logs/`, `bootstrap/cache/`, `public/build/`, `.git/`) is ALWAYS applied by the utility — there is no need to add it to `EXCLUDE_CSV`.
 
-If something was taken from CLAUDE.md — print a line to the user:
+If something was taken from CLAUDE.md — print a line to the user (mention which file the entries came from when both were read):
 
 ```
-Exclude (CLAUDE.md): <list>
-Exclude (--exclude flag): <list or "none">
+Exclude (CLAUDE.md @ <cwd>):          <list or "none">
+Exclude (CLAUDE.md @ <PROJECT_ROOT>): <list or "none">   # only if PROJECT_ROOT != cwd
+Exclude (--exclude flag):             <list or "none">
+Exclude (skipped, outside PROJECT_ROOT): <list or none>  # warnings for entries that didn't resolve
 ```
 
 This gives transparency: the user sees which directories will not be analyzed before leaving for the run.
 
-**Recommended section format in CLAUDE.md** (for user information — we do not write it ourselves):
+**Recommended section format in CLAUDE.md** (for user information — we do not write it ourselves). All paths are `PROJECT_ROOT`-relative:
 
 ```markdown
 ## Code review exclusions
@@ -182,12 +233,14 @@ Launch the recon agent. It will pick the recipe itself (detect) and call `recon_
 
 ```
 Task(subagent_type="security-recon", prompt="""
-  project_root: <cwd>
+  project_root: <PROJECT_ROOT>
   review_root: <REVIEW_ROOT>
   [--no-console]            # only if the flag was passed to the orchestrator
   [--exclude=<EXCLUDE_CSV>] # only if 3a collected a non-empty list
 """)
 ```
+
+Both paths are forwarded as **absolute** (per the Step 0.4 invariant).
 
 **In normal mode `--no-console` is not needed** — the recon utility decides itself (if console enrichment is available — uses it, otherwise sets ceiling=medium). Pass the flag only on explicit sandbox requirement (hostile-repo audit, CI without credentials).
 
@@ -196,8 +249,10 @@ After return — check `RECON_OK` in the agent's response. If `RECON_*_FAILED` i
 Then additionally run sanity-check with filesystem coverage:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>" --sanity
+python3 ${CLAUDE_PLUGIN_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>" --sanity --project-root "<PROJECT_ROOT>"
 ```
+
+`--project-root` is required here — without it `validate_context.py` falls back to inferring from `parent(review_root)`, which fails for composite repos (parent has no `composer.json` / `package.json`) and prints `WARNING: project_root not specified and could not be inferred — sanity coverage skipped`. The fallback exists for legacy CLI callers; the orchestrator must always be explicit.
 
 `--sanity` imports the recipe (per `recipe_used` from frontmatter), calls `recipe.sanity_probes()`, compares declared `file:` in sections against the actual filesystem. **Coverage threshold ladder** (rev v3):
 
@@ -311,6 +366,7 @@ Task call format for each wave:
 ```
 Task(subagent_type="security", model=<from plan, field "model">, prompt="""
   review_root: <REVIEW_ROOT>
+  project_root: <PROJECT_ROOT>
   relevant_section_paths: <list of dot-notation paths>
   checklists: <list of absolute paths>
   entry_points_in_scope: <list>
@@ -321,6 +377,8 @@ Task(subagent_type="security", model=<from plan, field "model">, prompt="""
 ```
 
 **Important:** the `model` parameter is passed as a Task call argument, not in the prompt text. This guarantees that the worker runs on the needed model (opus/sonnet from the balanced profile). The value is taken from the `"model"` field of the JSON plan.
+
+`project_root` is required (per Step 0.4 absolute-path invariant) so the worker resolves `target_files` / `entry_points_in_scope` / paths inside `CONTEXT.md` correctly when `project_root != cwd` (composite repos). Without it the worker reads files relative to cwd and silently misses them in monorepos.
 
 **Important:** maximum 6 parallel Task calls at once. With many waves — several batches sequentially.
 

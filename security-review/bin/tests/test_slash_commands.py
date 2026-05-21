@@ -47,8 +47,8 @@ class CommonContract(unittest.TestCase):
         return [("security-project.md", self.project), ("security-changes.md", self.changes)]
 
     def test_argument_hint_lists_label_and_review_root(self) -> None:
-        # YAML frontmatter `argument-hint:` must mention both flags so the harness
-        # surfaces them in `/help` / completion.
+        # YAML frontmatter `argument-hint:` must mention all three path-related
+        # flags so the harness surfaces them in `/help` / completion.
         for name, text in self._both():
             with self.subTest(cmd=name):
                 m = re.search(r'^argument-hint:\s*"(.+)"\s*$', text, re.MULTILINE)
@@ -56,6 +56,8 @@ class CommonContract(unittest.TestCase):
                 hint = m.group(1)
                 self.assertIn("--label=", hint, f"{name}: argument-hint missing --label=")
                 self.assertIn("--review-root=", hint, f"{name}: argument-hint missing --review-root=")
+                self.assertIn("--project-root=", hint,
+                              f"{name}: argument-hint missing --project-root=")
 
     def test_self_introspection_vocabulary(self) -> None:
         # When --label is not provided, the orchestrator-LLM must self-introspect
@@ -97,26 +99,34 @@ class CommonContract(unittest.TestCase):
                 )
 
     def test_legacy_v1_detection_warn_only(self) -> None:
-        # Old SECURITY_CONTEXT.md in cwd must trigger warning, not abort or rm.
+        # Old SECURITY_CONTEXT.md must trigger a warning, not abort or rm.
+        # In composite repos the file may live at <cwd> or at <PROJECT_ROOT>,
+        # so both locations must be probed.
         for name, text in self._both():
             with self.subTest(cmd=name):
                 self.assertIn("Legacy v1 detected", text, f"{name}: missing legacy v1 banner")
-                self.assertIn("test -f SECURITY_CONTEXT.md", text,
-                              f"{name}: missing v1 file probe")
+                self.assertIn('test -f "<cwd>/SECURITY_CONTEXT.md"', text,
+                              f"{name}: missing v1 probe at <cwd>")
+                self.assertIn('test -f "<PROJECT_ROOT>/SECURITY_CONTEXT.md"', text,
+                              f"{name}: missing v1 probe at <PROJECT_ROOT>"
+                              " (composite repos)")
                 # Must NOT remove or rename the legacy file.
                 self.assertNotRegex(
                     text,
-                    r"rm\s+-f?\s+SECURITY_CONTEXT\.md",
+                    r"rm\s+-f?\s+.*SECURITY_CONTEXT\.md",
                     f"{name}: legacy v1 file must not be deleted automatically",
                 )
                 self.assertNotRegex(
                     text,
-                    r"mv\s+SECURITY_CONTEXT\.md",
+                    r"mv\s+.*SECURITY_CONTEXT\.md",
                     f"{name}: legacy v1 file must not be moved automatically",
                 )
 
     def test_recon_agent_called_with_review_root(self) -> None:
-        # Task(security-recon, ...) must include review_root in its prompt.
+        # Task(security-recon, ...) must include review_root + project_root,
+        # both as <REVIEW_ROOT>/<PROJECT_ROOT> placeholders (NOT raw <cwd>).
+        # <cwd> would be ambiguous in composite repos where --project-root
+        # differs from cwd.
         for name, text in self._both():
             with self.subTest(cmd=name):
                 m = re.search(
@@ -128,21 +138,95 @@ class CommonContract(unittest.TestCase):
                 block = m.group(0)
                 self.assertIn("review_root: <REVIEW_ROOT>", block,
                               f"{name}: security-recon Task missing review_root")
-                self.assertIn("project_root:", block,
-                              f"{name}: security-recon Task missing project_root")
+                self.assertIn("project_root: <PROJECT_ROOT>", block,
+                              f"{name}: security-recon Task must pass project_root: <PROJECT_ROOT>")
+                self.assertNotIn("project_root: <cwd>", block,
+                                 f"{name}: security-recon Task uses literal <cwd> "
+                                 "instead of <PROJECT_ROOT> — breaks composite repos")
 
-    def test_validate_context_uses_review_root(self) -> None:
-        # validate_context.py must be called with --review-root, never with the
-        # legacy positional path.
+    def test_validate_context_uses_review_root_and_project_root(self) -> None:
+        # validate_context.py must be called with --review-root (never the
+        # legacy positional path) AND --project-root (otherwise the sanity
+        # coverage fallback prints `WARNING: project_root not specified ...`
+        # and skips coverage on composite repos where parent(review_root)
+        # has no composer.json/package.json).
         for name, text in self._both():
             with self.subTest(cmd=name):
                 self.assertRegex(
                     text,
-                    r'validate_context\.py --review-root "<REVIEW_ROOT>"',
-                    f"{name}: validate_context.py must use --review-root",
+                    r'validate_context\.py --review-root "<REVIEW_ROOT>" --sanity --project-root "<PROJECT_ROOT>"',
+                    f"{name}: validate_context.py --sanity must pass "
+                    "both --review-root and --project-root",
                 )
                 self.assertNotIn("validate_context.py SECURITY_CONTEXT.md", text,
                                  f"{name}: legacy positional context path leaked")
+
+    def test_project_root_flag_documented(self) -> None:
+        # --project-root must be documented in ARGUMENTS so users know it
+        # exists; otherwise composite repos (CLAUDE.md at top, PHP in
+        # subdir) cannot be audited correctly.
+        for name, text in self._both():
+            with self.subTest(cmd=name):
+                self.assertRegex(
+                    text,
+                    r'`--project-root=<path>`',
+                    f"{name}: --project-root flag must be documented in ARGUMENTS",
+                )
+
+    # Canonical blacklist of basenames that --review-root must reject. This
+    # must match the list in the Step 0.3 prose of both commands exactly. If
+    # you add a name to the prose, add it here too.
+    REVIEW_ROOT_BLACKLIST = (
+        "src", "app", "lib", "source", "tests", "test", "spec",
+        "vendor", "node_modules", "public", "web", "bin", "config",
+        "assets", "resources", "var", "storage",
+        "templates", "views", "database", "migrations", "seeders",
+        "scripts", "routes",
+        "build", "dist", "target", "out", "coverage",
+        ".next", ".nuxt", "__pycache__",
+    )
+
+    def test_review_root_misuse_guard(self) -> None:
+        # Step 0 must abort if --review-root resolves to a source-tree dir
+        # (src/, app/, lib/, ...). Past incident: client passed
+        # `--review-root=src`, recon wrote CONTEXT.md INTO their source tree
+        # and clobbered src/.gitignore with '*'. The guard prevents this.
+        #
+        # All canonical blacklist names must appear in the prose so the
+        # orchestrator-LLM has a concrete check. Removing a name silently
+        # would weaken the guard — this test catches that.
+        for name, text in self._both():
+            with self.subTest(cmd=name):
+                for entry in self.REVIEW_ROOT_BLACKLIST:
+                    # Names appear as backtick-quoted tokens in the prose,
+                    # e.g. `src`, `node_modules`, `.next`.
+                    self.assertIn(
+                        f"`{entry}`",
+                        text,
+                        f"{name}: blacklist missing `{entry}` "
+                        "(must match Step 0.3 source-tree dictionary)",
+                    )
+                # And an explicit error message pointing the user away.
+                self.assertIn("looks like a project source directory", text,
+                              f"{name}: misuse guard error message wording missing")
+                # File-vs-directory pre-check (M2 guard).
+                self.assertIn("non-directory", text,
+                              f"{name}: missing pre-check that REVIEW_ROOT "
+                              "is not an existing non-directory")
+
+    def test_absolute_path_invariant(self) -> None:
+        # Step 0 must require absolute paths for REVIEW_ROOT and PROJECT_ROOT
+        # for all subsequent steps. Past incident: validate_context.py was
+        # invoked with absolute path, but later ls was invoked with the
+        # relative original flag value, leading to "ls: src/CONTEXT.md:
+        # No such file or directory" on a path that actually existed.
+        for name, text in self._both():
+            with self.subTest(cmd=name):
+                self.assertRegex(
+                    text,
+                    r"MUST use the resolved absolute paths",
+                    f"{name}: missing absolute-path invariant for review_root/project_root",
+                )
 
     def test_plan_waves_reads_context_md(self) -> None:
         # plan_waves consumes <REVIEW_ROOT>/CONTEXT.md, with absolute --plugin-root.
@@ -189,8 +273,12 @@ class CommonContract(unittest.TestCase):
                 )
 
     def test_worker_task_carries_review_root(self) -> None:
-        # Each Task(security, ...) call must pass review_root + relevant_section_paths
-        # (dot-notation, not the v1 relevant_section_ids).
+        # Each Task(security, ...) call must pass review_root + project_root +
+        # relevant_section_paths (dot-notation, not the v1
+        # relevant_section_ids). project_root is required so the worker can
+        # resolve target_files / entry_points_in_scope / paths inside
+        # CONTEXT.md in composite repos (cwd != PROJECT_ROOT) — without it,
+        # Read silently resolves against cwd and misses the right file.
         for name, text in self._both():
             with self.subTest(cmd=name):
                 m = re.search(
@@ -202,6 +290,9 @@ class CommonContract(unittest.TestCase):
                 block = m.group(0)
                 self.assertIn("review_root: <REVIEW_ROOT>", block,
                               f"{name}: worker Task missing review_root")
+                self.assertIn("project_root: <PROJECT_ROOT>", block,
+                              f"{name}: worker Task missing project_root — "
+                              "breaks file resolution in composite repos")
                 self.assertIn("relevant_section_paths:", block,
                               f"{name}: worker Task must pass relevant_section_paths")
                 self.assertNotIn("relevant_section_ids:", block,
@@ -288,6 +379,26 @@ class ChangesOnly(unittest.TestCase):
         self.assertIn("Reverse-grep", self.text)
         self.assertIn("Forward-grep", self.text)
 
+    def test_git_ops_target_project_root(self) -> None:
+        # In composite repos cwd may differ from <PROJECT_ROOT>; all git
+        # operations must use `git -C "<PROJECT_ROOT>"` so they read the
+        # audited project's repo (not the monorepo wrapper). Bare `git diff`
+        # / `git rev-parse` would silently read the wrong repo.
+        git_lines = [
+            line for line in self.text.splitlines()
+            if re.match(r'^\s*git\s+(diff|rev-parse|log|status|ls-files)\b', line)
+        ]
+        bad = [line for line in git_lines if "-C " not in line]
+        self.assertFalse(
+            bad,
+            "security-changes git commands missing `-C \"<PROJECT_ROOT>\"`:\n  "
+            + "\n  ".join(bad),
+        )
+        # The allowed-tools list must permit `Bash(git -C *)` since every
+        # invocation now uses it.
+        self.assertIn("Bash(git -C *)", self.text,
+                      "allowed-tools must permit `Bash(git -C *)`")
+
     def test_grep_uses_orchestrator_tool_not_shell(self) -> None:
         # `Bash(grep:*)` is NOT in allowed-tools — the orchestrator must use the
         # built-in `Grep` tool, not shell `grep -rn`. A bash grep snippet would
@@ -350,6 +461,19 @@ class WorkerAgentContract(unittest.TestCase):
         self.assertNotIn("relevant_section_ids", self.text)
         # No legacy context_file pointer.
         self.assertNotRegex(self.text, r"(?m)^\s*-\s*`context_file`")
+
+    def test_input_contract_documents_project_root(self) -> None:
+        # Worker must accept project_root and explain how to resolve paths
+        # relative to it (vs cwd) — otherwise composite repos break silently.
+        self.assertRegex(self.text, r"`project_root`",
+                         "worker INPUT CONTRACT must list project_root")
+        # Concrete how-to: prepend project_root when calling Read.
+        self.assertRegex(self.text, r"PATH RESOLUTION",
+                         "worker must have a PATH RESOLUTION section")
+        # Negative: must explain that emitted finding paths stay project_root-relative
+        # (sink_file format depends on this for dedup parser).
+        self.assertIn("keep them `project_root`-relative", self.text,
+                      "worker must NOT prepend project_root to finding sink_file")
 
     def test_output_target_is_waves_dir(self) -> None:
         self.assertIn("<review_root>/waves/<slice_id>.md", self.text)

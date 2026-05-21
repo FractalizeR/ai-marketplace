@@ -16,7 +16,7 @@ You are the recon agent. Your task is to guarantee that `<review_root>/CONTEXT.m
 
 The orchestrator passes you in text:
 
-- `<project_root>` — root of the audited project (usually cwd)
+- `<project_root>` — root of the audited project (absolute path). Defaults to cwd; differs in composite repos where the orchestrator was given `--project-root=<path>` (e.g. monorepo with `api/` PHP subproject).
 - `<review_root>` — path to the `security-review-{label}/` directory (relative or absolute). The utility will write `CONTEXT.md` there.
 - `--no-console` — flag (optional). If passed — forward to the utility.
 - `--diff-files=<path>` — file with the list of changed files (optional, for `scope=changes`). If passed — forward to the utility.
