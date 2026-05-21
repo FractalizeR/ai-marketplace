@@ -96,7 +96,10 @@ def _parse_dict(lines, pos, indent):
         if cur_indent > indent:
             raise YamlSubsetError(f"Unexpected indent at line {pos + 1}: {line!r}")
         content = line[indent:]
-        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$", content)
+        # Keys: ASCII alnum + `_`, with `-` allowed after the first character
+        # to support kebab-case addon identifiers (e.g. `api-platform`) used in
+        # `recon_bags.addon.<name>`. Mirrors `recon.yaml_emit._KEY_RE`.
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$", content)
         if not m:
             raise YamlSubsetError(f"Expected key at line {pos + 1}: {line!r}")
         key, rest = m.group(1), m.group(2)
@@ -155,7 +158,7 @@ def _parse_list(lines, pos, indent):
         if not stripped.startswith("- "):
             break
         item_text = stripped[2:]
-        if ":" in item_text and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\s*:", item_text):
+        if ":" in item_text and re.match(r"^[A-Za-z_][A-Za-z0-9_-]*\s*:", item_text):
             mini_indent = indent + 2
             synthetic_line = " " * mini_indent + item_text
             patched = lines[:pos] + [synthetic_line] + lines[pos + 1:]

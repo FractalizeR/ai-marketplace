@@ -17,3 +17,7 @@
 ## Admin bundle sensitive fields exposed without mask
 
 > EasyAdmin/Sonata-specific patterns: see `addons/easyadmin/disclosure.md` and `addons/sonata/disclosure.md` (auto-loaded when the addon is detected).
+
+## API Platform docs / GraphiQL / Hydra disclosure
+
+> API Platform-specific patterns (Swagger UI / Redoc / OpenAPI JSON / GraphiQL / Hydra error verbosity / IRI existence oracle): see `addons/api-platform/disclosure.md` (auto-loaded when the api-platform addon is detected).

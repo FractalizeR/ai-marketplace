@@ -67,6 +67,16 @@ class GraphQLDetectionTests(unittest.TestCase):
         self.assertEqual(result["library_name"], "api-platform")
         self.assertIn("src/GraphQl/Resolver", result["resolvers_dir"])
 
+    def test_detects_api_platform_v4_symfony_package(self):
+        """api-platform v4 split into `api-platform/symfony` — same library_name."""
+        root = _make_project(
+            {"require": {"api-platform/symfony": "^4.0"}},
+            files={"src/GraphQl/Resolver/PingResolver.php": "<?php"},
+        )
+        result = detect_graphql(root)
+        self.assertEqual(result["library_name"], "api-platform")
+        self.assertIn("src/GraphQl/Resolver", result["resolvers_dir"])
+
     def test_detects_webonyx_as_fallback(self):
         root = _make_project(
             {"require": {"webonyx/graphql-php": "^15.0"}},

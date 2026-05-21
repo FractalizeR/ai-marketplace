@@ -56,14 +56,15 @@
 - RSS/Atom feeds with user content without `|e` or CDATA
 - PDF/Document generators accepting user HTML (Dompdf, TCPDF) — custom HTML sanitization is required
 
-## GraphQL output filtering (api-platform / overblog/graphql-bundle / webonyx)
+## GraphQL output filtering (overblog/graphql-bundle / webonyx)
 
 GraphQL is an alternative output channel; the same disclosure / secret leakage rules as for REST/Twig. Field-level authz (who sees) — in `auth.md`; here — what ends up in the response payload.
 
-- **api-platform Resource without `#[Groups]`** — all public-getter Entity fields are serialized for every operation: `accessToken`, `refreshToken`, `passwordHash`, `mfaSecret`, `apiToken`, `webhookSecret` leak to the client if they exist as Entity property/getter. Must be `#[Groups(['user:read'])]` on safe fields + `normalizationContext: ['groups' => ['user:read']]` on the operation. Sink_kind: `secret_in_response` or `sensitive_field_unmasked` (root_cause_family: `disclosure`).
 - **overblog/graphql-bundle resolver returns `$entity` directly**: `'resolve' => fn($value, $args) => $em->getRepository(User::class)->find($args['id'])` without projection / without mapping into a DTO → schema-declared fields are serialized, but any `Computed`/`@Expose` extras may also leak. Grep for a resolver that returns a Doctrine entity without `->toArray()` / `->toPublicView()`.
 - **webonyx native field resolver** does not call `->getPublicView()` / `->toArray()` filter and returns `$entity` or `$entity->getRecord()` entirely → the client via alias/fragment can select any field declared in the schema, including sensitive ones. If a secret field was accidentally declared in the schema — it is accessible.
 - **`Type::nonNull($userType)` + field `passwordHash` in `$userType`**: even if field-level authz exists, the very presence of the field in the schema is information disclosure via introspection. Remove sensitive fields from the schema, do not rely solely on access control.
 - **Error messages in response**: Doctrine exception (`UniqueConstraintViolationException`, `ForeignKeyConstraintViolationException`) propagates to the GraphQL response without handling → client sees table structure / column names. Sink_kind: `stacktrace_exposed`. In prod an ErrorHandler / formatter masking internal errors is required.
+
+> API Platform-specific GraphQL patterns: see `addons/api-platform/output-render.md` (auto-loaded when api-platform addon is detected).
 
 **Cross-link**: `secret_in_response` for polluted output — see `core/crypto.md`. `sensitive_field_unmasked` — see `core/disclosure.md`.

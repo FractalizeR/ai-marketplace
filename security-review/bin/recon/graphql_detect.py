@@ -6,7 +6,8 @@ when a known PHP GraphQL library is present in `composer.json`.
 Supported libraries (composer package → `library_name` value):
     nuwave/lighthouse             → "lighthouse"      (Laravel, schema-first)
     rebing/graphql-laravel        → "rebing-laravel"  (Laravel, code-first)
-    api-platform/core             → "api-platform"    (Symfony, GraphQL bundle)
+    api-platform/core             → "api-platform"    (Symfony, GraphQL bundle, v3)
+    api-platform/symfony          → "api-platform"    (Symfony, GraphQL bundle, v4)
     webonyx/graphql-php           → "webonyx"         (low-level, no conventions)
 
 Resolution order: stack-specific frameworks first (lighthouse / rebing /
@@ -36,10 +37,14 @@ from pathlib import Path
 from typing import Optional
 
 # Library name → composer package name. Order = detection priority.
+# Both `api-platform/core` (v3) and `api-platform/symfony` (v4) map to the
+# same library_name — the GraphQL bundle behaviour is identical from the
+# recon perspective.
 _LIBRARY_PACKAGES: tuple[tuple[str, str], ...] = (
     ("lighthouse", "nuwave/lighthouse"),
     ("rebing-laravel", "rebing/graphql-laravel"),
     ("api-platform", "api-platform/core"),
+    ("api-platform", "api-platform/symfony"),
     ("webonyx", "webonyx/graphql-php"),
 )
 
