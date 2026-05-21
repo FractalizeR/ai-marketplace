@@ -9,6 +9,15 @@
 - `path_traversal` — file ops with an unchecked path
 - `file_include_dynamic` — `include`/`require` with a user-controlled path (cross-ref `injection.md`)
 
+## Confidence floor rules
+
+- **`redirect_open` cap — path-only control**: when only the URL **path** is attacker-controlled (host/scheme/port hardcoded in code), the redirect cannot leave the application → max confidence 5.
+  - **Cap engages on** (capped to ≤5, dropped under the ≥8 gate): `header("Location: /profile/" . $userId)`, `return redirect("/orders/" . $id)` — host implicit-same-origin.
+  - **Cap does NOT engage on** (still reported as `redirect_open`): `header("Location: " . $_GET['next'])` where `$_GET['next']` may be a full URL.
+- **`ssrf` cap — path-only control**: when only the URL **path** is attacker-controlled (host/scheme hardcoded in code), real SSRF is not possible → max confidence 5. Exception (cap does NOT engage): a hardcoded host that itself fronts internal admin APIs / cloud metadata / `/_profiler` / unix-socket gateways, where the user-controlled path crosses into a new internal surface — that *is* SSRF (see "Do NOT automatically exclude" in `agents/security.md`).
+  - **Cap engages on** (capped to ≤5, dropped under the ≥8 gate): `$client->get("https://api.example.com/users/" . $userId)`, `file_get_contents("https://internal-api/items/{$id}")` — host fully hardcoded, path is the only user-controlled segment and does not cross into a sensitive internal surface.
+  - **Cap does NOT engage on** (still reported as `ssrf`): `$client->get($_GET['url'])`, `curl_init($request->input('endpoint'))` where the attacker controls scheme+host; or `$client->get("http://169.254.169.254/" . $userPath)` / `$client->get("http://localhost/_profiler/" . $token)` where the hardcoded host already fronts a sensitive internal surface.
+
 ## SSRF via HTTP Client
 
 - HTTP client of any framework with a user-controlled URL argument (`request($method, $userUrl)`)

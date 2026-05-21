@@ -19,6 +19,13 @@
 - **`Access-Control-Allow-Origin: *`** together with `Access-Control-Allow-Credentials: true` → **confidence ≥ 9** for cors_misconfig.
 - **OAuth callback without `state` check** (any flow, any vendor) → **confidence ≥ 9** for `oauth_state_missing`. Cross-ref `integrations/oauth-oidc/auth.md` for vendor-specific patterns. This is a defense-in-depth floor: when the integration is detected, the integration file gives a sharper signal; when it isn't (custom OAuth without a detected package), this core floor still catches it.
 
+## Trusted patterns (do NOT flag)
+
+- `random_bytes()`, `random_int()`, `\Random\Randomizer` (PHP 8.2+), `Str::random()` (Laravel — uses `random_bytes` under the hood on PHP 7+), `Symfony\Component\String\ByteString::fromRandom()` (uses CSPRNG internally), `secrets.token_bytes()` / `secrets.token_urlsafe()` / `secrets.token_hex()` (Python) — CSPRNG, secure by construction. **Not** `weak_random`. This is the canonical CSPRNG list referenced from `_meta.md`.
+- `hash_equals()` (PHP), `hmac.compare_digest()` (Python) — constant-time comparison. This is the secure alternative to `==`/`===` for secrets; do not flag as timing-attack risk.
+- `password_hash($pwd, PASSWORD_BCRYPT)` / `password_hash($pwd, PASSWORD_ARGON2ID)` / `password_hash($pwd, PASSWORD_DEFAULT)` — these ARE the recommended primitives for password storage; do not flag as `weak_hash`. Pair with `password_verify()` (constant-time).
+- `Symfony\Component\Security\Csrf\CsrfTokenManager`, Laravel `@csrf` / `csrf_token()` directives — framework-managed CSRF protection; flag only when the token check is explicitly bypassed or the endpoint is excluded from the CSRF middleware.
+
 ## IDOR
 
 - Fetching a resource by ID from request without an owner check: ORM-lookup like `repository.find($request->...)` / equivalent without comparison to the current user

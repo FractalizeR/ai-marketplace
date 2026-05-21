@@ -67,6 +67,10 @@ A checklist is a **search-priority pointer, NOT a filter**. If you detect an exp
 
 Quality gates (confidence ≥ 8, severity ≥ MEDIUM) are the only noise filter.
 
+## TRUSTED PATTERNS (NEGATIVE FILTER)
+
+If a finding pattern matches an entry under any loaded `## Trusted patterns (do NOT flag)` section in the checklist chain, **do not report it** — these are safe-by-construction idioms (CSPRNG wrappers, framework auto-escape, ORM parameter binding for scalars, constant-time comparisons). Layer precedence matches `## Confidence floor rules`: the most-specific layer's trusted list wins on conflict (`integrations > addons > stacks > languages > core`).
+
 ## TOOLS — CONDITIONAL MCP
 
 The tools list includes `mcp__phpstorm__*`. They are not available in all environments:
@@ -128,7 +132,7 @@ Each finding must have:
 
 ### Closed enum `sink_kind`
 
-`dql_concat`, `native_sql_concat`, `unsafe_html_render`, `template_raw`, `ssti`, `unserialize_untrusted`, `command_exec`, `file_include_dynamic`, `path_traversal`, `redirect_open`, `weak_hash`, `hardcoded_secret`, `cors_misconfig`, `missing_authz`, `idor_lookup`, `xxe`, `ssrf`, `mass_assignment`, `csrf_missing`, `decimal_arith`, `race_condition`, `webhook_unverified`, `pii_in_logs`, `stacktrace_exposed`, `type_juggling`, `oauth_state_missing`, `webhook_replay`, `weak_random`, `secret_in_response`, `sensitive_field_unmasked`, `csp_missing`, `csp_unsafe_inline`, `clickjacking_unprotected`, `hsts_missing`, `mime_sniff_unprotected`, `jwks_spoof`, `oidc_misconfig`, `tls_validation_bypass`.
+`dql_concat`, `native_sql_concat`, `unsafe_html_render`, `template_raw`, `ssti`, `unserialize_untrusted`, `command_exec`, `file_include_dynamic`, `path_traversal`, `ldap_injection`, `xpath_injection`, `nosql_injection`, `redirect_open`, `weak_hash`, `hardcoded_secret`, `cors_misconfig`, `missing_authz`, `idor_lookup`, `xxe`, `ssrf`, `mass_assignment`, `csrf_missing`, `decimal_arith`, `race_condition`, `webhook_unverified`, `pii_in_logs`, `stacktrace_exposed`, `type_juggling`, `oauth_state_missing`, `webhook_replay`, `weak_random`, `secret_in_response`, `sensitive_field_unmasked`, `csp_missing`, `csp_unsafe_inline`, `clickjacking_unprotected`, `hsts_missing`, `mime_sniff_unprotected`, `jwks_spoof`, `oidc_misconfig`, `tls_validation_bypass`.
 
 Custom type via `other:<name>` (excluded from auto-dedup, goes to `## Manual review required`).
 
@@ -144,6 +148,12 @@ Custom type via `other:<name>` (excluded from auto-dedup, goes to `## Manual rev
 - `jwks_spoof` — JWT verifier accepts a token whose signing material is attacker-controlled: `alg: none`, algorithm confusion RS256→HS256, `kid` / `jku` / `x5u` header injection, embedded `jwk` trusted without external pin. Family `crypto`. Detected in `integrations/jwt-generic/`.
 - `oidc_misconfig` — OAuth/OIDC server-side configuration flaw distinct from `oauth_state_missing`: `redirect_uri` validated by prefix/regex instead of exact match, missing `aud`/`iss` validation, attacker-controlled issuer URL. Family `authz`. Detected in `integrations/oauth-oidc/`.
 - `tls_validation_bypass` — TLS peer verification explicitly disabled when fetching a security-critical endpoint (JWKS / OIDC discovery / OAuth token endpoint). Family `crypto`. Detected in `integrations/{jwt-generic,oauth-oidc}/`.
+
+### New in 3.6.0 — injection sub-kinds
+
+- `ldap_injection` — user input concatenated into an LDAP filter or DN without `ldap_escape(..., LDAP_ESCAPE_FILTER)` / `LDAP_ESCAPE_DN`; bind/search executed against the assembled filter. Family `injection`. Do not use for plain SQL/NoSQL — distinct sink type.
+- `xpath_injection` — user input concatenated into an XPath expression (`xpath()`, `DOMXPath::query()`, `SimpleXMLElement->xpath()`) without parameterization. Family `injection`. The XPath 2.0 `doc()` function (SSRF-equivalent) is only available on XPath 2.0 engines (SAXON, Saxon.NET, eXist-db) and is **not** reachable from PHP `DOMXPath` / `SimpleXMLElement->xpath()` (XPath 1.0 only); on XSLT 1.0 processors the analogous risk is the XSLT `document()` function.
+- `nosql_injection` — operator/where-clause/aggregation-pipeline injection in NoSQL stores (MongoDB `$where`, array-as-operator from `$_GET`, Couchbase N1QL concat, ElasticSearch query DSL `script`, Redis `EVAL` Lua concat). Family `injection`. Distinct from `native_sql_concat`, which is reserved for SQL drivers.
 
 ### Closed enum `root_cause_family`
 
