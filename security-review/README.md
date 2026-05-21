@@ -103,11 +103,29 @@ docker run --rm -it \
 
 `--review-root` is required to override the label-based path; inside the container the cwd is read-only, while review-root is read-write on the host.
 
+## Composite repositories (monorepos with a PHP subproject)
+
+If your repository's `composer.json` / framework configs sit in a subdirectory (typical monorepo layout: a top-level `CLAUDE.md` plus a PHP project in `api/`, `backend/`, `services/php-api/`, …), pass `--project-root=<path>` so recon, exclusions, and worker file resolution all target the correct root:
+
+```bash
+# Monorepo root contains CLAUDE.md; PHP code is in api/:
+claude /fr-security-review:security-project --project-root=api
+```
+
+What `--project-root` affects:
+
+- **Recon** scans the project at `<PROJECT_ROOT>` (composer.json detection, framework detection, file globs).
+- **CLAUDE.md** is read from both `<cwd>/CLAUDE.md` and `<PROJECT_ROOT>/CLAUDE.md` (whichever exist). Paths in `## Code review exclusions` sections are interpreted as `PROJECT_ROOT`-relative — write `legacy/`, not `api/legacy/`, in either file.
+- **Workers** receive `project_root` and resolve `target_files` against it (without the flag, they would read relative to cwd and miss files in monorepos).
+- **`/security-changes`** runs `git -C "<PROJECT_ROOT>"` for all git operations.
+
+`--review-root=<out-dir>` is **independent** — it specifies where the review writes its output (`CONTEXT.md`, `waves/`, `REPORT.md`). It does NOT specify what to scan. The orchestrator rejects `--review-root=src` (and other source-tree-looking names) with a clear error, since pointing it at your source tree would clobber `src/.gitignore`.
+
 ## Project-specific exclusions
 
 In addition to the built-in safe defaults (`vendor/`, `var/cache/`, `var/log/`, `node_modules/`, `storage/framework/cache/`, `storage/logs/`, `bootstrap/cache/`, `public/build/`, `.git/`), which the PHP extractor skips *before* parsing, you can exclude additional directories:
 
-- **`<project_root>/CLAUDE.md`** — the recommended way for recurring project-level conditions. Before running recon, the orchestrator reads CLAUDE.md and automatically extracts path prefixes from the `## Code review exclusions` section (or its equivalent). It is not parsed by regex — Claude reads it naturally. Recommended format:
+- **`CLAUDE.md`** — the recommended way for recurring project-level conditions. Before running recon, the orchestrator reads CLAUDE.md from both `<cwd>` and `<PROJECT_ROOT>` (for composite repos these are different files) and automatically extracts path prefixes from the `## Code review exclusions` section (or its equivalent). It is not parsed by regex — Claude reads it naturally. **All paths are `PROJECT_ROOT`-relative**; entries that don't resolve inside `PROJECT_ROOT` are skipped with a warning. Recommended format:
 
   ```markdown
   ## Code review exclusions

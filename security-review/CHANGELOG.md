@@ -4,6 +4,26 @@ All notable changes to this plugin will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Composite repository support
+
+Adds first-class support for monorepos where `composer.json` / framework configs live in a subdirectory below `cwd` and CLAUDE.md is shared at the monorepo root.
+
+### Added
+
+- **`--project-root=<path>`** flag on `/security-project` and `/security-changes`. Defaults to `cwd`. When set, all paths in recon, worker file resolution, CLAUDE.md exclusions, sanity coverage, refute normalization, and git operations resolve against this value. Required for composite repos (monorepo + PHP subproject).
+- **Dual CLAUDE.md read.** Exclusions are merged from both `<cwd>/CLAUDE.md` and `<PROJECT_ROOT>/CLAUDE.md` when these differ. All paths in either file are interpreted as `PROJECT_ROOT`-relative; entries that don't resolve under `PROJECT_ROOT` are skipped with a user warning.
+- **Worker `project_root` parameter.** `Task(security, ...)` now passes `project_root: <PROJECT_ROOT>` so workers prepend it when calling `Read` / `Grep` / `Glob` / `mcp__phpstorm__*` on project files. Without this, workers silently miss files in composite repos. Output paths in findings (`sink_file:sink_line`) remain `PROJECT_ROOT`-relative for dedup parser compatibility.
+
+### Changed
+
+- **`--review-root` is now strictly an output-directory flag.** Step 0.3 in both orchestrators rejects values that look like a source tree (basename in a blacklist of `src`, `app`, `lib`, `vendor`, `node_modules`, `public`, `templates`, `views`, `database`, `migrations`, `seeders`, `scripts`, `routes`, `build`, `dist`, `target`, `out`, `coverage`, `.next`, `.nuxt`, `__pycache__`, etc.), and values that equal or are a non-`security-review-`-prefixed subpath of `<PROJECT_ROOT>`. Past incident: `--review-root=src` clobbered the user's `src/.gitignore` with `*`. The guard also pre-checks that the resolved path is not an existing non-directory.
+- **Absolute-path invariant.** After Step 0, all references to `<REVIEW_ROOT>` and `<PROJECT_ROOT>` in subsequent bash, `Task(...)`, and helper utility calls MUST use the resolved absolute paths. Past incident: `validate_context.py` received an absolute path while a later `ls` received a relative one, producing `ls: src/CONTEXT.md: No such file or directory` on a file that actually existed.
+- **`validate_context.py --sanity` now receives `--project-root`** from the orchestrator. Removes the `WARNING: project_root not specified and could not be inferred — sanity coverage skipped` that fired on composite repos (where `parent(review_root)` had no `composer.json` / `package.json`).
+- **`/security-changes` git operations** all use `git -C "<PROJECT_ROOT>"`. Without this, in a monorepo with `cwd != PROJECT_ROOT`, `git diff` would return paths relative to the monorepo root, which recon then could not match against `<PROJECT_ROOT>`-relative file globs (`touched_by_diff` would never set, the mode=changes contract would break silently). `Bash(git -C *)` added to `allowed-tools`. Step 0.2 verifies `PROJECT_ROOT` is a git repo before continuing.
+- **Legacy v1 (`SECURITY_CONTEXT.md`) detection** probes both `<cwd>` and `<PROJECT_ROOT>`. Previous form only probed `cwd` and would silently miss legacy files in composite repos.
+
 ## [4.0.0] — 2026-05-21
 
 ### Five-layer checklist resolver and integrations layer
