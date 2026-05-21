@@ -118,6 +118,12 @@ SINK_KIND_TO_FAMILY: dict[str, str] = {
     "decimal_arith": "business_logic",
     "race_condition": "business_logic",
     "type_juggling": "business_logic",
+    # Security response headers (3.5.0).
+    "csp_missing": "xss",
+    "csp_unsafe_inline": "xss",
+    "clickjacking_unprotected": "clickjacking",
+    "hsts_missing": "crypto",
+    "mime_sniff_unprotected": "xss",
 }
 
 KNOWN_SINK_KINDS: frozenset[str] = frozenset(SINK_KIND_TO_FAMILY)

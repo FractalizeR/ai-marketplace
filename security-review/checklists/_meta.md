@@ -70,7 +70,7 @@ Each **core** checklist lists the values from the closed `sink_kind` enum that i
 **Non-core files (languages, stacks, addons, integrations) DO NOT declare their own `## Recommended sink_kinds` section** — they refine the applicability of `sink_kind` values declared in the corresponding `core/{theme}.md`. This rule is fixed: a non-core checklist **does not introduce new `sink_kind` values**, but narrows/refines applicability of the core sink_kind. All worker findings are always classified by `sink_kind` from the core enum.
 
 `sink_kind` enum values:
-`dql_concat`, `native_sql_concat`, `unsafe_html_render`, `template_raw`, `ssti`, `unserialize_untrusted`, `command_exec`, `file_include_dynamic`, `path_traversal`, `redirect_open`, `weak_hash`, `hardcoded_secret`, `cors_misconfig`, `missing_authz`, `idor_lookup`, `xxe`, `ssrf`, `mass_assignment`, `csrf_missing`, `decimal_arith`, `race_condition`, `webhook_unverified`, `pii_in_logs`, `stacktrace_exposed`, `type_juggling`, `oauth_state_missing`, `webhook_replay`, `weak_random`, `secret_in_response`, `sensitive_field_unmasked`.
+`dql_concat`, `native_sql_concat`, `unsafe_html_render`, `template_raw`, `ssti`, `unserialize_untrusted`, `command_exec`, `file_include_dynamic`, `path_traversal`, `redirect_open`, `weak_hash`, `hardcoded_secret`, `cors_misconfig`, `missing_authz`, `idor_lookup`, `xxe`, `ssrf`, `mass_assignment`, `csrf_missing`, `decimal_arith`, `race_condition`, `webhook_unverified`, `pii_in_logs`, `stacktrace_exposed`, `type_juggling`, `oauth_state_missing`, `webhook_replay`, `weak_random`, `secret_in_response`, `sensitive_field_unmasked`, `csp_missing`, `csp_unsafe_inline`, `clickjacking_unprotected`, `hsts_missing`, `mime_sniff_unprotected`.
 
 ### Note on `dql_concat` (overloaded name)
 
@@ -80,7 +80,7 @@ For native SQL concatenations (without an ORM wrapper, via PDO/mysqli/pg_*/curso
 
 ### Closed enum `root_cause_family`
 
-`injection`, `xss`, `authz`, `disclosure`, `crypto`, `deserialization`, `ssrf`, `webhook`, `business_logic`. All names are **generic** (stack-neutral); no `doctrine`/`twig`/`voter`/`eloquent` in the semantics. A custom name via `other:<name>` (excluded from auto-dedupe).
+`injection`, `xss`, `authz`, `disclosure`, `crypto`, `deserialization`, `ssrf`, `webhook`, `business_logic`, `clickjacking`. All names are **generic** (stack-neutral); no `doctrine`/`twig`/`voter`/`eloquent` in the semantics. A custom name via `other:<name>` (excluded from auto-dedupe).
 
 ### Mapping `sink_kind` → `root_cause_family`
 
@@ -101,6 +101,9 @@ For native SQL concatenations (without an ORM wrapper, via PDO/mysqli/pg_*/curso
 | `pii_in_logs`, `stacktrace_exposed`, `secret_in_response`, `sensitive_field_unmasked` | `disclosure` |
 | `oauth_state_missing` | `authz` |
 | `weak_random` | `crypto` |
+| `csp_missing`, `csp_unsafe_inline`, `mime_sniff_unprotected` | `xss` |
+| `clickjacking_unprotected` | `clickjacking` |
+| `hsts_missing` | `crypto` |
 
 ## Item format
 
@@ -163,6 +166,7 @@ The new `sink_kind` values in 3.4.0 are close in meaning to existing ones — fo
 | Direct call of `mt_rand`/`rand`/`uniqid`/`microtime` for a security-sensitive value | `weak_random` | `hardcoded_secret` (literal in code) |
 | Token/secret leak in HTTP response body (JSON / template render) | `secret_in_response` | `pii_in_logs` (leak to log/file/backup) |
 | Admin UI displays a raw token field without masking | `sensitive_field_unmasked` | `secret_in_response` (response body), `pii_in_logs` (logs) |
+| `X-Content-Type-Options: nosniff` missing on file-download / user-upload endpoint | `mime_sniff_unprotected` | `secret_in_response` (response leaks a secret) / `stacktrace_exposed` (response leaks debug info). Canonical exploit: stored XSS via SVG/HTML masquerade — hence family `xss`. JSON-as-HTML sniffing for XS-Search is a secondary path. |
 
 `Str::random()`, `random_bytes()`, `random_int()`, `Symfony\Component\String\ByteString::fromRandom()` are **NOT** `weak_random`: internally they rely on a CSPRNG.
 
