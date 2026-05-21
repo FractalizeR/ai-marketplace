@@ -195,6 +195,11 @@ from recon.recipes.aws_cognito_detect import detect_aws_cognito  # noqa: E402
 from recon.recipes.okta_detect import detect_okta  # noqa: E402
 from recon.recipes.keycloak_detect import detect_keycloak  # noqa: E402
 from recon.recipes.firebase_auth_detect import detect_firebase_auth  # noqa: E402
+from recon.recipes.stripe_detect import detect_stripe  # noqa: E402
+from recon.recipes.aws_secrets_manager_detect import detect_aws_secrets_manager  # noqa: E402
+from recon.recipes.vault_detect import detect_vault  # noqa: E402
+from recon.recipes.saml_detect import detect_saml  # noqa: E402
+from recon.recipes.webauthn_passkeys_detect import detect_webauthn_passkeys  # noqa: E402
 
 
 # Source-tree roots scanned for PHP. `templates/`, `config/`, `public/` are
@@ -2774,6 +2779,20 @@ def build_inventory(
         detected_integrations.append("keycloak")
     if detect_firebase_auth(project_root):
         detected_integrations.append("firebase-auth")
+    # Stage 7 integrations: payments / secret stores / SAML federation /
+    # WebAuthn. These do NOT imply the generic jwt-generic / oauth-oidc
+    # layers — they have their own threat surfaces (HMAC webhook sigs,
+    # XML-DSig, public-key auth, Vault tokens) orthogonal to the JWT axis.
+    if detect_stripe(project_root):
+        detected_integrations.append("stripe")
+    if detect_aws_secrets_manager(project_root):
+        detected_integrations.append("aws-secrets-manager")
+    if detect_vault(project_root):
+        detected_integrations.append("vault")
+    if detect_saml(project_root):
+        detected_integrations.append("saml")
+    if detect_webauthn_passkeys(project_root):
+        detected_integrations.append("webauthn-passkeys")
     # A provider integration always IMPLIES the generic layers it refines
     # (Auth0 IS JWT+OAuth, Cognito IS JWT+OAuth, …). Force-include so the
     # worker resolver always loads `integrations/jwt-generic/` and
@@ -2875,6 +2894,17 @@ def _empty_skeleton(
             detected_integrations.append("keycloak")
         if detect_firebase_auth(project_root):
             detected_integrations.append("firebase-auth")
+        # Stage 7 integrations: payments / secret stores / SAML / WebAuthn.
+        if detect_stripe(project_root):
+            detected_integrations.append("stripe")
+        if detect_aws_secrets_manager(project_root):
+            detected_integrations.append("aws-secrets-manager")
+        if detect_vault(project_root):
+            detected_integrations.append("vault")
+        if detect_saml(project_root):
+            detected_integrations.append("saml")
+        if detect_webauthn_passkeys(project_root):
+            detected_integrations.append("webauthn-passkeys")
         # See note in `build_inventory`: provider integrations always imply
         # their generic layers (jwt-generic, oauth-oidc).
         detected_integrations = expand_provider_implications(detected_integrations)

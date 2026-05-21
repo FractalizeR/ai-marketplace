@@ -28,6 +28,11 @@ from recon.recipes.aws_cognito_detect import detect_aws_cognito
 from recon.recipes.okta_detect import detect_okta
 from recon.recipes.keycloak_detect import detect_keycloak
 from recon.recipes.firebase_auth_detect import detect_firebase_auth
+from recon.recipes.stripe_detect import detect_stripe
+from recon.recipes.aws_secrets_manager_detect import detect_aws_secrets_manager
+from recon.recipes.vault_detect import detect_vault
+from recon.recipes.saml_detect import detect_saml
+from recon.recipes.webauthn_passkeys_detect import detect_webauthn_passkeys
 
 RECIPE_NAME = "generic_php"
 LANGUAGE = "php"
@@ -155,6 +160,18 @@ def build_inventory(
         detected_integrations.append("keycloak")
     if detect_firebase_auth(project_root):
         detected_integrations.append("firebase-auth")
+    # Stage 7 integrations: payments / secret stores / SAML / WebAuthn.
+    # These do NOT imply jwt-generic / oauth-oidc.
+    if detect_stripe(project_root):
+        detected_integrations.append("stripe")
+    if detect_aws_secrets_manager(project_root):
+        detected_integrations.append("aws-secrets-manager")
+    if detect_vault(project_root):
+        detected_integrations.append("vault")
+    if detect_saml(project_root):
+        detected_integrations.append("saml")
+    if detect_webauthn_passkeys(project_root):
+        detected_integrations.append("webauthn-passkeys")
     # A provider integration always IMPLIES the generic layers it refines.
     # See `_shared.PROVIDER_IMPLIES_INTEGRATIONS`.
     detected_integrations = expand_provider_implications(detected_integrations)
