@@ -754,6 +754,10 @@ class CoverageGapsTests(unittest.TestCase):
         report = output.read_text()
         self.assertIn("## Coverage Gaps", report)
         self.assertIn("Console enrichment not performed", report)
+        # The console_gap_reason from CONTEXT.md must propagate into the report,
+        # not just the static prefix — otherwise a reason-formatting regression
+        # would go unnoticed.
+        self.assertIn("env_runner_unknown", report)
 
     def test_report_omits_section_when_no_gap(self):
         import subprocess

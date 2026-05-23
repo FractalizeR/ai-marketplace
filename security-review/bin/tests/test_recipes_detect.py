@@ -21,7 +21,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from recon.recipes import (  # noqa: E402
-    detect_best, load_recipe, available_recipes, STACK_DETECT_THRESHOLD,
+    detect_best, load_recipe, available_recipes, console_entrypoint,
+    STACK_DETECT_THRESHOLD,
 )
 from recon.recipes.symfony import detect as detect_symfony  # noqa: E402
 from recon.recipes.generic_php import detect as detect_generic  # noqa: E402
@@ -213,6 +214,32 @@ class RegistryShape(unittest.TestCase):
             self.assertTrue(callable(mod.build_inventory))
             self.assertTrue(callable(mod.sanity_probes))
             self.assertEqual(mod.RECIPE_NAME, name)
+
+    def test_console_entrypoint_per_recipe(self):
+        """Symfony declares a console entrypoint; laravel/generic_php do not."""
+        self.assertEqual(
+            console_entrypoint(load_recipe("symfony")), ["php", "bin/console"]
+        )
+        self.assertIsNone(console_entrypoint(load_recipe("laravel")))
+        self.assertIsNone(console_entrypoint(load_recipe("generic_php")))
+
+    def test_console_entrypoint_helper_is_defensive(self):
+        """A malformed CONSOLE_ENTRYPOINT degrades to None, never raises.
+
+        Guards the recipe contract: a bare string (the easy typo), an empty
+        list, a list with a non-string element, or a non-list value must not
+        leak a broken entrypoint into decide_console_runner — they all collapse
+        to None (console N/A), exactly like the attribute being absent.
+        """
+        import types
+        for bad in ("php bin/console", [], ["php", 1], 123, {"x": 1}):
+            mod = types.ModuleType("fake_recipe")
+            mod.CONSOLE_ENTRYPOINT = bad
+            self.assertIsNone(
+                console_entrypoint(mod), f"expected None for {bad!r}"
+            )
+        # Attribute entirely absent ⇒ None (recipes written before the attr).
+        self.assertIsNone(console_entrypoint(types.ModuleType("no_attr")))
 
     def test_symfony_schema_keys_match_plan(self):
         from recon.recipes.symfony import RECON_BAGS_SCHEMA

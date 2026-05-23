@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 import tempfile
 import textwrap
@@ -14,6 +16,17 @@ import plan_waves as pw  # noqa: E402
 
 
 PLUGIN_ROOT = Path(pw.__file__).resolve().parent.parent  # vr/code-review/
+
+
+def _main_quiet(argv: list[str]) -> int:
+    """Run `plan_waves.main` with stdout suppressed.
+
+    `main` always prints the generated plan as JSON to stdout (plan_waves.py
+    end of `main`). Swallowing it keeps the unittest run output clean — these
+    CLI tests assert on the return code / `--save-plan` file, not on stdout.
+    """
+    with contextlib.redirect_stdout(io.StringIO()):
+        return pw.main(argv)
 
 
 # ---------------------------------------------------------------------------
@@ -2170,7 +2183,7 @@ class ExtraTargetFilesTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as td:
                 target = Path(td) / "waves_plan.json"
-                rc = pw.main([
+                rc = _main_quiet([
                     str(ctx_path),
                     "--plugin-root", str(PLUGIN_ROOT),
                     "--save-plan", str(target),
@@ -2192,7 +2205,7 @@ class ExtraTargetFilesTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as td:
                 target = Path(td) / "waves_plan.json"
-                rc = pw.main([
+                rc = _main_quiet([
                     str(ctx_path),
                     "--plugin-root", str(PLUGIN_ROOT),
                     "--save-plan", str(target),
@@ -2211,7 +2224,7 @@ class SavePlanCliTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as td:
                 target = Path(td) / "waves_plan.json"
-                rc = pw.main([
+                rc = _main_quiet([
                     str(ctx_path),
                     "--plugin-root", str(PLUGIN_ROOT),
                     "--save-plan", str(target),
@@ -2238,7 +2251,7 @@ class SavePlanCliTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as td:
                 target = Path(td) / "waves_plan.json"
-                rc = pw.main([
+                rc = _main_quiet([
                     str(ctx_path),
                     "--plugin-root", str(PLUGIN_ROOT),
                     "--save-plan", str(target),
@@ -2253,7 +2266,7 @@ class SavePlanCliTests(unittest.TestCase):
         ctx_path = _build_context()
         try:
             with tempfile.TemporaryDirectory() as td:
-                rc = pw.main([
+                rc = _main_quiet([
                     str(ctx_path),
                     "--plugin-root", str(PLUGIN_ROOT),
                 ])
