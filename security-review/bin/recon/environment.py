@@ -301,6 +301,13 @@ def _parse_compose_services(compose_path: Path) -> list[_ComposeService]:
     files carry nested maps/lists/anchors that a strict parser would choke on.
     We only need service names plus optional `image:` and presence of `build:`.
     Anything unparseable is ignored. Never raises.
+
+    Known limitation: YAML anchors/aliases are NOT expanded. A service pulled
+    in purely via `<<: *ref` / `*alias` (no literal `image:`/`build:` of its
+    own) may be parsed without those facts, so `_pick_php_service` can fall
+    through to a later heuristic (generic name / first service). This degrades
+    service selection, never raises — the resolved runner is still shown to the
+    user for confirmation before anything runs.
     """
     try:
         text = compose_path.read_text(encoding="utf-8", errors="replace")
