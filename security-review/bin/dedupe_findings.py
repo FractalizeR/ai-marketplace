@@ -38,6 +38,7 @@ from dedupe.refute import (  # noqa: E402
     write_refute_invalid_md,
 )
 from dedupe.renderer import _write_reflowed, render_report, write_split_report  # noqa: E402
+import validate_context as _vc  # noqa: E402
 from dedupe.state import (  # noqa: E402
     compute_diff,
     load_state,
@@ -77,6 +78,38 @@ def collect_input_paths(inputs: list[str], input_glob: str | None) -> list[Path]
             if mp.is_file() and mp not in paths:
                 paths.append(mp)
     return sorted(set(paths))
+
+
+def read_coverage_gaps(review_root: Path) -> list[str]:
+    """Best-effort: surface recon-level coverage gaps from <review_root>/CONTEXT.md.
+
+    Reads `frontmatter.environment.console_gap` (set by recon_inventory when
+    console enrichment was applicable but did not run — containerized project
+    with no `--console-cmd`, or `--no-console`). Returns human-readable lines
+    for the REPORT.md `## Coverage Gaps` section. Any failure (no CONTEXT.md,
+    parse error, missing block) → `[]` so dedupe never breaks on it.
+    """
+    ctx = review_root / "CONTEXT.md"
+    if not ctx.is_file():
+        return []
+    try:
+        text = ctx.read_text(encoding="utf-8")
+        m = _vc.FRONTMATTER_RE.match(text)
+        if not m:
+            return []
+        fm = _vc.parse_yaml_subset(m.group(1))
+    except Exception:
+        return []
+    env = fm.get("environment") if isinstance(fm, dict) else None
+    if not isinstance(env, dict) or not env.get("console_gap"):
+        return []
+    reason = env.get("console_gap_reason") or "console enrichment not performed"
+    mode = env.get("console_mode", "disabled")
+    return [
+        f"Console enrichment not performed (console_mode={mode}): {reason}. "
+        "Dynamically registered routes / CLI commands may be missing from the "
+        "attack surface; re-run with `--console-cmd` to enumerate them."
+    ]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -162,6 +195,10 @@ def main(argv: list[str] | None = None) -> int:
         previous = load_state(review_root)
         diff = compute_diff(previous, snapshots)
 
+    # Recon-level coverage gaps (e.g. console enrichment skipped) surfaced from
+    # CONTEXT.md so they appear in REPORT.md, not just the inventory.
+    coverage_gaps = read_coverage_gaps(review_root)
+
     cost = estimate_cost(paths, _waves_balanced_models())
 
     waves_plan: list[dict] | None = None
@@ -202,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
                 cost=cost,
                 refute_summary=refute_summary,
                 waves_plan=waves_plan,
+                coverage_gaps=coverage_gaps,
             ),
         )
         if not args.no_state and str(review_root) not in ("", "."):
@@ -223,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
         cost=cost,
         refute_summary=refute_summary,
         waves_plan=waves_plan,
+        coverage_gaps=coverage_gaps,
     )
     if args.refute is not None:
         # Emit audit log of refute records that failed validation. Always write

@@ -62,6 +62,11 @@ from recon.recipes.webauthn_passkeys_detect import detect_webauthn_passkeys
 RECIPE_NAME = "laravel"
 LANGUAGE = "php"
 
+# No console enrichment yet (MVP is fully static). None ⇒ the recon utility's
+# console-applicability machinery is N/A for this recipe; see symfony.py for
+# the populated form.
+CONSOLE_ENTRYPOINT = None
+
 
 # ---------------------------------------------------------------------------
 # Schema bag — 3-level shape: {kind: {name: {bag_key: SectionSpec}}}.
@@ -2112,6 +2117,7 @@ def build_inventory(
     *,
     plugin_root: Optional[Path] = None,
     no_console: bool = False,
+    console_runner: "object" = None,
     exclude: Optional[tuple[str, ...]] = None,
 ) -> InventoryResult:
     """Run the full Laravel recipe pipeline.
@@ -2120,8 +2126,9 @@ def build_inventory(
     the set with `touched_by_diff: true`. (Caller — recon_inventory.py — sets
     this. MVP recipe applies it as a post-pass.)
 
-    no_console — when True, skip artisan-based enrichment (currently unused —
-    MVP is fully static; placeholder for v3.x console enrichment).
+    no_console / console_runner — accepted for contract uniformity but unused:
+    the Laravel recipe is fully static (no `php artisan` enrichment yet, see
+    CONSOLE_ENTRYPOINT=None). Placeholders for a future v3.x console pass.
 
     exclude — extra path prefixes (relative to project_root) appended to
     sandbox.DEFAULT_EXCLUDE before invoking the PHP extractor. Use it to
@@ -2130,7 +2137,7 @@ def build_inventory(
     """
     if plugin_root is None:
         plugin_root = Path(__file__).resolve().parents[3]
-    del no_console  # MVP: no console enrichment yet
+    del no_console, console_runner  # MVP: no console enrichment yet
 
     sources_used: list[str] = []
     warnings: list[str] = []

@@ -25,6 +25,7 @@ import datetime
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -37,6 +38,7 @@ sys.path.insert(0, str(_BIN))
 import compute_fingerprint as fp  # noqa: E402
 from recon import recipes as recipes_pkg  # noqa: E402
 from recon import sandbox as _sandbox  # noqa: E402
+from recon import environment as _environment  # noqa: E402
 from recon.recipes import (  # noqa: E402
     detect_best,
     load_recipe,
@@ -318,6 +320,113 @@ def _confidence(result: InventoryResult, no_console: bool) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Console runner resolution (environment-aware).
+# ---------------------------------------------------------------------------
+
+
+def decide_console_runner(
+    probe: "_environment.EnvProbe",
+    *,
+    no_console: bool,
+    console_cmd: Optional[str],
+    entrypoint: Optional[list[str]],
+    cwd: Path,
+) -> "_sandbox.ConsoleRunner":
+    """Pure decision: pick a ConsoleRunner from an EnvProbe + flags.
+
+    Precedence (most explicit first):
+      1. recipe has no console entrypoint  → disabled (N/A, NOT a coverage gap).
+      2. `--no-console`                     → disabled (user's explicit choice).
+      3. `--console-cmd=<tpl>`              → custom runner (verbatim).
+      4. containerized project              → disabled (env_runner_unknown).
+      5. host php present                   → host runner using the entrypoint.
+      6. otherwise                          → disabled (env_runner_unknown).
+
+    Containerization is the DOMINANT gate (steps 4 vs 5): a containerized
+    project's runtime lives in the container, so running `bin/console` on the
+    host distorts the environment (wrong PHP version, missing services). We
+    refuse to silently run on the host; instead we return a disabled runner
+    whose `env_runner_unknown` reason becomes a LOUD coverage gap. In normal
+    interactive runs the orchestrator has already probed the environment, asked
+    the user, and passed `--console-cmd`, so this path is the non-interactive
+    (CI) fallback — never a silent degrade.
+    """
+    if entrypoint is None:
+        return _sandbox.disabled_runner("console_not_supported_by_recipe", cwd)
+    if no_console:
+        return _sandbox.disabled_runner("console_disabled_by_flag", cwd)
+    if console_cmd:
+        # Validate the template is shell-parseable before committing to it, so a
+        # malformed --console-cmd (e.g. an unbalanced quote) degrades to a
+        # recorded gap instead of crashing recon when build_console_argv runs
+        # shlex.split. Substitute a dummy for {args} first (the real value is
+        # always shlex-quoted, so it never introduces a parse error itself).
+        try:
+            shlex.split(console_cmd.replace("{args}", "ARGS"))
+        except ValueError as exc:
+            return _sandbox.disabled_runner(f"invalid_console_cmd: {exc}", cwd)
+        return _sandbox.custom_runner(console_cmd, cwd)
+    if probe.containerized:
+        signals = ", ".join(probe.container_signals) or "container markers"
+        return _sandbox.disabled_runner(
+            f"env_runner_unknown: containerized project ({signals}); "
+            "pass --console-cmd or run interactively to enable console enrichment",
+            cwd,
+        )
+    if probe.host_php_present:
+        return _sandbox.host_runner(shlex.join(entrypoint), cwd)
+    return _sandbox.disabled_runner(
+        "env_runner_unknown: php not on host PATH and no --console-cmd given", cwd
+    )
+
+
+def _environment_block(
+    probe: "_environment.EnvProbe",
+    runner: "_sandbox.ConsoleRunner",
+    entrypoint: Optional[list[str]],
+    console_used: bool,
+) -> dict:
+    """Build the `environment` frontmatter block.
+
+    `console_gap` is True when console enrichment WAS applicable (the recipe
+    has an entrypoint and was not deemed N/A) but the console did NOT actually
+    run — covering `--no-console`, `env_runner_unknown`, AND the case where a
+    host/custom runner was resolved but failed at runtime (smoke/probe failed).
+    The authoritative signal for "console actually ran" is `console_used` (a
+    `console:*` entry in `result.sources_used`), not the resolved runner mode —
+    a `host` runner whose smoke fails enriches nothing and is still a gap.
+    It is False when the recipe never had console enrichment
+    (`console_not_supported_by_recipe`). dedupe_findings reads `console_gap` /
+    `console_gap_reason` to surface a Coverage Gaps section in REPORT.md.
+    """
+    reason = runner.disabled_reason or ""
+    applicable = entrypoint is not None and reason != "console_not_supported_by_recipe"
+    console_gap = applicable and not console_used
+    if not console_gap:
+        gap_reason = None
+    elif runner.mode == "disabled":
+        gap_reason = reason
+    else:
+        # Runner was resolved (host/container/custom) but produced no console
+        # output — the command/smoke failed at runtime.
+        gap_reason = (
+            f"console_runtime_failed: {runner.mode} runner produced no console "
+            "output (smoke/probe failed; see warnings)"
+        )
+    block: dict = {
+        "containerized": probe.containerized,
+        "host_php_present": probe.host_php_present,
+        "host_php_version": probe.host_php_version,
+        "console_mode": runner.mode,
+        "console_gap": console_gap,
+        "console_gap_reason": gap_reason,
+    }
+    if probe.container_signals:
+        block["container_signals"] = list(probe.container_signals)
+    return block
+
+
+# ---------------------------------------------------------------------------
 # Commands.
 # ---------------------------------------------------------------------------
 
@@ -356,6 +465,7 @@ def cmd_inventory(
     diff_files: Optional[set[str]],
     no_console: bool,
     exclude: Optional[tuple[str, ...]] = None,
+    console_cmd: Optional[str] = None,
 ) -> int:
     project_root = project_root.resolve()
     if not project_root.is_dir():
@@ -385,12 +495,27 @@ def cmd_inventory(
             file=sys.stderr,
         )
 
+    # Resolve the console runner (environment-aware): probe the project's
+    # execution environment, then pick host / container / custom / disabled.
+    # The probe never executes project code (host `php --version` + file reads
+    # only), so it is safe even for hostile repos and under --no-console.
+    entrypoint = recipes_pkg.console_entrypoint(recipe)
+    probe = _environment.probe_environment(project_root, console_entrypoint=entrypoint)
+    console_runner = decide_console_runner(
+        probe,
+        no_console=no_console,
+        console_cmd=console_cmd,
+        entrypoint=entrypoint,
+        cwd=project_root,
+    )
+
     plugin_root = _BIN.parent
     result: InventoryResult = recipe.build_inventory(
         project_root,
         diff_files=diff_files,
         plugin_root=plugin_root,
         no_console=no_console,
+        console_runner=console_runner,
         exclude=exclude,
     )
 
@@ -444,6 +569,13 @@ def cmd_inventory(
         ),
         "recipe_used": recipe.RECIPE_NAME,
         "tool_versions": _tool_versions(project_root),
+        "environment": _environment_block(
+            probe, console_runner, entrypoint,
+            console_used=any(
+                isinstance(s, str) and s.startswith("console:")
+                for s in result.sources_used
+            ),
+        ),
         "sources_used": sources_used_dedup,
         "missing_sections": result.missing_sections,
         "recon_confidence": _confidence(result, no_console),
@@ -519,7 +651,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--review-root", type=Path, help="Output directory for CONTEXT.md")
     parser.add_argument("--diff-files", type=Path, default=None, help="File listing changed files")
     parser.add_argument("--no-console", action="store_true",
-                        help="Do not invoke bin/console (static-only inventory)")
+                        help="Do not invoke the project console (static-only inventory)")
+    parser.add_argument("--console-cmd", default=None,
+                        help="Explicit command template to run the project console, e.g. "
+                             "'docker compose exec -T php php bin/console'. May contain a "
+                             "'{args}' placeholder for Makefile-style passthrough "
+                             "(e.g. 'make console CMD={args}'); otherwise the subcommand is "
+                             "appended. Overrides environment auto-detection. Mutually "
+                             "exclusive in spirit with --no-console (the latter wins).")
     parser.add_argument("--exclude", default=None,
                         help="CSV of project-root-relative path prefixes to skip pre-parse "
                              "(appended to built-in DEFAULT_EXCLUDE: vendor, var/cache, "
@@ -556,7 +695,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     exclude = _parse_exclude(args.exclude)
     return cmd_inventory(
         args.project_root, args.recipe, args.review_root, diff_files, args.no_console,
-        exclude,
+        exclude, console_cmd=args.console_cmd,
     )
 
 

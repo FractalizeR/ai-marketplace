@@ -6,20 +6,28 @@ Two concerns:
    `--kind=<KIND>` against a target file or directory. Enforces timeout,
    memory_limit, and project-root containment. Returns `(parsed_json, warning)`.
 
-2. **Console enrichment** (Symfony-style) — `try_console_smoke` quickly probes
-   `bin/console list`; `run_console_command` runs individual `debug:*`
-   commands (with timeout). Both return `(stdout, warning)`. Recipes that
-   want console enrichment call these from `build_inventory`.
+2. **Console enrichment** — `try_console_smoke` quickly probes whether the
+   project's framework console is runnable; `run_console_command` runs
+   individual subcommands (with timeout). Both operate on a caller-supplied
+   `ConsoleRunner` that describes HOW to invoke the console — directly on the
+   host (`php bin/console`), inside a container (`docker compose exec -T php
+   php bin/console`), via a custom wrapper / Makefile target, or `php artisan`
+   for Laravel. The module is therefore stack-agnostic and path-agnostic: it
+   no longer checks that `bin/console` exists on the host — that responsibility
+   belongs to whoever constructs the `ConsoleRunner`.
 
-The recipe receives `no_console: bool` — when True, it skips console probes
-and emits `console_disabled_by_flag` warning. When False, the recipe is free
-to attempt `try_console_smoke`; failure → degrade to static-only with warning.
+The recipe receives `no_console: bool` — when True, it builds a
+`disabled_runner(...)` and emits `console_disabled_by_flag` warning. When
+False, the recipe is free to attempt `try_console_smoke`; failure → degrade to
+static-only with warning.
 """
 
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -136,115 +144,229 @@ def run_extractor(
 
 
 # ---------------------------------------------------------------------------
-# Console probes.
+# Console enrichment.
 # ---------------------------------------------------------------------------
 
-CONSOLE_SMOKE_TIMEOUT_SECONDS = 30
-CONSOLE_COMMAND_TIMEOUT_SECONDS = 60
+# Mode-aware timeouts. Containers and custom wrappers are slower than a host
+# invocation — a cold container start (image pull-less but service boot, PHP
+# warmup, autoload priming) can eat tens of seconds before the console even
+# begins executing. Host stays tight; container/custom get the larger budget.
+CONSOLE_SMOKE_TIMEOUT_HOST = 30
+CONSOLE_SMOKE_TIMEOUT_CONTAINER = 60
+CONSOLE_COMMAND_TIMEOUT_HOST = 60
+CONSOLE_COMMAND_TIMEOUT_CONTAINER = 120
+
+# Backwards-compatible aliases for the pre-refactor constant names. Some other
+# modules may still import these by name; they map to the HOST values.
+CONSOLE_SMOKE_TIMEOUT_SECONDS = CONSOLE_SMOKE_TIMEOUT_HOST
+CONSOLE_COMMAND_TIMEOUT_SECONDS = CONSOLE_COMMAND_TIMEOUT_HOST
+
+# Default smoke probes: try `list` first (cheapest, enumerates all commands),
+# fall back to `debug:router --format=json` (targeted, doesn't require every
+# bundle's Kernel to boot cleanly). Success if ANY probe exits 0.
+_DEFAULT_SMOKE_PROBES: tuple[tuple[str, ...], ...] = (
+    ("list",),
+    ("debug:router", "--format=json"),
+)
 
 
-def _run_smoke_probe(
-    bin_console: Path,
-    project_root: Path,
-    args: list[str],
-    timeout: int,
-) -> tuple[bool, Optional[str], bool]:
-    """Run a single smoke probe; return (ok, short_error, infra_failure).
+@dataclass
+class ConsoleRunner:
+    """Describes HOW to invoke a project's framework console.
 
-    `short_error` is None when ok=True; otherwise a compact reason string
-    (already truncated to ~200 chars) suitable for embedding in a warning.
-
-    `infra_failure=True` signals an environment-level failure that no
-    retry of a different command will recover from (e.g. `php` missing
-    from PATH). Timeout is intentionally NOT infra: the probe target may
-    be flaky, and a lighter command (e.g. `debug:router`) might still
-    succeed within budget.
+    `mode`            — one of "host" | "container" | "custom" | "disabled".
+                        Drives default timeout selection (host vs container/
+                        custom) and the early-return short-circuit when
+                        "disabled".
+    `cmd_template`    — the full command string up to AND including the
+                        entrypoint, e.g. "php bin/console",
+                        "docker compose exec -T php php bin/console",
+                        "php artisan", or a Makefile target like
+                        "make console CMD={args}". May contain the literal
+                        substring "{args}" as a placeholder for the
+                        shell-quoted subcommand args (see build_console_argv).
+                        None iff mode == "disabled".
+    `cwd`             — working directory for the subprocess.
+    `disabled_reason` — when mode == "disabled", the warning string returned
+                        by the run functions in lieu of executing anything.
     """
-    try:
-        proc = subprocess.run(
-            ["php", str(bin_console), *args],
-            cwd=project_root,
-            capture_output=True, text=True, timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        return False, f"timed out after {timeout}s", False
-    except FileNotFoundError:
-        return False, "php not on PATH", True
-    if proc.returncode != 0:
-        last = proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else f"rc={proc.returncode}"
-        return False, last[:200], False
-    return True, None, False
+
+    mode: str
+    cmd_template: Optional[str]
+    cwd: Path
+    disabled_reason: Optional[str] = None
+
+
+def disabled_runner(reason: str, cwd: Path) -> ConsoleRunner:
+    """Construct a no-op runner that never spawns a subprocess.
+
+    The run functions short-circuit on mode == "disabled" and surface
+    `reason` as their warning. Used when console enrichment is suppressed
+    (e.g. `--no-console`) or no runnable console could be resolved.
+    """
+    return ConsoleRunner(mode="disabled", cmd_template=None, cwd=cwd, disabled_reason=reason)
+
+
+def host_runner(cmd_template: str, cwd: Path) -> ConsoleRunner:
+    """Construct a host-mode runner (direct invocation, e.g. `php bin/console`)."""
+    return ConsoleRunner(mode="host", cmd_template=cmd_template, cwd=cwd)
+
+
+def container_runner(cmd_template: str, cwd: Path) -> ConsoleRunner:
+    """Construct a container-mode runner (e.g. `docker compose exec -T php ...`)."""
+    return ConsoleRunner(mode="container", cmd_template=cmd_template, cwd=cwd)
+
+
+def custom_runner(cmd_template: str, cwd: Path) -> ConsoleRunner:
+    """Construct a custom-mode runner (user wrapper / Makefile target)."""
+    return ConsoleRunner(mode="custom", cmd_template=cmd_template, cwd=cwd)
+
+
+def build_console_argv(runner: ConsoleRunner, console_args: list[str]) -> list[str]:
+    """Resolve a runner's cmd_template + subcommand args into an argv list.
+
+    This rule is a shared contract with other modules — keep it precise:
+
+    - If "{args}" is a literal substring of `cmd_template`: replace it with
+      `shlex.quote(" ".join(console_args))` — i.e. quote the space-joined
+      args as ONE shell token — then `shlex.split(...)` the whole resolved
+      string and return that list. The point of "{args}" is a Makefile-style
+      passthrough (`make console CMD={args}`) where the entire subcommand must
+      collapse into a single make-variable value, so the args stay glued to
+      whatever prefix they substitute into.
+    - Otherwise: return `shlex.split(cmd_template) + list(console_args)`.
+
+    `console_args` may be empty. `cmd_template` must not be None (callers
+    short-circuit disabled runners before reaching here).
+
+    Examples:
+      host:      "php bin/console" + ["debug:router", "--format=json"]
+                 -> ["php", "bin/console", "debug:router", "--format=json"]
+      container: "docker compose exec -T php php bin/console" + ["list"]
+                 -> ["docker", "compose", "exec", "-T", "php",
+                     "php", "bin/console", "list"]
+      makefile:  "make console CMD={args}" + ["debug:router", "--format=json"]
+                 -> ["make", "console", "CMD=debug:router --format=json"]
+                 (the space-joined args are quoted as ONE token, so the final
+                 shlex.split keeps "CMD=debug:router --format=json" glued).
+      empty:     "make console CMD={args}" + []
+                 -> ["make", "console", "CMD="]
+                 (shlex.quote("") == "''", so CMD= becomes a bare empty value).
+    """
+    template = runner.cmd_template
+    if template is None:
+        raise ValueError("build_console_argv called on a runner with no cmd_template")
+    if "{args}" in template:
+        resolved = template.replace("{args}", shlex.quote(" ".join(console_args)))
+        return shlex.split(resolved)
+    return shlex.split(template) + list(console_args)
+
+
+def _smoke_timeout_for(runner: ConsoleRunner, timeout: Optional[int]) -> int:
+    if timeout is not None:
+        return timeout
+    return CONSOLE_SMOKE_TIMEOUT_HOST if runner.mode == "host" else CONSOLE_SMOKE_TIMEOUT_CONTAINER
+
+
+def _command_timeout_for(runner: ConsoleRunner, timeout: Optional[int]) -> int:
+    if timeout is not None:
+        return timeout
+    return CONSOLE_COMMAND_TIMEOUT_HOST if runner.mode == "host" else CONSOLE_COMMAND_TIMEOUT_CONTAINER
 
 
 def try_console_smoke(
-    project_root: Path,
-    timeout: int = CONSOLE_SMOKE_TIMEOUT_SECONDS,
+    runner: ConsoleRunner,
+    *,
+    probes: Optional[list[list[str]]] = None,
+    timeout: Optional[int] = None,
 ) -> tuple[bool, Optional[str]]:
-    """Quick probe: does `php bin/console <cmd>` exit 0 within `timeout`?
+    """Quick probe: can the runner's console execute SOME probe with rc=0?
 
-    Two-step fallback:
+    Multi-probe fallback (default probes: `list`, then
+    `debug:router --format=json`). First probe returning rc=0 ⇒ (True, None).
+    Each probe is executed via `build_console_argv(runner, probe)` and run with
+    `cwd=runner.cwd`. `subprocess.TimeoutExpired`, `FileNotFoundError` and
+    `OSError` are treated as a failed probe (the next probe is still tried).
 
-    1. Try `bin/console list` first — cheapest, lists all commands.
-    2. If `list` failed, try `bin/console debug:router --format=json` —
-       targeted command that doesn't require a fully-booted Kernel for
-       every bundle. Useful when an unrelated bundle blows up during
-       `list` (autoload/env issues seen in real prod projects).
+    - mode == "disabled" ⇒ return (False, runner.disabled_reason or
+      "console_disabled") WITHOUT spawning any subprocess.
+    - All probes fail ⇒ (False, "console_smoke_failed: <short reason>") where
+      <short reason> summarizes the last probe's error/stderr (capped ~200).
 
-    First-success wins: any probe returning rc=0 ⇒ (True, None).
-    Both fail ⇒ (False, "console_smoke_failed: list+debug:router both
-    failed: <list_err> | <router_err>") — both errors embedded for
-    diagnosability, each truncated to keep the warning compact.
+    `timeout` overrides the mode-derived default (host vs container/custom).
 
-    Note: `debug:router --format=json` may emit large stdout — we don't
-    parse it, only check returncode. Symfony 4.x without `--format=json`
-    will fail this probe too; that's acceptable (best-effort fallback).
-
-    SECURITY: this DOES execute project PHP code (Kernel boot). Recipes must
-    NOT call this when `no_console=True`. Plan rev 3.3 Security model.
+    SECURITY: this DOES execute project code (Kernel boot for Symfony).
+    Recipes must NOT call this when console enrichment is disabled — they
+    should build a `disabled_runner(...)` instead.
     """
-    bin_console = project_root / "bin" / "console"
-    if not bin_console.is_file():
-        return False, "console_smoke_failed: bin/console missing"
-    ok, list_err, infra = _run_smoke_probe(bin_console, project_root, ["list"], timeout)
-    if ok:
-        return True, None
-    if infra:
-        return False, f"console_smoke_failed: {list_err}"
-    ok2, router_err, _ = _run_smoke_probe(
-        bin_console, project_root, ["debug:router", "--format=json"], timeout,
-    )
-    if ok2:
-        return True, None
-    return False, (
-        f"console_smoke_failed: list+debug:router both failed: "
-        f"{list_err} | {router_err}"
-    )
+    if runner.mode == "disabled":
+        return False, runner.disabled_reason or "console_disabled"
+
+    effective_timeout = _smoke_timeout_for(runner, timeout)
+    probe_list = probes if probes is not None else [list(p) for p in _DEFAULT_SMOKE_PROBES]
+    last_reason = "no probes attempted"
+    for probe in probe_list:
+        argv = build_console_argv(runner, probe)
+        try:
+            proc = subprocess.run(
+                argv,
+                cwd=runner.cwd,
+                capture_output=True, text=True, timeout=effective_timeout,
+            )
+        except subprocess.TimeoutExpired:
+            last_reason = f"timed out after {effective_timeout}s"
+            continue
+        except FileNotFoundError:
+            last_reason = f"command not found ({argv[0] if argv else '?'})"
+            continue
+        except OSError as e:
+            last_reason = f"os error: {e}"
+            continue
+        if proc.returncode == 0:
+            return True, None
+        if proc.stderr.strip():
+            last_reason = proc.stderr.strip().splitlines()[-1]
+        else:
+            last_reason = f"rc={proc.returncode}"
+    return False, f"console_smoke_failed: {last_reason[:200]}"
 
 
 def run_console_command(
-    project_root: Path,
+    runner: ConsoleRunner,
     args: list[str],
-    timeout: int = CONSOLE_COMMAND_TIMEOUT_SECONDS,
+    *,
+    timeout: Optional[int] = None,
 ) -> tuple[Optional[str], Optional[str]]:
-    """Run `php bin/console <args>` with timeout. Return (stdout, warning).
+    """Run a single console subcommand via `runner`. Return (stdout, warning).
 
-    On timeout / non-zero exit → (None, warning_string). Caller (recipe)
-    treats warning as per-command failure: section gets `warnings` entry,
-    static-collected items remain. Plan rev 3.4 F-E.1.
+    - mode == "disabled" ⇒ (None, runner.disabled_reason or
+      "console_disabled") WITHOUT spawning any subprocess.
+    - rc 0 ⇒ (stdout, None).
+    - nonzero ⇒ (None, "console_command_failed: <args>: <last stderr, capped>").
+    - TimeoutExpired ⇒ (None, "console_command_failed: <args> timed out ...").
+    - FileNotFoundError ⇒ (None, "console_command_failed: command not found (...)").
+
+    `timeout` overrides the mode-derived default (host vs container/custom).
+    Caller (recipe) treats any warning as a per-command failure: the section
+    gets a `warnings` entry, static-collected items remain.
     """
-    bin_console = project_root / "bin" / "console"
-    if not bin_console.is_file():
-        return None, f"console_command_failed: bin/console missing for {' '.join(args)}"
-    cmd = ["php", str(bin_console), *args]
+    if runner.mode == "disabled":
+        return None, runner.disabled_reason or "console_disabled"
+
+    effective_timeout = _command_timeout_for(runner, timeout)
+    argv = build_console_argv(runner, args)
+    args_repr = " ".join(args)
     try:
         proc = subprocess.run(
-            cmd, cwd=project_root, capture_output=True, text=True, timeout=timeout,
+            argv,
+            cwd=runner.cwd,
+            capture_output=True, text=True, timeout=effective_timeout,
         )
     except subprocess.TimeoutExpired:
-        return None, f"console_command_failed: {' '.join(args)} timed out after {timeout}s"
+        return None, f"console_command_failed: {args_repr} timed out after {effective_timeout}s"
     except FileNotFoundError:
-        return None, "console_command_failed: php not on PATH"
+        return None, f"console_command_failed: command not found ({argv[0] if argv else '?'})"
     if proc.returncode != 0:
         last = proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else f"rc={proc.returncode}"
-        return None, f"console_command_failed: {' '.join(args)}: {last[:200]}"
+        return None, f"console_command_failed: {args_repr}: {last[:200]}"
     return proc.stdout, None

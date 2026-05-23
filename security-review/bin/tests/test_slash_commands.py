@@ -314,12 +314,12 @@ class ProjectOnly(unittest.TestCase):
         self.assertIn("Exploratory wave W∞ is enabled by default", self.text)
 
     def test_no_console_flag_exposed_and_conditional(self) -> None:
-        # Orchestrator exposes --no-console for hostile-repo audits but only
-        # forwards it when the user explicitly passed it — recipe decides
-        # console enrichment in the default flow.
+        # Orchestrator exposes --no-console for hostile-repo audits; in the
+        # default flow step 3b resolves the console runner (host or asks) and
+        # neither flag is needed.
         self.assertIn("--no-console", self.text)
-        self.assertIn("In normal mode `--no-console` is not needed", self.text)
-        self.assertIn("only if the flag was passed to the orchestrator", self.text)
+        self.assertIn("In normal mode neither flag is needed", self.text)
+        self.assertIn("CONSOLE_CMD resolved in step 3b", self.text)
 
     def test_worker_mode_project(self) -> None:
         # security-project must run workers in mode=project. Catches a refactor
@@ -491,6 +491,69 @@ class WorkerAgentContract(unittest.TestCase):
 
     def test_mcp_phpstorm_documented_as_conditional(self) -> None:
         self.assertIn("tool_versions.mcp_phpstorm", self.text)
+
+
+class ConsoleRunnerResolution(unittest.TestCase):
+    """Both commands must document the environment-aware console resolution."""
+
+    def setUp(self) -> None:
+        self.project = _load(PROJECT_CMD)
+        self.changes = _load(CHANGES_CMD)
+
+    def _both(self):
+        return [("security-project.md", self.project), ("security-changes.md", self.changes)]
+
+    def test_console_cmd_in_argument_hint(self) -> None:
+        for name, text in self._both():
+            with self.subTest(cmd=name):
+                m = re.search(r'^argument-hint:\s*"(.+)"\s*$', text, re.MULTILINE)
+                self.assertIsNotNone(m, f"{name}: no argument-hint")
+                self.assertIn("--console-cmd=", m.group(1),
+                              f"{name}: argument-hint missing --console-cmd=")
+
+    def test_console_cmd_documented_in_arguments(self) -> None:
+        for name, text in self._both():
+            with self.subTest(cmd=name):
+                self.assertIn("--console-cmd=<template>", text,
+                              f"{name}: --console-cmd not documented in ARGUMENTS")
+
+    def test_resolve_console_step_present(self) -> None:
+        # The pre-recon step that probes the environment and (when ambiguous)
+        # asks the user how to run the console.
+        for name, text in self._both():
+            with self.subTest(cmd=name):
+                self.assertIn("environment.py", text,
+                              f"{name}: missing environment.py probe invocation")
+                self.assertIn("--console-entrypoint", text,
+                              f"{name}: missing --console-entrypoint")
+                self.assertIn("AskUserQuestion", text,
+                              f"{name}: console resolution must ask via AskUserQuestion")
+
+    def test_show_and_confirm_trust_model(self) -> None:
+        # Never auto-run a repo-derived command: Makefile recipe body must be
+        # shown for confirmation.
+        for name, text in self._both():
+            with self.subTest(cmd=name):
+                low = text.lower()
+                self.assertIn("docker compose exec -t", low,
+                              f"{name}: container runner command not documented")
+                self.assertTrue(
+                    "recipe body" in low or "detail" in low,
+                    f"{name}: Makefile recipe body (transparency) not mentioned",
+                )
+
+    def test_recon_task_forwards_console_decision(self) -> None:
+        for name, text in self._both():
+            with self.subTest(cmd=name):
+                self.assertIn("--console-cmd=<tpl>", text,
+                              f"{name}: recon Task block does not forward --console-cmd")
+
+    def test_non_interactive_records_gap_not_block(self) -> None:
+        # CI must not block on AskUserQuestion; the gap is recorded instead.
+        for name, text in self._both():
+            with self.subTest(cmd=name):
+                low = text.lower()
+                self.assertIn("console_gap", low, f"{name}: console_gap not mentioned")
 
 
 if __name__ == "__main__":

@@ -44,7 +44,7 @@ For your own project, `bin/dedupe/cost.py estimate <review_root>` after the firs
 **What the plugin reads and executes:**
 
 - **Read-only.** The recipe and checklists only read the project source code; they never modify files outside `<review_root>/`.
-- **Console smoke by default.** The recon utility may run `bin/console list` (Symfony) or `php artisan list` (Laravel) to enrich sections (available commands, registered services, etc.). Timeout 30 seconds, memory limits — but **the project's bootstrap code is executed in the process**.
+- **Console smoke by default (environment-aware).** The recon utility may run `bin/console list` / `debug:router` (Symfony) to enrich sections (routes, registered services, etc.) — **the project's bootstrap code is executed**. Before doing so, recon probes the execution environment: if the project looks **containerized** (docker compose / Makefile / ddev / Sail) — where running on the host would use the wrong PHP version / unreachable services — the orchestrator **asks you how to run the console** (or to skip) rather than executing on the host. Pass `--console-cmd="docker compose exec -T php php bin/console"` to run it inside the container. When skipped, a `console_gap` is recorded (ceiling=medium) and surfaced in REPORT.md — never a silent degrade.
 - **PHP metadata extractor.** `bin/recon/extract_php_metadata.php` parses PHP files via `token_get_all` without require/include — it does not execute project code. Subprocess sandbox: `timeout=60s`, `memory_limit=256M`, path traversal protection via `Path.resolve() + is_relative_to(project_root)`.
 - **Worker tools.** Workers use Read, Grep, Glob; no Write to project files, no git commands except safe read-only ones, no code execution.
 
@@ -54,7 +54,17 @@ For your own project, `bin/dedupe/cost.py estimate <review_root>` after the firs
 - CI/CD without runtime credentials.
 - Sandbox mode inside corporate infrastructure.
 
-**Two isolation options:**
+**Containerized projects (not a hostile-repo concern, but an accuracy one):**
+
+If the project runs inside a container, the host PHP is the wrong runtime (different version, no DB/Redis). Run the console inside the container so enrichment is faithful:
+
+```
+/fr-security-review:security-project --console-cmd="docker compose exec -T php php bin/console"
+```
+
+If you don't pass it and the project looks containerized, recon asks interactively (showing the detected runner / Makefile target for confirmation). Choosing "skip" records a `console_gap` instead of running on the host.
+
+**Isolation options (for untrusted repos):**
 
 ### Option 1 — `--no-console` flag
 

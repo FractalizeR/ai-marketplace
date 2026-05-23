@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import dedupe as df  # noqa: E402
+import dedupe_findings as dff  # noqa: E402
 from dedupe.parser import _parse_finding_block  # noqa: E402
 from dedupe.pipeline import _normalize_symbol  # noqa: E402
 from dedupe.renderer import _family_slug, _group_by_family  # noqa: E402
@@ -680,6 +681,100 @@ class EndToEndTests(unittest.TestCase):
         f1 = df.parse_findings_file(p1)[0]
         f2 = df.parse_findings_file(p1)[0]
         self.assertEqual(f1.sink_hash, f2.sink_hash)
+
+
+_CONTEXT_WITH_GAP = """---
+schema_version: 2
+recipe_used: symfony
+environment:
+  containerized: true
+  container_signals:
+    - docker-compose.yml
+  host_php_present: true
+  host_php_version: "8.4.1"
+  console_mode: disabled
+  console_gap: true
+  console_gap_reason: "env_runner_unknown: containerized project"
+---
+body
+"""
+
+_CONTEXT_NO_GAP = """---
+schema_version: 2
+recipe_used: symfony
+environment:
+  containerized: false
+  host_php_present: true
+  host_php_version: "8.4.1"
+  console_mode: host
+  console_gap: false
+  console_gap_reason: null
+---
+body
+"""
+
+
+class CoverageGapsTests(unittest.TestCase):
+    def test_read_coverage_gaps_returns_line_when_gap(self):
+        rr = Path(tempfile.mkdtemp())
+        (rr / "CONTEXT.md").write_text(_CONTEXT_WITH_GAP, encoding="utf-8")
+        gaps = dff.read_coverage_gaps(rr)
+        self.assertEqual(len(gaps), 1)
+        self.assertIn("Console enrichment not performed", gaps[0])
+        self.assertIn("env_runner_unknown", gaps[0])
+
+    def test_read_coverage_gaps_empty_when_no_gap(self):
+        rr = Path(tempfile.mkdtemp())
+        (rr / "CONTEXT.md").write_text(_CONTEXT_NO_GAP, encoding="utf-8")
+        self.assertEqual(dff.read_coverage_gaps(rr), [])
+
+    def test_read_coverage_gaps_empty_when_no_context(self):
+        rr = Path(tempfile.mkdtemp())
+        self.assertEqual(dff.read_coverage_gaps(rr), [])
+
+    def test_report_includes_coverage_gaps_section(self):
+        import subprocess
+        rr = Path(tempfile.mkdtemp())
+        (rr / "CONTEXT.md").write_text(_CONTEXT_WITH_GAP, encoding="utf-8")
+        waves = rr / "waves"
+        waves.mkdir()
+        (waves / "W1.md").write_text(
+            _mk_finding_md(
+                1, "src/Repo.php", 42, "dql_concat", "injection", "Repo::find",
+                "$dql = 'SELECT' . $s;",
+            )
+        )
+        output = rr / "REPORT.md"
+        result = subprocess.run(
+            [sys.executable, _CLI_SCRIPT,
+             "--input-glob", str(waves / "*.md"),
+             "--output", str(output), "--no-state"],
+            capture_output=True, text=True, check=True,
+        )
+        report = output.read_text()
+        self.assertIn("## Coverage Gaps", report)
+        self.assertIn("Console enrichment not performed", report)
+
+    def test_report_omits_section_when_no_gap(self):
+        import subprocess
+        rr = Path(tempfile.mkdtemp())
+        (rr / "CONTEXT.md").write_text(_CONTEXT_NO_GAP, encoding="utf-8")
+        waves = rr / "waves"
+        waves.mkdir()
+        (waves / "W1.md").write_text(
+            _mk_finding_md(
+                1, "src/Repo.php", 42, "dql_concat", "injection", "Repo::find",
+                "$dql = 'SELECT' . $s;",
+            )
+        )
+        output = rr / "REPORT.md"
+        subprocess.run(
+            [sys.executable, _CLI_SCRIPT,
+             "--input-glob", str(waves / "*.md"),
+             "--output", str(output), "--no-state"],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertNotIn("## Coverage Gaps", output.read_text())
 
 
 class SymbolNormalizationTests(unittest.TestCase):

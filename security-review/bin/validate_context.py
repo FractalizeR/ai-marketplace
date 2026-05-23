@@ -290,6 +290,11 @@ V2_VALID_STATUSES = {"ok", "unknown", "none", "pending_enrichment"}
 V2_CONFIDENCE_LEVELS = {"high", "medium", "low"}
 V2_CEILING_LEVELS = {"high", "medium", "low"}
 
+# Allowed `environment.console_mode` values (frontmatter.environment, optional;
+# 4.x). Mirrors recon.sandbox.ConsoleRunner.mode. The block is optional so
+# pre-4.x CONTEXT.md files (and --skip-recon against them) still validate.
+V2_CONSOLE_MODES = {"host", "container", "custom", "disabled"}
+
 # Allowed capability_flag values (frontmatter.capabilities). Free-form keys,
 # enum values. See plan §1.7.
 V2_CAPABILITY_VALUES = {
@@ -358,6 +363,41 @@ class ValidationResult:
 # ---------------------------------------------------------------------------
 # Frontmatter validation (v2).
 # ---------------------------------------------------------------------------
+
+
+def _validate_environment_block(env: object, res: ValidationResult) -> None:
+    """Validate the optional `environment` frontmatter block (4.x).
+
+    Shape: {containerized: bool, host_php_present: bool,
+            host_php_version: str|null, console_mode: <enum>,
+            console_gap: bool, console_gap_reason: str|null,
+            container_signals?: list[str]}.
+    """
+    if not isinstance(env, dict):
+        res.errors.append(f"frontmatter.environment must be a mapping, got: {type(env).__name__}")
+        return
+    for key in ("containerized", "console_gap"):
+        v = env.get(key)
+        if not isinstance(v, bool):
+            res.errors.append(f"frontmatter.environment.{key} must be a bool, got: {v!r}")
+    # host_php_present may be absent in hand-written/old blocks; check if present.
+    if "host_php_present" in env and not isinstance(env.get("host_php_present"), bool):
+        res.errors.append(
+            f"frontmatter.environment.host_php_present must be a bool, got: {env.get('host_php_present')!r}"
+        )
+    mode = env.get("console_mode")
+    if mode not in V2_CONSOLE_MODES:
+        res.errors.append(
+            f"frontmatter.environment.console_mode must be one of {sorted(V2_CONSOLE_MODES)}, got: {mode!r}"
+        )
+    for key in ("host_php_version", "console_gap_reason"):
+        v = env.get(key)
+        if v is not None and not isinstance(v, str):
+            res.errors.append(f"frontmatter.environment.{key} must be a string or null, got: {v!r}")
+    sig = env.get("container_signals")
+    if sig is not None:
+        if not isinstance(sig, list) or not all(isinstance(s, str) for s in sig):
+            res.errors.append("frontmatter.environment.container_signals must be a list of strings")
 
 
 def _validate_frontmatter_v2(text: str, res: ValidationResult) -> Optional[dict]:
@@ -451,6 +491,12 @@ def _validate_frontmatter_v2(text: str, res: ValidationResult) -> Optional[dict]
     tv = fm.get("tool_versions")
     if tv is not None and not isinstance(tv, dict):
         res.errors.append(f"tool_versions must be a mapping, got: {type(tv).__name__}")
+
+    # environment block (optional, 4.x). Records console-runner resolution and
+    # any coverage gap. Validate shape only when present — pre-4.x contexts omit
+    # it and must keep validating.
+    if "environment" in fm:
+        _validate_environment_block(fm.get("environment"), res)
 
     # sources_used / missing_sections.
     for key in ("sources_used", "missing_sections"):

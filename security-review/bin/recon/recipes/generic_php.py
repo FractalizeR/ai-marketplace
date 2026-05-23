@@ -37,6 +37,11 @@ from recon.recipes.webauthn_passkeys_detect import detect_webauthn_passkeys
 RECIPE_NAME = "generic_php"
 LANGUAGE = "php"
 
+# Generic PHP has no framework console. None ⇒ console-applicability machinery
+# is N/A (no coverage gap is reported for a recipe that never had console
+# enrichment).
+CONSOLE_ENTRYPOINT = None
+
 # No stack-specific bag for generic recipe.
 RECON_BAGS_SCHEMA: dict[str, dict[str, dict[str, SectionSpec]]] = {}
 
@@ -121,15 +126,17 @@ def build_inventory(
     *,
     plugin_root: Optional[Path] = None,
     no_console: bool = False,
+    console_runner: "object" = None,
     exclude: Optional[tuple[str, ...]] = None,
 ) -> InventoryResult:
     """STUB — emits skeleton with all sections in pending_enrichment.
 
     Real population for generic_php is out of S2 scope; the kwargs
-    `plugin_root` / `no_console` / `exclude` are accepted to keep the
-    contract uniform across recipes.
+    `plugin_root` / `no_console` / `console_runner` / `exclude` are accepted to
+    keep the contract uniform across recipes (generic_php has no console
+    enrichment, CONSOLE_ENTRYPOINT=None).
     """
-    del plugin_root, no_console, exclude  # unused in stub
+    del plugin_root, no_console, console_runner, exclude  # unused in stub
     scalar_core = {"auth_layer", "secrets"}
     core: dict[str, SectionPayload] = {}
     for sid in CORE_SECTION_IDS:

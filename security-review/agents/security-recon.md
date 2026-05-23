@@ -19,6 +19,7 @@ The orchestrator passes you in text:
 - `<project_root>` — root of the audited project (absolute path). Defaults to cwd; differs in composite repos where the orchestrator was given `--project-root=<path>` (e.g. monorepo with `api/` PHP subproject).
 - `<review_root>` — path to the `security-review-{label}/` directory (relative or absolute). The utility will write `CONTEXT.md` there.
 - `--no-console` — flag (optional). If passed — forward to the utility.
+- `--console-cmd=<template>` — command template for running the project console inside a container / via Makefile (optional; resolved by the orchestrator's "resolve console runner" step). If passed — forward to the utility verbatim. Mutually exclusive with `--no-console` in practice (the orchestrator passes at most one).
 - `--diff-files=<path>` — file with the list of changed files (optional, for `scope=changes`). If passed — forward to the utility.
 - `--exclude=<csv>` — additional path prefixes (relative to project_root) to skip *before* parsing (optional). Forward to the utility as-is. The utility will combine them with the built-in `DEFAULT_EXCLUDE` (vendor, var/cache, node_modules, etc.).
 - `--recipe=<name>` — recipe name (optional, override detect). If passed — skip step 1, use `<name>` directly in step 2.
@@ -28,7 +29,7 @@ If at least one required argument (`<project_root>`, `<review_root>`) is not pas
 ## PROHIBITIONS (hard)
 
 1. **Do NOT Write to `<review_root>/CONTEXT.md`.** The file is written by the utility. You only Edit pending sections.
-2. **Do NOT run `php bin/console` directly.** This is done by the utility under its sandbox policy.
+2. **Do NOT run the project console (`php bin/console` / `docker compose exec … bin/console` / `make …`) directly.** The utility runs it under its sandbox policy via the resolved console runner (host / container / custom from `--console-cmd`, or disabled). You only forward the flags.
 3. **Do NOT grep across the whole project.** Long lists you receive from `data.candidates` of `pending_enrichment` sections (the recipe collected them with a cap). Bounded Grep on a specific file/directory — allowed. Project-wide grep across all of src/ — not allowed.
 4. **Do NOT enumerate >50 objects in a single response to the orchestrator.** If it seems you need to — that's a signal the utility failed; return an error, do not try to "re-assemble" manually.
 5. **Do NOT read `<review_root>/CONTEXT.md` in full after the first pass.** Edit accepts narrow old_string/new_string and works on large files without reading the whole content. Full Read — only once at step 4 (finding pending sections).
@@ -56,6 +57,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/recon_inventory.py <project_root> \
     --recipe <name> \
     --review-root <review_root> \
     [--no-console] \
+    [--console-cmd=<template>] \
     [--diff-files=<path>] \
     [--exclude=<csv>]
 ```

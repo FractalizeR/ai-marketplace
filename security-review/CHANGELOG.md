@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Environment-aware console enrichment
+
+Recon no longer blindly runs `bin/console` on the host. It probes the project's execution environment first and, when the project runs inside a container (where host execution distorts the environment), asks the user how to run the console instead of silently degrading.
+
+#### Added
+
+- **`--console-cmd=<template>`** flag on `/security-project` and `/security-changes` (and `recon_inventory.py`). An explicit command for running the project console, e.g. `--console-cmd="docker compose exec -T php php bin/console"`. Supports a `{args}` placeholder for Makefile-style passthrough (`make console CMD={args}`); otherwise the subcommand is appended.
+- **`bin/recon/environment.py`** — a standalone, stdlib-only environment probe (`--probe`). Detects containerization signals (`docker-compose.y*ml`, `Dockerfile`, `.ddev`, `.lando.yml`, `laravel/sail`, `.devcontainer`), host PHP presence/version, the PHP service in a compose file, and Makefile console targets (with their recipe body, for transparency). Emits ready-to-confirm runner suggestions. Never executes project code.
+- **`environment` frontmatter block in CONTEXT.md** — records `containerized`, `container_signals`, `host_php_present`, `host_php_version`, `console_mode` (`host|container|custom|disabled`), `console_gap`, and `console_gap_reason`. Optional and backward-compatible (pre-4.x contexts still validate).
+- **`## Coverage Gaps` section in REPORT.md** — when console enrichment did not run (containerized + no `--console-cmd`, or `--no-console`), `dedupe_findings.py` surfaces the gap at the top of the report so the reduced coverage is visible, not buried in the inventory.
+- **Orchestrator "resolve console runner" step** (project step 3b / changes step 4c) — probes the environment and, when ambiguous, asks via `AskUserQuestion` with a **show + confirm** trust model: the container command is built deterministically in Python and shown verbatim; Makefile targets are shown with their recipe body; nothing repo-derived is auto-executed without the user's choice.
+- **`CONSOLE_ENTRYPOINT` recipe contract attribute** — `["php","bin/console"]` for Symfony, `None` for Laravel/generic (console N/A; no coverage gap reported).
+
+#### Changed
+
+- **`sandbox.ConsoleRunner` abstraction.** `try_console_smoke` / `run_console_command` now take a `ConsoleRunner` (host / container / custom / disabled) instead of hard-coding `["php", bin/console]` on the host, and pick higher timeouts for container/custom modes. Console execution is now stack- and location-agnostic.
+- **Containerization is the dominant gate.** A containerized project's console is never run on the host automatically — recon resolves a runner (interactively or via `--console-cmd`) or records a loud `console_gap` (ceiling=medium). In non-interactive/CI runs nothing blocks: the gap is recorded and surfaced.
+
 ### Composite repository support
 
 Adds first-class support for monorepos where `composer.json` / framework configs live in a subdirectory below `cwd` and CLAUDE.md is shared at the monorepo root.

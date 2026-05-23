@@ -1,6 +1,6 @@
 ---
 description: "Security review of changes in the current branch relative to master — with reverse-grep and forward-grep heuristics to surface regressions. Artifacts go to `security-review-{label}/`."
-argument-hint: "[--label=<x>] [--review-root=<out-dir>] [--project-root=<path>] [--interactive] [--skip-recon] [--force-skip-recon] [--all-opus] [--no-console] [--exclude=<csv>]"
+argument-hint: "[--label=<x>] [--review-root=<out-dir>] [--project-root=<path>] [--interactive] [--skip-recon] [--force-skip-recon] [--all-opus] [--no-console] [--console-cmd=<template>] [--exclude=<csv>]"
 allowed-tools:
   - Read
   - Write
@@ -27,6 +27,7 @@ allowed-tools:
   - Bash(printf *)
   - Bash(test *)
   - Bash(python3 ${CLAUDE_PLUGIN_ROOT}/bin/*.py *)
+  - Bash(python3 ${CLAUDE_PLUGIN_ROOT}/bin/recon/*.py *)
   - AskUserQuestion
 ---
 
@@ -40,7 +41,8 @@ Parse flags from `$ARGUMENTS`:
 - `--review-root=<out-dir>` — override of the **review-root output directory** (artifacts: `CONTEXT.md`, `waves/`, `REPORT.md`). For Docker/CI/firejail isolation. Accepts a relative path (resolved from cwd) or absolute. If set — `--label` is ignored. **This flag does NOT specify what to scan** — use `--project-root=<path>` to point at a non-cwd project (the diff itself limits scope for this command).
 - `--project-root=<path>` — corner of the audited project (where `composer.json` / framework configs live). Defaults to `cwd`. Use in composite repos where CLAUDE.md / cwd is one directory above the actual project root (for example monorepo with `api/` PHP subproject + shared top-level CLAUDE.md). Recon, exclude paths, sanity coverage, and refute path normalization all resolve against this value. Accepts a relative (from cwd) or absolute path.
 - `--interactive`, `--skip-recon`, `--force-skip-recon`, `--all-opus` — as in `security-project`. By default W4/W5 on sonnet (balanced profile); `--all-opus` forces opus everywhere.
-- `--no-console` — static-only recon: the utility does NOT run the project's `bin/console`. Use when auditing hostile/untrusted repos, when runtime credentials are absent, or in CI scenarios. Ceiling=medium (intentionally). Alternative — isolation via firejail/Docker without the flag.
+- `--no-console` — static-only recon: the utility does NOT run the project's console. Use when auditing hostile/untrusted repos, when runtime credentials are absent, or in CI scenarios. Ceiling=medium (intentionally). Alternative — isolation via firejail/Docker without the flag.
+- `--console-cmd=<template>` — explicit command for running the project console (e.g. `--console-cmd="docker compose exec -T php php bin/console"`) when the project runs inside a container. May contain a `{args}` placeholder for Makefile passthrough; otherwise the subcommand is appended. When neither this nor `--no-console` is passed and the project looks containerized, **step 4c asks interactively** instead of silently degrading. `--no-console` wins.
 - `--exclude=<csv>` — additional path prefixes (relative to `<project_root>`) that will NOT be parsed by the PHP extractor (see semantics in `security-project.md`). Combined with whatever is found in `<project_root>/CLAUDE.md` in step 4a.
 - `--no-adversarial` — disable the adversarial refute pass (ON by default). Semantics and contract — as in `security-project.md` (see step 12.5 below).
 - `--exploratory` and `--scope=` for diff mode are **not supported** — the diff itself limits the scope.
@@ -305,6 +307,18 @@ Removed defense files (whole-file deletes): <N>
 Extra target files for waves: <N> (will be merged into every wave's target_files)
 ```
 
+### 4c. Resolve console runner (environment-aware)
+
+Identical logic to `security-project` step 3b — decide HOW to run the project console (the only recon step that executes the project), asking the user rather than silently degrading when the project looks containerized. Skip when `--no-console` / `--console-cmd=<tpl>` was passed (forward it) or `--skip-recon` is taken. Otherwise:
+
+1. Detect the recipe (`recon_inventory.py "<PROJECT_ROOT>" --detect`); console enrichment applies to **Symfony** only — for other recipes proceed with no console flags.
+2. Probe: `python3 ${CLAUDE_PLUGIN_ROOT}/bin/recon/environment.py "<PROJECT_ROOT>" --console-entrypoint "php bin/console"` (read-only, safe).
+3. If `containerized == false` AND `host_php_present == true` → proceed with no console flags (utility auto-selects host).
+4. Else → `AskUserQuestion` built from the probe's `suggestions` (**show + confirm** trust model: present the Python-built `docker compose exec -T <service> php bin/console`; for Makefile suggestions show `detail`/recipe body; offer run-on-host, custom command, and skip). Map to `--console-cmd="<chosen>"` or, for skip, `--no-console`.
+5. Set `CONSOLE_CMD` and forward it to the recon agent in step 5.
+
+> Non-interactive / CI: do not block — proceed with no flag; the utility records a loud `console_gap` (surfaced in REPORT.md). Pass `--console-cmd`/`--no-console` explicitly in CI.
+
 ### 5. Recon phase
 
 Recon collects the inventory **across the whole project** (for full context), but the recipe marks `touched_by_diff: true/false` on applicable items per the list of changed files.
@@ -313,15 +327,15 @@ Recon collects the inventory **across the whole project** (for full context), bu
 
 **Otherwise:**
 
-Forward `--diff-files=` to the recon agent (it forwards to the utility as-is — see contract in `agents/security-recon.md`). If the orchestrator received `--no-console` — add it too. If step 4a collected a non-empty `EXCLUDE_CSV` — add `--exclude=<EXCLUDE_CSV>`:
+Forward `--diff-files=` to the recon agent (it forwards to the utility as-is — see contract in `agents/security-recon.md`). Forward the console decision from step 4c (`CONSOLE_CMD`: `--no-console`, `--console-cmd=<tpl>`, or nothing). If step 4a collected a non-empty `EXCLUDE_CSV` — add `--exclude=<EXCLUDE_CSV>`:
 
 ```
 Task(subagent_type="security-recon", prompt="""
   project_root: <PROJECT_ROOT>
   review_root: <REVIEW_ROOT>
   --diff-files=<REVIEW_ROOT>/diff_files.txt
-  [--no-console]            # only if the flag was passed to the orchestrator
-  [--exclude=<EXCLUDE_CSV>] # only if 4a collected a non-empty list
+  [--no-console | --console-cmd=<tpl>]   # CONSOLE_CMD resolved in step 4c
+  [--exclude=<EXCLUDE_CSV>]              # only if 4a collected a non-empty list
 """)
 ```
 
@@ -348,6 +362,7 @@ Print a summary to the user with emphasis on touched items (section names — th
 ```
 Recon complete (recon_confidence: <level>, ceiling: <level>).
 Stack: <framework>
+Console: <frontmatter.environment.console_mode> <if environment.console_gap: "⚠️ coverage gap — " + environment.console_gap_reason>
 Diff touched:
   - attack_surface: <N touched of M total>
   - data_access: <N touched>

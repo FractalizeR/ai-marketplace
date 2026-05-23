@@ -864,5 +864,79 @@ class ClosedSchemaUnknownKeysTests(unittest.TestCase):
             )
 
 
+_ENV_BLOCK = """
+environment:
+  containerized: true
+  container_signals:
+    - docker-compose.yml
+  host_php_present: true
+  host_php_version: "8.4.1"
+  console_mode: disabled
+  console_gap: true
+  console_gap_reason: "env_runner_unknown: containerized project"
+"""
+
+
+class EnvironmentBlockV2(unittest.TestCase):
+    """The optional `environment` frontmatter block (4.x)."""
+
+    def test_absent_block_is_valid(self):
+        # Backward compat: pre-4.x CONTEXT.md (VALID_FRONTMATTER_V2 has no
+        # environment block) must still validate.
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), VALID_FRONTMATTER_V2, all_core_sections_pending())
+            res = vc.validate_context_file(p)
+            self.assertTrue(res.ok(), msg=f"errors: {res.errors}")
+
+    def test_valid_block_passes(self):
+        fm = VALID_FRONTMATTER_V2 + _ENV_BLOCK
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), fm, all_core_sections_pending())
+            res = vc.validate_context_file(p)
+            self.assertTrue(res.ok(), msg=f"errors: {res.errors}")
+
+    def test_host_mode_with_null_optionals_valid(self):
+        block = (
+            "\nenvironment:\n"
+            "  containerized: false\n"
+            "  host_php_present: true\n"
+            "  host_php_version: null\n"
+            "  console_mode: host\n"
+            "  console_gap: false\n"
+            "  console_gap_reason: null\n"
+        )
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), VALID_FRONTMATTER_V2 + block, all_core_sections_pending())
+            res = vc.validate_context_file(p)
+            self.assertTrue(res.ok(), msg=f"errors: {res.errors}")
+
+    def test_bad_console_mode_rejected(self):
+        fm = VALID_FRONTMATTER_V2 + _ENV_BLOCK.replace("console_mode: disabled", "console_mode: bogus")
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), fm, all_core_sections_pending())
+            res = vc.validate_context_file(p)
+            self.assertFalse(res.ok())
+            self.assertTrue(any("console_mode" in e for e in res.errors), msg=res.errors)
+
+    def test_non_bool_console_gap_rejected(self):
+        fm = VALID_FRONTMATTER_V2 + _ENV_BLOCK.replace("console_gap: true", 'console_gap: "yes"')
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), fm, all_core_sections_pending())
+            res = vc.validate_context_file(p)
+            self.assertFalse(res.ok())
+            self.assertTrue(any("console_gap" in e for e in res.errors), msg=res.errors)
+
+    def test_container_signals_must_be_list_of_strings(self):
+        fm = VALID_FRONTMATTER_V2 + _ENV_BLOCK.replace(
+            "  container_signals:\n    - docker-compose.yml\n",
+            "  container_signals: docker-compose.yml\n",
+        )
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), fm, all_core_sections_pending())
+            res = vc.validate_context_file(p)
+            self.assertFalse(res.ok())
+            self.assertTrue(any("container_signals" in e for e in res.errors), msg=res.errors)
+
+
 if __name__ == "__main__":
     unittest.main()

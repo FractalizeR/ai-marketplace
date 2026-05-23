@@ -296,6 +296,29 @@ def _render_checklist_coverage(
     return lines
 
 
+def _render_coverage_gaps(coverage_gaps: list[str] | None) -> list[str]:
+    """Render a `## Coverage Gaps` section for the executive summary.
+
+    Surfaces recon-level coverage reductions (e.g. console enrichment skipped
+    because the project is containerized and no `--console-cmd` was supplied)
+    so the gap is visible in REPORT.md, not buried in CONTEXT.md. Empty / None
+    → no section (clean runs stay noise-free).
+    """
+    if not coverage_gaps:
+        return []
+    lines = [
+        "## Coverage Gaps",
+        "",
+        "> ⚠️ Parts of the recon surface were not fully enumerated. Findings "
+        "below may be incomplete in the affected areas.",
+        "",
+    ]
+    for gap in coverage_gaps:
+        lines.append(f"- {gap}")
+    lines.append("")
+    return lines
+
+
 def _render_diff_block(diff) -> list[str]:
     """Render a `## Diff vs previous run` section for the executive summary.
 
@@ -338,6 +361,7 @@ def render_summary(
     refute_summary: dict[str, int] | None = None,
     waves_plan: list[dict] | None = None,
     plugin_root: Path | None = None,
+    coverage_gaps: list[str] | None = None,
 ) -> str:
     total_counted = len(merged) + len(manual)
     by_sev: dict[str, int] = {}
@@ -417,6 +441,7 @@ def render_summary(
             f"failures) but may still encode real vulnerabilities."
         )
         lines.append("")
+    lines.extend(_render_coverage_gaps(coverage_gaps))
     coverage_lines = _render_checklist_coverage(
         waves_plan, merged, plugin_root or _default_plugin_root()
     )
@@ -441,6 +466,7 @@ def render_report(
     refute_summary: dict[str, int] | None = None,
     waves_plan: list[dict] | None = None,
     plugin_root: Path | None = None,
+    coverage_gaps: list[str] | None = None,
 ) -> str:
     """Legacy single-file report (all findings inline)."""
     out = [render_summary(
@@ -450,6 +476,7 @@ def render_report(
         refute_summary=refute_summary,
         waves_plan=waves_plan,
         plugin_root=plugin_root,
+        coverage_gaps=coverage_gaps,
     )]
     out.append("## Findings")
     out.append("")
@@ -502,6 +529,7 @@ def render_index_report(
     refute_summary: dict[str, int] | None = None,
     waves_plan: list[dict] | None = None,
     plugin_root: Path | None = None,
+    coverage_gaps: list[str] | None = None,
 ) -> str:
     """Executive summary + index table linking to per-family detail files."""
     out = [
@@ -514,6 +542,7 @@ def render_index_report(
             refute_summary=refute_summary,
             waves_plan=waves_plan,
             plugin_root=plugin_root,
+            coverage_gaps=coverage_gaps,
         )
     ]
     out.append("## Findings by category")
@@ -615,6 +644,7 @@ def write_split_report(
     refute_summary: dict[str, int] | None = None,
     waves_plan: list[dict] | None = None,
     plugin_root: Path | None = None,
+    coverage_gaps: list[str] | None = None,
 ) -> list[Path]:
     """Write index + per-family detail files. Returns list of written paths."""
     details_dir.mkdir(parents=True, exist_ok=True)
@@ -630,6 +660,7 @@ def write_split_report(
             refute_summary=refute_summary,
             waves_plan=waves_plan,
             plugin_root=plugin_root,
+            coverage_gaps=coverage_gaps,
         ),
     )
     written.append(output_path)

@@ -5,8 +5,22 @@ Recipes are Python modules in `bin/recon/recipes/`. Each defines:
 - RECON_BAGS_SCHEMA: dict[str, SectionSpec]
 - detect(project_root) -> StackMatch | None
 - build_inventory(project_root, diff_files=None, *,
-                  plugin_root=None, no_console=False, exclude=None) -> InventoryResult
+                  plugin_root=None, no_console=False, console_runner=None,
+                  exclude=None) -> InventoryResult
 - sanity_probes() -> list[SanityProbe]
+- CONSOLE_ENTRYPOINT: Optional[list[str]] (optional module attribute) — the
+  framework console entrypoint (e.g. ["php", "bin/console"] for Symfony,
+  ["php", "artisan"] for a future Laravel pass). `None` (or absent) means the
+  recipe has no console enrichment and the console-applicability machinery in
+  recon_inventory is N/A for it (no coverage gap reported). Read it via
+  `console_entrypoint(mod)`.
+
+`console_runner` (4.x): a `recon.sandbox.ConsoleRunner` that encodes WHERE and
+whether console enrichment runs (host / container / custom / disabled). The
+recon utility constructs it from an environment probe (bin/recon/environment.py)
+plus `--console-cmd` / `--no-console` via `recon_inventory.decide_console_runner`
+and passes it to `build_inventory`. Recipes without console enrichment accept
+the kwarg for contract uniformity and ignore it.
 
 `exclude` (3.1.1+): optional tuple of path prefixes (relative to project_root)
 appended to sandbox.DEFAULT_EXCLUDE before invoking the PHP extractor.
@@ -42,6 +56,22 @@ STACK_DETECT_THRESHOLD: float = 0.7
 def load_recipe(name: str) -> ModuleType:
     """Import recipe module by short name. Raises ModuleNotFoundError if absent."""
     return importlib.import_module(f"recon.recipes.{name}")
+
+
+def console_entrypoint(mod: ModuleType) -> Optional[list[str]]:
+    """Return a recipe's CONSOLE_ENTRYPOINT, or None if the recipe declares no
+    console enrichment (attribute absent or explicitly None).
+
+    Centralizing the `getattr` keeps callers (recon_inventory) from hard-coding
+    the attribute name and tolerates recipes written before the attribute
+    existed.
+    """
+    value = getattr(mod, "CONSOLE_ENTRYPOINT", None)
+    if value is None:
+        return None
+    if isinstance(value, list) and all(isinstance(p, str) for p in value) and value:
+        return value
+    return None
 
 
 def available_recipes() -> list[str]:

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from pathlib import Path
 from typing import Any, Optional
 
@@ -41,6 +42,15 @@ from recon.graphql_detect import detect_graphql
 
 RECIPE_NAME = "symfony"
 LANGUAGE = "php"
+
+# Console entrypoint for environment-aware enrichment (the subcommand args are
+# appended by the recon utility / sandbox.build_console_argv). The recon
+# utility combines this with bin/recon/environment.py to construct a
+# `sandbox.ConsoleRunner` — on the host, inside a container (docker compose
+# exec), or via a user-supplied `--console-cmd`. `None` on a recipe means the
+# recipe has no console enrichment and the whole console-applicability
+# machinery is N/A (e.g. laravel/generic_php today).
+CONSOLE_ENTRYPOINT: list[str] = ["php", "bin/console"]
 
 
 # ---------------------------------------------------------------------------
@@ -680,11 +690,20 @@ def collect_attack_surface(
     diff_files: Optional[set[str]],
     sources_used: list[str],
     warnings: list[str],
-    no_console: bool,
+    console_runner: "object",
     *,
     exclude: Optional[tuple[str, ...]] = None,
 ) -> list[dict]:
     """Build attack_surface items.
+
+    `console_runner` is a `sandbox.ConsoleRunner`. Console enrichment runs only
+    when its mode is not "disabled"; the runner already encodes WHERE the
+    console runs (host / container / custom) — see recon_inventory's
+    `decide_console_runner` and bin/recon/environment.py. When the runner is
+    disabled because the execution environment could not be resolved
+    (`env_runner_unknown:*` — e.g. a containerized project with no
+    `--console-cmd`), we emit a LOUD `coverage_gap:` warning so the auditor
+    knows dynamic route enumeration was skipped — never a silent degrade.
 
     Per-command console enrichment failures land in `warnings` (which the
     utility surfaces via frontmatter). Per-section partial-status semantics
@@ -797,11 +816,21 @@ def collect_attack_surface(
                     "line": line,
                 })
 
-    # 3. console enrichment (optional).
-    if not no_console:
+    # 3. console enrichment (optional, environment-aware).
+    if getattr(console_runner, "mode", "disabled") != "disabled":
         _enrich_via_console(
-            project_root, items, sources_used, warnings, diff_files,
+            project_root, items, sources_used, warnings, diff_files, console_runner,
         )
+    else:
+        reason = getattr(console_runner, "disabled_reason", None) or ""
+        if reason.startswith("env_runner_unknown"):
+            # LOUD coverage gap — not a silent skip. The execution environment
+            # (e.g. a containerized project) could not be resolved, so dynamic
+            # route enumeration via bin/console did NOT run.
+            warnings.append(
+                f"coverage_gap: console_disabled ({reason}) — dynamic route "
+                "enumeration NOT performed; static route set may be incomplete"
+            )
 
     return items
 
@@ -860,16 +889,19 @@ def _enrich_via_console(
     sources_used: list[str],
     warnings: list[str],
     diff_files: Optional[set[str]],
+    runner: "object",
 ) -> None:
-    """Run `bin/console` probes and fold their output into `items`. Per-command
-    failures are captured in `warnings`, not raised — degraded gracefully.
+    """Run console probes via `runner` and fold their output into `items`.
+    Per-command failures are captured in `warnings`, not raised — degraded
+    gracefully.
 
-    SECURITY: caller must have decided that running console is safe (project
-    not hostile, no `--no-console`). This DOES boot Symfony Kernel.
+    SECURITY: caller must have decided that running console is safe and chosen
+    the execution environment (`runner.mode != "disabled"`). This DOES boot the
+    framework kernel = arbitrary code execution, possibly inside a container.
     """
     from recon import sandbox
 
-    smoke_ok, smoke_warn = sandbox.try_console_smoke(project_root)
+    smoke_ok, smoke_warn = sandbox.try_console_smoke(runner)
     if not smoke_ok:
         warnings.append(smoke_warn or "console_smoke_failed: unknown")
         return
@@ -877,7 +909,7 @@ def _enrich_via_console(
     sources_used.append("console:smoke")
 
     # debug:router for additional routes.
-    out, warn = sandbox.run_console_command(project_root, ["debug:router", "--format=json"])
+    out, warn = sandbox.run_console_command(runner, ["debug:router", "--format=json"])
     if warn:
         warnings.append(warn)
     elif out is not None:
@@ -921,7 +953,7 @@ def _enrich_via_console(
         ("console:debug_messenger", ["debug:messenger", "--format=json"]),
         ("console:list", ["list", "--format=json"]),
     ):
-        out, warn = sandbox.run_console_command(project_root, args)
+        out, warn = sandbox.run_console_command(runner, args)
         if warn:
             warnings.append(warn)
         elif out is not None:
@@ -2592,6 +2624,7 @@ def build_inventory(
     *,
     plugin_root: Optional[Path] = None,
     no_console: bool = False,
+    console_runner: "object" = None,
     exclude: Optional[tuple[str, ...]] = None,
 ) -> InventoryResult:
     """Full Symfony inventory (rev 3.7).
@@ -2599,7 +2632,15 @@ def build_inventory(
     Required kwargs in real runs:
       plugin_root — to invoke extract_php_metadata.php (needed for nearly
                     every section that scans PHP).
-      no_console — suppresses console enrichment (hostile / no-shell mode).
+      console_runner — a `sandbox.ConsoleRunner` deciding WHERE/whether console
+                    enrichment runs (host / container / custom / disabled). The
+                    recon utility builds it via `decide_console_runner` from an
+                    environment probe + `--console-cmd` / `--no-console`. When
+                    None (direct callers / back-compat) it is derived from
+                    `no_console`: disabled when True, else a host runner using
+                    CONSOLE_ENTRYPOINT.
+      no_console — back-compat boolean kept for direct callers; superseded by
+                    `console_runner` when the latter is provided.
       exclude    — extra path prefixes (relative to project_root) appended
                    to sandbox.DEFAULT_EXCLUDE for the PHP extractor. Use it
                    to skip project-specific directories (legacy/, generated/,
@@ -2620,13 +2661,22 @@ def build_inventory(
             project_root=project_root,
         )
 
+    if console_runner is None:
+        # Direct callers / back-compat: derive a runner from `no_console`.
+        from recon import sandbox
+        console_runner = (
+            sandbox.disabled_runner("console_disabled_by_flag", project_root)
+            if no_console
+            else sandbox.host_runner(shlex.join(CONSOLE_ENTRYPOINT), project_root)
+        )
+
     files = _list_php_files(project_root)
 
     # 1. attack_surface.
     # `console_disabled_by_flag` is appended by the utility (cmd_inventory),
     # not the recipe, so we don't emit it here to avoid duplication.
     attack_items = collect_attack_surface(
-        project_root, plugin_root, diff_files, sources_used, warnings, no_console,
+        project_root, plugin_root, diff_files, sources_used, warnings, console_runner,
         exclude=exclude,
     )
 
