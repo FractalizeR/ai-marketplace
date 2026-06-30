@@ -112,6 +112,38 @@ def read_coverage_gaps(review_root: Path) -> list[str]:
     ]
 
 
+def read_dispatch_gaps(path: Path | None) -> list[str]:
+    """Surface wave-dispatch execution gaps from a `dispatch_gaps.json` file.
+
+    The file is written by `shared.dispatch.write_dispatch_gaps` (a file
+    contract, no import): a JSON list of `{slice_id, reason, returncode}`. Each
+    entry becomes one deterministic human line for the REPORT.md `## Coverage
+    Gaps` section. None / missing / corrupt → `[]` so dedupe never breaks on it.
+    """
+    if path is None:
+        return []
+    p = Path(path)
+    if not p.is_file():
+        return []
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    lines: list[str] = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        slice_id = entry.get("slice_id", "?")
+        reason = entry.get("reason", "unknown")
+        lines.append(
+            f"Wave {slice_id} produced no findings file (reason: {reason}). "
+            "Coverage is INCOMPLETE."
+        )
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Deduplicate security findings")
     parser.add_argument("--input", action="append", default=[], help="Per-wave finding file (repeatable). v3: <review_root>/waves/<slice_id>.md")
@@ -157,12 +189,52 @@ def main(argv: list[str] | None = None) -> int:
         "When supplied, renderer adds `## Checklist coverage` block to the "
         "executive summary listing each checklist's activation status.",
     )
+    parser.add_argument(
+        "--dispatch-gaps",
+        type=Path,
+        default=None,
+        help="Path to dispatch_gaps.json (written by shared/dispatch.py "
+        "--allow-gaps). When omitted, defaults to <output.parent>/"
+        "dispatch_gaps.json. Missing/corrupt → no dispatch gaps. Each gap is "
+        "folded into the `## Coverage Gaps` section and triggers a prominent "
+        "INCOMPLETE marker.",
+    )
     args = parser.parse_args(argv)
+
+    # Default the dispatch-gaps path under the output's review root. A missing
+    # file is a no-op ([]), so a clean run with no dispatch_gaps.json is silent.
+    dispatch_gaps_path = (
+        args.dispatch_gaps
+        if args.dispatch_gaps is not None
+        else args.output.parent / "dispatch_gaps.json"
+    )
+    dispatch_gap_lines = read_dispatch_gaps(dispatch_gaps_path)
+    incomplete = bool(dispatch_gap_lines)
 
     paths = collect_input_paths(args.input, args.input_glob)
     if not paths:
-        print("Error: no input files found", file=sys.stderr)
-        return 2
+        # ZERO-INPUT PASS (Codex #9): all waves failed → no findings files, but
+        # dispatch recorded gaps. Render a minimal INCOMPLETE report instead of
+        # crashing with exit 2, so the operator sees the coverage gaps + marker.
+        if not incomplete:
+            print("Error: no input files found", file=sys.stderr)
+            return 2
+        review_root = args.output.parent
+        coverage_gaps = read_coverage_gaps(review_root) + dispatch_gap_lines
+        details_dir = args.details_dir or args.output.parent / args.output.stem
+        write_split_report(
+            [],
+            [],
+            args.output,
+            details_dir,
+            coverage_gaps=coverage_gaps,
+            incomplete=True,
+        )
+        print(
+            f"Wrote {args.output} (INCOMPLETE: no input findings; "
+            f"{len(dispatch_gap_lines)} dispatch gap(s))"
+        )
+        return 0
 
     all_findings = []
     for p in paths:
@@ -195,9 +267,11 @@ def main(argv: list[str] | None = None) -> int:
         previous = load_state(review_root)
         diff = compute_diff(previous, snapshots)
 
-    # Recon-level coverage gaps (e.g. console enrichment skipped) surfaced from
-    # CONTEXT.md so they appear in REPORT.md, not just the inventory.
-    coverage_gaps = read_coverage_gaps(review_root)
+    # Coverage gaps: recon-level (console enrichment skipped, from CONTEXT.md)
+    # PLUS wave-dispatch execution gaps (from dispatch_gaps.json). Both render
+    # under `## Coverage Gaps`; the dispatch gaps additionally drive the
+    # prominent INCOMPLETE marker via `incomplete`.
+    coverage_gaps = read_coverage_gaps(review_root) + dispatch_gap_lines
 
     cost = estimate_cost(paths, _waves_balanced_models())
 
@@ -240,6 +314,7 @@ def main(argv: list[str] | None = None) -> int:
                 refute_summary=refute_summary,
                 waves_plan=waves_plan,
                 coverage_gaps=coverage_gaps,
+                incomplete=incomplete,
             ),
         )
         if not args.no_state and str(review_root) not in ("", "."):
@@ -262,6 +337,7 @@ def main(argv: list[str] | None = None) -> int:
         refute_summary=refute_summary,
         waves_plan=waves_plan,
         coverage_gaps=coverage_gaps,
+        incomplete=incomplete,
     )
     if args.refute is not None:
         # Emit audit log of refute records that failed validation. Always write

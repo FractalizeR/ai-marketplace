@@ -299,18 +299,22 @@ def _render_checklist_coverage(
 def _render_coverage_gaps(coverage_gaps: list[str] | None) -> list[str]:
     """Render a `## Coverage Gaps` section for the executive summary.
 
-    Surfaces recon-level coverage reductions (e.g. console enrichment skipped
-    because the project is containerized and no `--console-cmd` was supplied)
-    so the gap is visible in REPORT.md, not buried in CONTEXT.md. Empty / None
-    → no section (clean runs stay noise-free).
+    Surfaces coverage reductions from two sources: recon-level (e.g. console
+    enrichment skipped because the project is containerized and no
+    `--console-cmd` was supplied) AND wave-dispatch execution gaps (a worker
+    that produced no findings file — crash / timeout / missing write). The
+    preamble is phrased generally to cover both. Empty / None → no section
+    (clean runs stay noise-free).
     """
     if not coverage_gaps:
         return []
     lines = [
         "## Coverage Gaps",
         "",
-        "> ⚠️ Parts of the recon surface were not fully enumerated. Findings "
-        "below may be incomplete in the affected areas.",
+        "> ⚠️ Parts of the audit coverage or execution did not complete "
+        "(recon surface not fully enumerated and/or one or more analysis waves "
+        "produced no findings file). Findings below may be incomplete in the "
+        "affected areas.",
         "",
     ]
     for gap in coverage_gaps:
@@ -362,6 +366,7 @@ def render_summary(
     waves_plan: list[dict] | None = None,
     plugin_root: Path | None = None,
     coverage_gaps: list[str] | None = None,
+    incomplete: bool = False,
 ) -> str:
     total_counted = len(merged) + len(manual)
     by_sev: dict[str, int] = {}
@@ -372,6 +377,18 @@ def render_summary(
     lines = [
         "# SECURITY_REVIEW_RESULTS",
         "",
+    ]
+    if incomplete:
+        # Prominent marker directly under the H1 — NOT a buried Coverage-Gaps
+        # bullet (Claude M2 / DeepSeek #15). One or more analysis waves produced
+        # no findings file, so the audit is not exhaustive.
+        lines.append(
+            "> 🚨 **INCOMPLETE AUDIT** — one or more analysis waves did not "
+            "produce findings (see `## Coverage Gaps`). Treat the results below "
+            "as a partial review, not a clean bill of health."
+        )
+        lines.append("")
+    lines.extend([
         "## Executive Summary",
         "",
         f"- Total findings: {total_counted}",
@@ -382,7 +399,7 @@ def render_summary(
             if parse_failed_count
             else ""
         ),
-    ]
+    ])
     for sev in ("Critical", "High", "Medium"):
         lines.append(f"- {sev}: {by_sev.get(sev, 0)}")
 
@@ -467,6 +484,7 @@ def render_report(
     waves_plan: list[dict] | None = None,
     plugin_root: Path | None = None,
     coverage_gaps: list[str] | None = None,
+    incomplete: bool = False,
 ) -> str:
     """Legacy single-file report (all findings inline)."""
     out = [render_summary(
@@ -477,6 +495,7 @@ def render_report(
         waves_plan=waves_plan,
         plugin_root=plugin_root,
         coverage_gaps=coverage_gaps,
+        incomplete=incomplete,
     )]
     out.append("## Findings")
     out.append("")
@@ -530,6 +549,7 @@ def render_index_report(
     waves_plan: list[dict] | None = None,
     plugin_root: Path | None = None,
     coverage_gaps: list[str] | None = None,
+    incomplete: bool = False,
 ) -> str:
     """Executive summary + index table linking to per-family detail files."""
     out = [
@@ -543,6 +563,7 @@ def render_index_report(
             waves_plan=waves_plan,
             plugin_root=plugin_root,
             coverage_gaps=coverage_gaps,
+            incomplete=incomplete,
         )
     ]
     out.append("## Findings by category")
@@ -645,6 +666,7 @@ def write_split_report(
     waves_plan: list[dict] | None = None,
     plugin_root: Path | None = None,
     coverage_gaps: list[str] | None = None,
+    incomplete: bool = False,
 ) -> list[Path]:
     """Write index + per-family detail files. Returns list of written paths."""
     details_dir.mkdir(parents=True, exist_ok=True)
@@ -661,6 +683,7 @@ def write_split_report(
             waves_plan=waves_plan,
             plugin_root=plugin_root,
             coverage_gaps=coverage_gaps,
+            incomplete=incomplete,
         ),
     )
     written.append(output_path)
