@@ -23,16 +23,65 @@ import tempfile
 from pathlib import Path
 
 from segments import Segment, assert_partition
-from extract import ArtifactKind, extract
-from adapters import get_adapter
+from extract import ArtifactKind, extract, CAT_TASK
+from adapters import get_adapter, RenderContext
+from sections import (
+    partition_sections,
+    assert_section_partition,
+    attach_segments,
+    detect_coupling,
+    assert_coupling_guards,
+)
+from prose_coupling import load_pins, pins_for
+from gates import check_opencode_output, check_dispatch_template, DISPATCH_ANCHORS
 
 _PLUGIN_DIRNAME = "security-review"
 _DEFAULT_PLUGIN_ROOT = Path(__file__).resolve().parent.parent / _PLUGIN_DIRNAME
+_BUILD_DIR = Path(__file__).resolve().parent
+_REGISTER = _BUILD_DIR / "PROSE_COUPLING.md"
+_DIST_OPENCODE = _BUILD_DIR.parent / "dist" / "opencode"
 
 
 def build(segments: list[Segment], adapter) -> str:
     """Pure fold: render each segment and concatenate, no injected separators."""
     return "".join(adapter.render_segment(s) for s in segments)
+
+
+def build_sectioned(sections, adapter, ctx) -> str:
+    """Pure fold over the section partition (non-Claude derivation)."""
+    return "".join(adapter.render_section(s, ctx) for s in sections)
+
+
+def render_opencode_artifact(path: Path, adapter, pins) -> str:
+    """Full OpenCode derivation pipeline for one authoritative artifact."""
+    source = path.read_bytes().decode("utf-8")
+    kind = _kind_for(path)
+    segments = extract(source, kind)
+    assert_partition(segments, source)
+    task_spans = [s.span for s in segments if s.category == CAT_TASK]
+    sections = partition_sections(source, task_spans=task_spans)
+    assert_section_partition(sections, source)
+    sections = attach_segments(sections, segments)
+    file_rel = f"{path.parent.name}/{path.name}"
+    sections = detect_coupling(sections, [p.pinned for p in pins_for(pins, file_rel)])
+    assert_coupling_guards(sections)
+    ctx = RenderContext(path.stem)
+    # Build-time guard: every dispatch template must wire `opencode run`.
+    for sec in sections:
+        if sec.is_coupled and sec.section_anchor in DISPATCH_ANCHORS:
+            problems = check_dispatch_template(adapter.render_section(sec, ctx))
+            if problems:
+                raise AssertionError(
+                    f"{file_rel} [{sec.section_anchor}]: {'; '.join(problems)}"
+                )
+    return build_sectioned(sections, adapter, ctx)
+
+
+def opencode_out_path(path: Path) -> Path:
+    """Provisional 2B-core output topology (finalized in 2B-pkg)."""
+    if path.parent.name == "commands":
+        return _DIST_OPENCODE / "skills" / path.stem / "SKILL.md"
+    return _DIST_OPENCODE / "agents" / f"{path.stem}.md"
 
 
 def discover_artifacts(plugin_root: Path) -> list[Path]:
@@ -76,6 +125,43 @@ def _atomic_write(path: Path, data: bytes) -> None:
         raise
 
 
+def _run_opencode(args) -> int:
+    adapter = get_adapter("opencode")
+    pins = load_pins(_REGISTER)
+    artifacts = args.artifact or discover_artifacts(args.plugin_root)
+    rendered = {p: render_opencode_artifact(p, adapter, pins) for p in artifacts}
+
+    if args.mode == "write":
+        # Never materialize a leaky artifact: gate before writing.
+        blocked = []
+        for path, text in rendered.items():
+            blocked += [f"{path.name}: {v}" for v in check_opencode_output(text)]
+        if blocked:
+            for v in blocked:
+                print(f"GATE: {v}", file=sys.stderr)
+            return 1
+        for path, text in rendered.items():
+            out = opencode_out_path(path)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_write(out, text.encode("utf-8"))
+            print(f"wrote: {out}")
+        return 0
+
+    # check: structural gates + determinism (render again, compare).
+    violations: list[str] = []
+    for path, text in rendered.items():
+        violations += [f"{path.name}: {v}" for v in check_opencode_output(text)]
+    for path in artifacts:
+        if render_opencode_artifact(path, adapter, pins) != rendered[path]:
+            violations.append(f"{path.name}: non-deterministic render")
+    if violations:
+        for v in violations:
+            print(f"GATE: {v}", file=sys.stderr)
+        return 1
+    print(f"opencode: {len(artifacts)} artifacts pass structural gates")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Rebuild harness artifacts from Claude prose.")
     parser.add_argument("--harness", choices=["claude", "codex", "opencode"], default="claude")
@@ -86,6 +172,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.harness == "opencode":
+            return _run_opencode(args)
         adapter = get_adapter(args.harness)
         artifacts = args.artifact or discover_artifacts(args.plugin_root)
         # Two-phase: rebuild everything (each with assert_partition) before
