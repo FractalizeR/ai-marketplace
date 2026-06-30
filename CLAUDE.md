@@ -20,6 +20,9 @@ The plugin's Python pipeline is covered by a stdlib-only `unittest` suite (~1130
 # Full suite (used as the CI gate; takes ~50 seconds)
 python3 -m unittest discover -s security-review/bin/tests
 
+# Build tooling suite (fast; multi-environment build, see below)
+python3 -m unittest discover -s build/tests
+
 # A single test module
 python3 -m unittest security-review.bin.tests.test_dedupe_findings
 
@@ -27,7 +30,8 @@ python3 -m unittest security-review.bin.tests.test_dedupe_findings
 python3 -m unittest security-review.bin.tests.test_plan_waves.PlanWavesTests.test_balanced_model_assignment
 ```
 
-There are no linters or formatters wired into CI; rely on the unittest suite.
+There are no linters or formatters wired into CI; rely on the unittest suites
+(engine under `security-review/bin/tests`, build tooling under `build/tests`).
 
 ### Plugin validation (pre-commit hook)
 
@@ -47,6 +51,33 @@ The slash commands are exposed by Claude Code after the plugin is installed (`cl
 - `/fr-security-review:security-changes [flags]` — diff-only audit against the base branch (`security-review/commands/security-changes.md`).
 
 Both write artifacts to `security-review-<label>/` in cwd. The label is auto-picked by harness self-introspection (`claude | codex | gemini | deepseek | qwen | other-<short>`) unless `--label=` or `--review-root=` is passed.
+
+### Multi-environment build (Phase 1: Claude round-trip)
+
+Dev-only tooling under repo-top `build/` (NOT shipped inside the plugin) that will
+derive Codex/OpenCode artifacts from the Claude-authoritative command/agent prose.
+**Phase 1 ships only the foundation: a byte-preserving partitioner IR + the Claude
+renderer**, proven by rebuilding the five artifacts byte-for-byte. Codex/OpenCode
+renderers are stubbed (`NotImplementedError`).
+
+- `build/extract.py` partitions an artifact's exact decoded text into typed
+  `Segment`s (neutral prose vs. tagged harness tokens); `build/build.py` is a pure
+  fold that renders each segment via a harness adapter (`build/adapters.py`) and
+  concatenates. For Claude the round-trip is byte-identical by construction (only
+  the `CORE_ROOT` canonical renderer can break it — a small, tested surface).
+- CLI: `python3 build/build.py --harness=claude --mode={check,write}`. `check`
+  (default) rebuilds in memory and diffs vs. on-disk **without writing** (exit 0
+  identical / 1 drift / 2 error) — this is the anti-drift gate that protects the
+  authoritative files. `write` rewrites in place only when bytes differ.
+- Inventories: `build/TOKENS.md` (the 8 token categories + counts) and
+  `build/PROSE_COUPLING.md` (the structured register of harness-coupled *prose* —
+  parallel-Task fan-out, the Write-safety-net, AskUserQuestion fallbacks — that
+  later renderers must rewrite, not just re-tokenize). See
+  `build/ADR-0001-artifacts-are-prompts.md` for why prose, not only tokens, is the
+  rewrite surface.
+- Tests: `python3 -m unittest discover -s build/tests`. The `.githooks/pre-commit`
+  hook runs `build --mode=check` + the build suite (fast); the ~1130 engine suite
+  stays manual/CI.
 
 ## Architecture — `fr-security-review`
 
