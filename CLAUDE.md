@@ -79,6 +79,42 @@ renderers are stubbed (`NotImplementedError`).
   hook runs `build --mode=check` + the build suite (fast); the ~1130 engine suite
   stays manual/CI.
 
+### Multi-environment runtime (Phase 2A: shared helpers)
+
+Stdlib-only helpers under `security-review/bin/shared/` (a subpackage like
+`bin/dedupe/`, so it bundles with the engine and rides the engine test suite — NOT
+repo-top `shared/`). These are the harness-neutral foundation the **Codex/OpenCode**
+SKILLs will invoke as staged stage-commands; **Claude does not use them** (native
+`Task` fan-out). Phase 2A ships the helpers fully unit-tested; no harness artifact /
+SKILL derivation / live CLI yet (those are Phase 2B/2C).
+
+- `shared/model_resolver.py` — AD7 model resolution: `discover → propose → confirm →
+  persist` a `{high, fast}` tier map (`LABEL_TO_TIER = {opus→high, sonnet→fast}`).
+  Discovery is shape-sniffed (codex JSON `.models[].slug` vs opencode `provider/model`
+  lines), `shlex`-split, sorted; proposal ranks by name pattern (fast-first, so
+  `pro-lite`→fast) with context-window/provider tiebreak; persists
+  `<review_root>/.model_map.json`. CLI is **non-interactive by default**;
+  `--interactive` binds a stdin checkpoint. The Claude path (`discovery_cmd=None`)
+  returns the static `{high: opus, fast: sonnet}` and never persists.
+- `shared/dispatch.py` — AD4 external-process fan-out: `dispatch_waves` launches one
+  worker per plan slice (≤6 concurrent via `ThreadPoolExecutor`) and `dispatch_role`
+  runs one process for recon/refute. **Freshness protocol (AD-2A8):** planned slices'
+  wave files are deleted before fan-out, so a stale prior-run file + a crashed worker
+  is still a gap. Gaps are classified two-step — a fresh `waves/<slice_id>.md` is
+  success regardless of exit/timeout, else `timeout > crash > missing_write`.
+  `--allow-gaps` (`strict=False`) writes `dispatch_gaps.json`; a clean run clears any
+  stale one. `recover_capture` must **materialize** recovered text to the wave file
+  (the worker→file contract is the only thing dedupe reads).
+- `shared/contracts.py` — typed seams: `Roots`, `RunResult`, the `Runner` /
+  `WaveCommandBuilder` / `RoleCommandBuilder` / `RecoverCapture` / `Checkpoint`
+  callables, and `DispatchConfigError` / `DispatchGapError` / `ResolverError`.
+  Subprocess is the **single injected seam** — every test passes a fake runner; no
+  test spawns a real `opencode`/`codex`.
+- Engine delta: `dedupe_findings.py --dispatch-gaps=<path>` folds wave-dispatch gaps
+  into REPORT.md's `## Coverage Gaps` (alongside `console_gap`) and surfaces a
+  prominent **INCOMPLETE** marker; with zero wave files but recorded gaps it renders a
+  minimal INCOMPLETE report instead of erroring out.
+
 ## Architecture — `fr-security-review`
 
 ### Four-stage pipeline
