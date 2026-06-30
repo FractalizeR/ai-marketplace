@@ -57,8 +57,9 @@ Both write artifacts to `security-review-<label>/` in cwd. The label is auto-pic
 Dev-only tooling under repo-top `build/` (NOT shipped inside the plugin) that will
 derive Codex/OpenCode artifacts from the Claude-authoritative command/agent prose.
 **Phase 1 ships only the foundation: a byte-preserving partitioner IR + the Claude
-renderer**, proven by rebuilding the five artifacts byte-for-byte. Codex/OpenCode
-renderers are stubbed (`NotImplementedError`).
+renderer**, proven by rebuilding the five artifacts byte-for-byte. The OpenCode
+renderer landed in Phase 2B-core (below); the Codex renderer is still a stub
+(`NotImplementedError`).
 
 - `build/extract.py` partitions an artifact's exact decoded text into typed
   `Segment`s (neutral prose vs. tagged harness tokens); `build/build.py` is a pure
@@ -78,6 +79,46 @@ renderers are stubbed (`NotImplementedError`).
 - Tests: `python3 -m unittest discover -s build/tests`. The `.githooks/pre-commit`
   hook runs `build --mode=check` + the build suite (fast); the ~1130 engine suite
   stays manual/CI.
+
+### Multi-environment build (Phase 2B-core: OpenCode derivation)
+
+The OpenCode renderer adds a **second, coarser IR layer** alongside the Phase-1
+token partition: `build/sections.py` splits the *same* artifact text into `### N`
+**sections** (independent of the token partition; both stay byte-faithful). Claude
+is untouched — it keeps the token fold (`build`) and is byte-identical; only
+OpenCode walks sections (`build_sectioned`). A guard test asserts `ClaudeAdapter`
+has no `render_section`, so Claude can never enter the section path.
+
+- **Coupling is pin-driven.** A section is *coupled* iff it contains a
+  `PROSE_COUPLING.md` pin (`build/prose_coupling.py` loads them). Coupled sections
+  are replaced by an authored template under
+  `harness/opencode/sections/<artifact>/<section_anchor>.md` (one per section, keyed
+  by `(artifact_basename, section_anchor)`); neutral sections are token-rendered.
+  `task_block` and `labeled-block AskUserQuestion` tokens are *completeness guards*
+  (`assert_coupling_guards`) — they must sit inside a coupled section or the build
+  errors. A bare `AskUserQuestion` *prose-mention* token-renders to a neutral phrase.
+- **Token rendering** (`OpenCodeAdapter`, `build/adapters.py`): `${CLAUDE_PLUGIN_ROOT}`
+  → `${CORE_ROOT}`; `$ARGUMENTS` kept verbatim (OpenCode commands support it
+  natively); command frontmatter → synthesized `description`-only block (≤1024,
+  re-quoted/escaped); **agent frontmatter stripped** (agents derive as frontmatter-less
+  external worker prompts — model comes from the dispatcher's `-m <tier>`, not
+  artifact text); `mcp__…` → neutral phrase; sibling-artifact `*.md` file refs have
+  their `.md` stripped (broken in a standalone skill).
+- **Structural gates** (`build/gates.py`, no byte oracle for non-Claude): no-leak
+  (Claude-specific subset of `tokens.REGISTRY` — CORE_ROOT/Task/AUQ/MCP — so the bare
+  `Task subagent_type=` form is caught; `$ARGUMENTS` is *not* a leak), `allowed-tools`/
+  `argument-hint` forbidden only in the synthesized frontmatter, a positive xref gate
+  (no `security-*.md` survives), determinism (two builds identical), and a
+  template↔dispatcher assertion (every dispatch template wires `opencode run`). All run
+  in `build --harness=opencode --mode=check`; `--mode=write` re-gates before emitting to
+  `dist/opencode/` (gitignored).
+- **Scope.** 2B-core is build-time only — it proves the *derivation mechanism*
+  structurally. Live `opencode run` smoke (semantic parity) is 2C; bundling
+  bin+checklists, `opencode.json` scoped perms, and `adapter.json` are 2B-pkg. The
+  templates wire `dispatch.py` with `--allow-gaps` (strict mode would abort the whole
+  fan-out on one crashed worker); note the shipped `dispatch.py` CLI does not auto-invoke
+  `recover_capture`, so the OpenCode safety-net recovery is an orchestrator step (read
+  the capture, Write the wave file), mirroring the Claude harness.
 
 ### Multi-environment runtime (Phase 2A: shared helpers)
 

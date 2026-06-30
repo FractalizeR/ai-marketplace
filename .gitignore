@@ -7,3 +7,6 @@ __pycache__/
 .idea/
 .vscode/
 *.swp
+
+# Multi-environment build output (regenerable from authoritative Claude prose).
+/dist/
