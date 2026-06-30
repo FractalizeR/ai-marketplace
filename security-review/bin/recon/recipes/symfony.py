@@ -1242,7 +1242,8 @@ def _parse_access_control(text: str) -> list[dict[str, str]]:
     """Extract access_control rules.
 
     Supports both forms:
-      - flow-style:  `- { path: ^/admin, roles: ROLE_ADMIN }`
+      - flow-style single-line:  `- { path: ^/admin, roles: ROLE_ADMIN }`
+      - flow-style multi-line:   `- {\n    path: ^/admin,\n    roles: ROLE_ADMIN\n  }`
       - block-style: `- path: ^/admin\n      roles: ROLE_ADMIN`
     Indent-relative.
     """
@@ -1254,20 +1255,55 @@ def _parse_access_control(text: str) -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     cur: dict[str, str] = {}
     cur_active = False
+    # Accumulator for multi-line flow-style blocks (`- {\n...\n}`).
+    flow_buf: list[str] = []
+    flow_depth = 0  # brace nesting depth (>0 means inside a flow block)
     for raw in lines[start_idx:]:
         if not raw.strip() or raw.lstrip().startswith("#"):
             continue
         indent = len(raw) - len(raw.lstrip(" "))
-        if indent <= access_indent:
+        if indent <= access_indent and flow_depth == 0:
             break
         stripped = raw.strip()
-        # Flow-style entry on a single line.
+        # If we are inside a multi-line flow block, accumulate lines.
+        if flow_depth > 0:
+            flow_buf.append(stripped)
+            flow_depth += stripped.count("{") - stripped.count("}")
+            if flow_depth <= 0:
+                # Block closed — join and parse.
+                full = " ".join(flow_buf)
+                parsed = _parse_flow_inline_kv(full)
+                if parsed:
+                    out.append(parsed)
+                flow_buf = []
+                flow_depth = 0
+            continue
+        # Flow-style entry on a single line: `- { ... }`.
         m = _ACCESS_CONTROL_FLOW_RE.match(raw)
         if m:
             if cur_active:
                 out.append(cur)
                 cur, cur_active = {}, False
-            out.append(_parse_flow_inline_kv(m.group(1)))
+            parsed = _parse_flow_inline_kv(m.group(1))
+            if parsed:
+                out.append(parsed)
+            continue
+        # Multi-line flow block starting with `- {` (no closing `}` on same line).
+        if stripped.startswith("- {"):
+            if cur_active:
+                out.append(cur)
+                cur, cur_active = {}, False
+            tail = stripped[2:]  # strip the leading `- `
+            flow_buf = [tail]
+            # Count brace depth; `{` opens it, `}` closes it.
+            flow_depth = tail.count("{") - tail.count("}")
+            if flow_depth <= 0:
+                # Edge case: somehow closed on the same line without matching regex.
+                parsed = _parse_flow_inline_kv(" ".join(flow_buf))
+                if parsed:
+                    out.append(parsed)
+                flow_buf = []
+                flow_depth = 0
             continue
         # Block-style: `- key: value` starts a new rule; subsequent indented
         # `key: value` lines extend the same rule.

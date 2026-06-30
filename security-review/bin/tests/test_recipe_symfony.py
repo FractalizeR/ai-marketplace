@@ -1020,6 +1020,25 @@ class TripleReviewRegressions(unittest.TestCase):
         self.assertEqual(ac[0], {"path": "^/admin", "roles": "ROLE_ADMIN"})
         self.assertEqual(ac[1], {"path": "^/api", "roles": "ROLE_USER"})
 
+    def test_multiline_flow_style_access_control(self):
+        # Multi-line flow-style `- {\n path: ...,\n roles: ... \n}` must parse
+        # like its single-line counterpart. The accumulator must also reset so a
+        # following single-line flow entry is not swallowed by the open block.
+        from recon.recipes.symfony import _parse_access_control
+        text = (
+            "security:\n"
+            "    access_control:\n"
+            "        - {\n"
+            "            path: ^/admin,\n"
+            "            roles: ROLE_ADMIN\n"
+            "          }\n"
+            "        - { path: ^/pub, roles: PUBLIC_ACCESS }\n"
+        )
+        ac = _parse_access_control(text)
+        self.assertEqual(len(ac), 2)
+        self.assertEqual(ac[0], {"path": "^/admin", "roles": "ROLE_ADMIN"})
+        self.assertEqual(ac[1], {"path": "^/pub", "roles": "PUBLIC_ACCESS"})
+
     def test_m2_classify_kind_does_not_match_app_command(self):
         # Claude MEDIUM M2: `extends_short == "Command"` collided with DDD
         # `App\Domain\Command` base class. FQN-only check fixes this.
