@@ -40,8 +40,14 @@ class TokenRenderTests(unittest.TestCase):
     def test_args_identity(self):
         self.assertEqual(self.a.render_segment(_seg(CAT_ARGS, "$ARGUMENTS")), "$ARGUMENTS")
 
-    def test_agent_frontmatter_stripped(self):
-        self.assertEqual(self.a.render_segment(_seg(CAT_AGENT_FRONTMATTER, "---\nx\n---\n")), "")
+    def test_agent_frontmatter_synthesizes_description(self):
+        # OpenCode agents need a `description` to register under --agent (model comes
+        # from the dispatcher -m), so the block is synthesized, not stripped.
+        out = self.a.render_segment(
+            _seg(CAT_AGENT_FRONTMATTER, "---\n...\n---\n", attrs={"description": '"deep review"'}))
+        self.assertTrue(out.startswith("---\ndescription: "))
+        self.assertIn("deep review", out)
+        self.assertTrue(out.endswith("---\n"))
 
     def test_mcp_phrase(self):
         self.assertEqual(self.a.render_segment(_seg(CAT_MCP, "mcp__phpstorm__search_symbol")),

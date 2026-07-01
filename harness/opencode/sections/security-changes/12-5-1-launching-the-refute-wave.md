@@ -13,7 +13,7 @@ rm -f "<REVIEW_ROOT>/refute.md"
 Then, for each batch in order (`batch_index = 0 .. N-1`):
 
 ```bash
-opencode run -m <FAST_TIER> "<refute SKILL handle> \
+opencode run -m <FAST_TIER> --agent security-refute "\
   review_root=<REVIEW_ROOT> \
   batch_index=<i> \
   findings_slice=<≤20 finding rows from the REPORT.md index>"

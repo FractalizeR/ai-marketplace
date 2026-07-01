@@ -1,6 +1,6 @@
 ---
 name: security
-description: Deep security review for a project slice. Applies focused checklists as priority, but must report any exploitable vulnerabilities that pass the data flow methodology. Launched by the orchestrator via Task. Works framework-agnostic; stack specifics come from `<review_root>/CONTEXT.md` (schema v2) and the supplied checklists.
+description: Deep security review for a project slice. Applies focused checklists as priority, but must report any exploitable vulnerabilities that pass the data flow methodology. Launched by the orchestrator as a per-slice worker. Works framework-agnostic; stack specifics come from `<review_root>/CONTEXT.md` (schema v2) and the supplied checklists.
 model: opus
 ---
 

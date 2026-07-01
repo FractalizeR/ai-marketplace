@@ -161,7 +161,10 @@ class OpenCodeAdapter:
         if cat == CAT_CMD_FRONTMATTER:
             return _synthesize_frontmatter(seg.attrs)
         if cat == CAT_AGENT_FRONTMATTER:
-            return ""                          # model handled by the dispatcher -m
+            # An OpenCode agent needs a `description` frontmatter to register under
+            # `--agent <name>`; the model comes from the dispatcher's -m, not the
+            # artifact. Synthesize a description-only block (same as commands).
+            return _synthesize_frontmatter(seg.attrs)
         if cat == CAT_MCP:
             return OPENCODE_MCP_PHRASE
         if cat == CAT_AUQ:

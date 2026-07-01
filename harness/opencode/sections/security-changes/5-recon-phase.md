@@ -16,7 +16,7 @@ python3 ${CORE_ROOT}/bin/shared/dispatch.py \
   --project-root "<PROJECT_ROOT>" \
   --review-root "<REVIEW_ROOT>" \
   --core-root "${CORE_ROOT}" \
-  --role-cmd-template 'opencode run -m <HIGH_TIER> "<recon SKILL handle> project_root=<PROJECT_ROOT> review_root=<REVIEW_ROOT> --diff-files=<REVIEW_ROOT>/diff_files.txt [--no-console | --console-cmd=<tpl>] [--exclude=<EXCLUDE_CSV>]"'
+  --role-cmd-template 'opencode run -m <HIGH_TIER> --agent security-recon "project_root=<PROJECT_ROOT> review_root=<REVIEW_ROOT> --diff-files=<REVIEW_ROOT>/diff_files.txt [--no-console | --console-cmd=<tpl>] [--exclude=<EXCLUDE_CSV>]"'
 ```
 
 `<HIGH_TIER>` is the high-tier model id from the resolved `<REVIEW_ROOT>/.model_map.json` (`shared/model_resolver.py`).

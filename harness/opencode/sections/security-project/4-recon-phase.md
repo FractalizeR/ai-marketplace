@@ -21,7 +21,7 @@ python3 ${CORE_ROOT}/bin/shared/dispatch.py \
   --project-root "<PROJECT_ROOT>" \
   --review-root "<REVIEW_ROOT>" \
   --core-root "${CORE_ROOT}" \
-  --role-cmd-template 'opencode run -m <HIGH_TIER> "<recon SKILL handle> project_root=<PROJECT_ROOT> review_root=<REVIEW_ROOT> [--no-console | --console-cmd=<tpl>] [--exclude=<EXCLUDE_CSV>]"'
+  --role-cmd-template 'opencode run -m <HIGH_TIER> --agent security-recon "project_root=<PROJECT_ROOT> review_root=<REVIEW_ROOT> [--no-console | --console-cmd=<tpl>] [--exclude=<EXCLUDE_CSV>]"'
 ```
 
 `<HIGH_TIER>` is the high-tier model id from the resolved `<REVIEW_ROOT>/.model_map.json` (`shared/model_resolver.py`); recon runs on the high tier. Recon is a single process — no fan-out — so `dispatch_role` launches one `opencode run` and treats the presence of `<REVIEW_ROOT>/CONTEXT.md` as success.

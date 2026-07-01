@@ -66,11 +66,18 @@ def check_opencode_output(text: str) -> list[str]:
     return violations
 
 
-# Each dispatch template must name the external-process primitive and the gap path,
-# so a template of pure prose that forgot to wire the dispatcher is caught cheaply.
+# Each dispatch template must wire the full external-process invocation, so a
+# template of pure prose (or one that forgot the agent/model) is caught cheaply.
+# These are the structural invariants every worker/recon/refute dispatch shares;
+# the forwarded per-role fields (slice_id vs batch_index vs project_root) differ,
+# so they are NOT asserted here (that would overfit per anchor).
 def check_dispatch_template(text: str) -> list[str]:
     """Structural template↔dispatcher assertion for a worker/recon/refute template."""
     out: list[str] = []
     if "opencode run" not in text:
         out.append("dispatch template does not mention `opencode run`")
+    if "--agent " not in text:
+        out.append("dispatch template does not target a worker via `--agent <name>`")
+    if "-m " not in text:
+        out.append("dispatch template does not wire model tiering (`-m`)")
     return out

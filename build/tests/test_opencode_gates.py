@@ -44,9 +44,13 @@ class GateUnitTests(unittest.TestCase):
     def test_xref_file_ref_flagged(self):
         self.assertTrue(check_opencode_output("see security-project.md step 4"))
 
-    def test_dispatch_template_requires_opencode_run(self):
+    def test_dispatch_template_structural_invariants(self):
+        # Each dispatch template must wire `opencode run`, `-m`, and `--agent`.
         self.assertTrue(check_dispatch_template("just prose, no dispatch"))
-        self.assertEqual(check_dispatch_template("launch `opencode run -m high`"), [])
+        self.assertTrue(check_dispatch_template("opencode run -m high"))          # no --agent
+        self.assertTrue(check_dispatch_template("opencode run --agent security"))  # no -m
+        self.assertEqual(
+            check_dispatch_template("opencode run -m high --agent security"), [])
 
 
 class FullBuildIntegrationTests(unittest.TestCase):

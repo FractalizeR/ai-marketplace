@@ -1,0 +1,13 @@
+{
+  "entrypoint_kind": "command",
+  "fanout": "external_process",
+  "worker_invocation": "opencode run -m {model} --agent security \"review_root={review_root} project_root={project_root} core_root={core_root} slice_id={slice_id} slice_config={slice_config} mode={mode}\"",
+  "core_root": "${CORE_ROOT}",
+  "model_discovery_cmd": "opencode models",
+  "tier_defaults": { "high": null, "fast": null },
+  "interactive_gates": ["model", "recon_quality", "scope", "console_runner", "winf_warning"],
+  "checkpoint_binding": "opencode_question",
+  "permission_config": "opencode.json",
+  "manifest_template": null,
+  "marketplace_target": null
+}
