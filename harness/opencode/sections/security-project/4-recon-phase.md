@@ -21,8 +21,10 @@ python3 ${CORE_ROOT}/bin/shared/dispatch.py \
   --project-root "<PROJECT_ROOT>" \
   --review-root "<REVIEW_ROOT>" \
   --core-root "${CORE_ROOT}" \
-  --role-cmd-template 'opencode run -m <HIGH_TIER> --agent security-recon "project_root=<PROJECT_ROOT> review_root=<REVIEW_ROOT> [--no-console | --console-cmd=<tpl>] [--exclude=<EXCLUDE_CSV>]"'
+  --role-cmd-template 'opencode run -m <HIGH_TIER> --agent security-recon -- "project_root=<PROJECT_ROOT> review_root=<REVIEW_ROOT> [--no-console | --console-cmd=<tpl>] [--exclude=<EXCLUDE_CSV>]"'
 ```
+
+**Keep the `--` before the message.** The recon message carries `--no-console` / `--console-cmd=` / `--exclude=`, which start with `--`. `dispatch.py` shlex-splits the template into argv, so without the `--` terminator `opencode run` parses `--no-console` as *its own* CLI flag (prints help, exits 1) and recon never runs — even when the quotes around the message are lost while you resolve the `[…|…]` choice. The `--` stops OpenCode's option parsing; everything after it is joined into the agent's `$ARGUMENTS` verbatim (empirically verified), so the flags reach `recon_inventory.py` intact whether or not the surrounding quotes survive.
 
 `<HIGH_TIER>` is the high-tier model id from the resolved `<REVIEW_ROOT>/.model_map.json` (`shared/model_resolver.py`); recon runs on the high tier. Recon is a single process — no fan-out — so `dispatch_role` launches one `opencode run` and treats the presence of `<REVIEW_ROOT>/CONTEXT.md` as success.
 
