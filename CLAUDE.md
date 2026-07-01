@@ -99,19 +99,21 @@ has no `render_section`, so Claude can never enter the section path.
   errors. A bare `AskUserQuestion` *prose-mention* token-renders to a neutral phrase.
 - **Token rendering** (`OpenCodeAdapter`, `build/adapters.py`): `${CLAUDE_PLUGIN_ROOT}`
   → `${CORE_ROOT}`; `$ARGUMENTS` kept verbatim (OpenCode commands support it
-  natively); command frontmatter → synthesized `description`-only block (≤1024,
-  re-quoted/escaped); **agent frontmatter stripped** (agents derive as frontmatter-less
-  external worker prompts — model comes from the dispatcher's `-m <tier>`, not
-  artifact text); `mcp__…` → neutral phrase; sibling-artifact `*.md` file refs have
-  their `.md` stripped (broken in a standalone skill).
+  natively); **both command and agent frontmatter → synthesized `description`-only
+  block** (≤1024, re-quoted/escaped) — an OpenCode agent needs a `description` to
+  register under `--agent <name>`; the model comes from the dispatcher's `-m <tier>`,
+  not artifact text (2B-pkg corrected the earlier "strip agent frontmatter" choice);
+  `mcp__…` → neutral phrase; sibling-artifact `*.md` file refs have their `.md`
+  stripped (broken in a standalone skill).
 - **Structural gates** (`build/gates.py`, no byte oracle for non-Claude): no-leak
   (Claude-specific subset of `tokens.REGISTRY` — CORE_ROOT/Task/AUQ/MCP — so the bare
   `Task subagent_type=` form is caught; `$ARGUMENTS` is *not* a leak), `allowed-tools`/
   `argument-hint` forbidden only in the synthesized frontmatter, a positive xref gate
   (no `security-*.md` survives), determinism (two builds identical), and a
-  template↔dispatcher assertion (every dispatch template wires `opencode run`). All run
-  in `build --harness=opencode --mode=check`; `--mode=write` re-gates before emitting to
-  `dist/opencode/` (gitignored).
+  template↔dispatcher assertion (every dispatch template wires `opencode run` +
+  `--agent <name>` + `-m`, strengthened in 2B-pkg from the old `opencode run`-substring
+  check). All run in `build --harness=opencode --mode=check`; `--mode=write` re-gates
+  before emitting to `dist/opencode/` (gitignored).
 - **Scope.** 2B-core is build-time only — it proves the *derivation mechanism*
   structurally. Live `opencode run` smoke (semantic parity) is 2C; bundling
   bin+checklists, `opencode.json` scoped perms, and `adapter.json` are 2B-pkg. The
@@ -119,6 +121,47 @@ has no `render_section`, so Claude can never enter the section path.
   fan-out on one crashed worker); note the shipped `dispatch.py` CLI does not auto-invoke
   `recover_capture`, so the OpenCode safety-net recovery is an orchestrator step (read
   the capture, Write the wave file), mirroring the Claude harness.
+
+### Multi-environment build (Phase 2B-pkg: OpenCode bundle)
+
+2B-pkg turns the derived texts into a self-contained, installable bundle
+`dist/opencode/` (gitignored) via `build/bundle.py` + the `--out` path in `build.py`.
+Build-time only — live `opencode run` smoke (semantic parity) remains 2C.
+
+- **Topology.** `dist/opencode/` = `core/{bin,checklists}` (= `${CORE_ROOT}`) +
+  `commands/{security-project,security-changes}.md` + `agents/{security,security-recon,
+  security-refute}.md` + authored `opencode.json`/`adapter.json`/`INSTALL.md` + a
+  `.fr-opencode-bundle` sentinel. **Orchestrators are OpenCode _commands_** (flat
+  `commands/<name>.md`, invoked `/name` with `$ARGUMENTS`); **workers are _agents_**
+  (`agents/<name>.md`, dispatched `opencode run --agent <name>`). This corrected the
+  provisional 2B-core `skills/<name>/SKILL.md` topology (verified against OpenCode
+  1.17.10 docs + binary: skills are a distinct on-demand primitive).
+- **Shared core + env var (`${CORE_ROOT}`).** The engine is copied **once** into
+  `core/` and both commands + all agents reference `${CORE_ROOT}` — a plain shell
+  variable the operator exports (OpenCode has no `${CLAUDE_PLUGIN_ROOT}`-style
+  substitution). The dispatcher forwards it as `--core-root` → `core_root=` to each
+  worker. `bundle_core` copies `bin/` (minus `tests/`/`__pycache__`/`.pyc`/`.DS_Store`)
+  + `checklists/` via a sorted walk → byte-deterministic; the PHP sandbox
+  (`recon/extract_php_metadata.php`) is included.
+- **Authored static configs** live under `harness/opencode/` (beside `sections/`) and
+  are copied verbatim (build is a copier+renderer, not a config generator).
+  `adapter.json` = the §4 per-harness manifest (`entrypoint_kind:"command"`,
+  `fanout:"external_process"`, `worker_invocation`, `model_discovery_cmd:"opencode
+  models"`, …; metadata, not read by OpenCode at runtime). `opencode.json` = scoped
+  perms: `external_directory`/`bash`/`read`/`edit` allow (runtime paths outside the
+  worktree; headless can't answer `ask`), `task:"deny"` (encodes AD4: no in-process
+  fan-out), `webfetch`/`websearch:"deny"` (offline auditor).
+- **Write path is guarded + rename-aside atomic.** `build --harness=opencode
+  --mode=write --out=<dir>` validates configs → builds into a staging dir beside
+  `<out>` → moves any existing bundle aside → swaps staging in → deletes the old
+  (a crash leaves *either* the old or new tree, never partial). `_guard_out` refuses
+  to overwrite anything that is not under the repo's `dist/`, an authored source tree,
+  or a dir carrying the `.fr-opencode-bundle` sentinel (the `--review-root=src`
+  incident class; the sentinel is a dedicated dotfile, **not** `adapter.json`, which is
+  a tracked source name). `--out` is opencode-only (no-op for claude); `--artifact` is
+  rejected in opencode write (a bundle must be complete). `validate_static_configs`
+  runs in **both** modes — `check` vets the in-git authored files, `write` is
+  fail-closed. `dist/` is gitignored; tests build into a tmp `--out`, never the real dist.
 
 ### Multi-environment runtime (Phase 2A: shared helpers)
 
