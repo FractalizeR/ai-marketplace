@@ -1,0 +1,26 @@
+{
+  "name": "fr-security-review",
+  "version": "0.1.0",
+  "description": "Framework-aware static-first security audit for PHP/Symfony/Laravel: recipe-driven recon, focused worker waves, deterministic deduplication. Schema v2.",
+  "author": {
+    "name": "FractalizeR",
+    "url": "https://github.com/FractalizeR"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "FR Security Review",
+    "shortDescription": "Static-first security audit for PHP / Symfony / Laravel.",
+    "longDescription": "A framework-aware, static-first security auditor. Recon builds a schema-v2 inventory, focused worker waves apply layered checklists, and findings are deterministically deduplicated into a split report. Fan-out runs as external codex exec processes; the portable engine is bundled under the plugin's core/.",
+    "developerName": "FractalizeR",
+    "category": "Security",
+    "capabilities": [
+      "security-audit",
+      "static-analysis",
+      "php-symfony-laravel"
+    ],
+    "defaultPrompt": [
+      "Run a whole-project security audit with fr-security-review.",
+      "Audit the changes in the current branch against the base branch."
+    ]
+  }
+}

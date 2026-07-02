@@ -13,7 +13,9 @@ default ``--mode=check`` therefore doubles as a self-consistency gate that
 protects the authoritative files. ``opencode`` (Phase 2B) and ``codex`` (Phase 3A)
 walk the coarser *section* IR instead: they render coupled sections from authored
 templates and token-fold the rest, then run structural gates (no byte oracle).
-``codex --mode=write`` is not yet implemented (Phase 3B) → exit 2.
+``--mode=write`` for both bundles into a gitignored ``dist/<harness>/`` tree via a
+rename-aside atomic swap (opencode = commands/agents; codex = a self-hosted
+marketplace root with ``.codex-plugin``/skills/read-follow agents under ``core/``).
 """
 
 from __future__ import annotations
@@ -47,7 +49,12 @@ from bundle import (
     bundle_core,
     copy_static_configs,
     validate_static_configs,
+    copy_codex_static_configs,
+    place_codex_marketplace,
+    validate_codex_configs,
+    safe_plugin_name,
     BUNDLE_MARKER,
+    CODEX_BUNDLE_MARKER,
 )
 
 _PLUGIN_DIRNAME = "security-review"
@@ -56,7 +63,12 @@ _BUILD_DIR = Path(__file__).resolve().parent
 _REGISTER = _BUILD_DIR / "PROSE_COUPLING.md"
 _DIST_ROOT = _BUILD_DIR.parent / "dist"
 _DIST_OPENCODE = _DIST_ROOT / "opencode"
+_DIST_CODEX = _DIST_ROOT / "codex"
 _HARNESS_OPENCODE = _BUILD_DIR.parent / "harness" / "opencode"
+_HARNESS_CODEX = _BUILD_DIR.parent / "harness" / "codex"
+# Marker→harness map, so _guard_out can refuse an --out carrying the OTHER
+# harness's sentinel even under dist/ (a codex write into dist/opencode, etc.).
+_ALL_MARKERS = (BUNDLE_MARKER, CODEX_BUNDLE_MARKER)
 
 
 def build(segments: list[Segment], adapter) -> str:
@@ -133,32 +145,76 @@ def opencode_out_path(path: Path, out_root: Path) -> Path:
     return out_root / "agents" / f"{path.stem}.md"
 
 
-def _guard_out(out: Path) -> None:
+def codex_out_path(path: Path, plugin_out: Path) -> Path:
+    """Output topology under the plugin dir: orchestrators are Codex *skills*
+    (``skills/<name>/SKILL.md``); workers are read-follow files under the shared
+    core (``core/agents/<name>.md``), where the dispatch templates' absolute
+    ``${CORE_ROOT}/agents/<name>.md`` / ``{core_root}/agents/<name>.md`` resolve."""
+    if path.parent.name == "commands":
+        return plugin_out / "skills" / path.stem / "SKILL.md"
+    return plugin_out / "core" / "agents" / f"{path.stem}.md"
+
+
+def _carries_marker(out: Path, marker: str) -> bool:
+    """True if ``out`` carries ``marker`` at its root or in an immediate child dir
+    (a bundle's marker sits at its own root, so ``out=dist`` must still see
+    ``dist/opencode/<marker>``). One level is enough for the dist-container case."""
+    if (out / marker).is_file():
+        return True
+    try:
+        children = [c for c in out.iterdir() if c.is_dir()]
+    except OSError:
+        return False
+    return any((c / marker).is_file() for c in children)
+
+
+def _guard_out(out: Path, *, marker: str = BUNDLE_MARKER) -> None:
     """Refuse to overwrite ``out`` unless it is clearly ours to replace.
 
     A build writes by swapping a fresh bundle into ``out`` (moving any existing
     tree aside first). Guard that destructive step against an operator-supplied
     path that is neither the repo's own ``dist/`` nor a prior bundle — the class of
-    the ``--review-root=src`` incident (clobbering a real source tree)."""
+    the ``--review-root=src`` incident (clobbering a real source tree). ``marker``
+    defaults to the OpenCode sentinel so the existing caller is untouched; the codex
+    write passes ``CODEX_BUNDLE_MARKER``."""
     if not out.exists():
         return
     if not out.is_dir():
         raise ValueError(f"--out target exists and is not a directory: {out}")
     resolved = out.resolve()
     # Never write over an authored source tree, even if a marker somehow appears there.
-    for protected in (_HARNESS_OPENCODE, _DEFAULT_PLUGIN_ROOT, _BUILD_DIR):
+    for protected in (_HARNESS_OPENCODE, _HARNESS_CODEX, _DEFAULT_PLUGIN_ROOT, _BUILD_DIR):
         if resolved == protected.resolve():
             raise ValueError(f"refusing to overwrite the source tree at {out}")
+    # Never write *at* the dist/ root itself: the swap would move the whole dist/
+    # (every harness bundle) aside, and the "under dist/ is ours" branch below would
+    # wave it through. --out must be a per-harness subdir (dist/codex, dist/opencode).
+    if resolved == _DIST_ROOT.resolve():
+        raise ValueError(
+            f"refusing to overwrite the dist/ root itself ({out}); "
+            "point --out at a per-harness subdir (e.g. dist/codex)."
+        )
+    # Refuse to clobber the OTHER harness's bundle even under dist/ (a codex write
+    # into dist/opencode, or vice versa) — each harness only replaces its own. The
+    # marker can sit at the swap root OR one level down (dist/<harness>/marker), so
+    # scan both — a direct-children-only check misses dist/opencode/<marker>.
+    for other in _ALL_MARKERS:
+        if other != marker and _carries_marker(out, other):
+            raise ValueError(
+                f"refusing to overwrite {out}: it (or a bundle beneath it) carries "
+                f"another harness's marker ({other}). Point --out at a fresh dir or "
+                "this harness's bundle."
+            )
     try:
         resolved.relative_to(_DIST_ROOT.resolve())
-        return  # anything under the repo's dist/ is ours
+        return  # anything strictly under the repo's dist/ is ours
     except ValueError:
         pass
-    if (out / BUNDLE_MARKER).is_file():
+    if (out / marker).is_file():
         return  # carries our dedicated sentinel → a prior build's output
     raise ValueError(
         f"refusing to overwrite {out}: it is not under the repo's dist/ and carries "
-        f"no bundle marker ({BUNDLE_MARKER}). Point --out at a fresh dir or a prior bundle."
+        f"no bundle marker ({marker}). Point --out at a fresh dir or a prior bundle."
     )
 
 
@@ -219,6 +275,7 @@ def _run_opencode(args) -> int:
     config_problems = validate_static_configs(_HARNESS_OPENCODE)
 
     if args.mode == "write":
+        out = (args.out or _DIST_OPENCODE).resolve()
         blocked = list(config_problems)
         for path, text in rendered.items():
             blocked += [f"{path.name}: {v}" for v in check_opencode_output(text)]
@@ -226,8 +283,8 @@ def _run_opencode(args) -> int:
             for v in blocked:
                 print(f"GATE: {v}", file=sys.stderr)
             return 1
-        _write_bundle(args.out.resolve(), rendered, plugin_root=args.plugin_root)
-        print(f"wrote: {args.out.resolve()}")
+        _write_bundle(out, rendered, plugin_root=args.plugin_root)
+        print(f"wrote: {out}")
         return 0
 
     # check: structural gates + determinism (render again, compare) + configs.
@@ -246,18 +303,41 @@ def _run_opencode(args) -> int:
 
 
 def _run_codex(args) -> int:
-    # Bundling core + prose → dist/codex, the manifest, and the atomic write path
-    # are Phase 3B-pkg; 3A-core proves the derivation MECHANISM structurally only.
-    if args.mode == "write":
-        raise NotImplementedError(
-            "codex --mode=write is Phase 3B-pkg (bundle + manifest not implemented)"
-        )
+    # A bundle must be complete: --artifact would emit only the listed artifacts
+    # beside a full core/ + configs, i.e. a silently partial bundle.
+    if args.mode == "write" and args.artifact:
+        print("ERROR: --artifact is incompatible with --harness=codex --mode=write "
+              "(a bundle must contain the full skill/agent set).", file=sys.stderr)
+        return 2
     adapter = get_adapter("codex")
     pins = load_pins(_REGISTER)
     artifacts = args.artifact or discover_artifacts(args.plugin_root)
     rendered = {p: render_codex_artifact(p, adapter, pins) for p in artifacts}
+    plugin_name = safe_plugin_name(_HARNESS_CODEX)  # safe token or None (reported below)
+    # Authored-config validation applies to BOTH modes: check vets the in-git files;
+    # write is fail-closed on the same problems before emitting. It derives + validates
+    # the plugin name itself, so a bad name is a structured gate problem (exit 1), not
+    # an unhandled exception.
+    config_problems = validate_codex_configs(_HARNESS_CODEX)
 
-    violations: list[str] = []
+    if args.mode == "write":
+        out = (args.out or _DIST_CODEX).resolve()
+        blocked = list(config_problems)
+        for path, text in rendered.items():
+            is_skill = _kind_for(path) is ArtifactKind.COMMAND
+            blocked += [f"{path.name}: {v}"
+                        for v in check_codex_output(text, is_skill=is_skill)]
+        if blocked or plugin_name is None:
+            for v in blocked:
+                print(f"GATE: {v}", file=sys.stderr)
+            return 1
+        _write_codex_bundle(out, rendered, plugin_root=args.plugin_root,
+                            plugin_name=plugin_name)
+        print(f"wrote: {out}")
+        return 0
+
+    # check: structural gates + configs + determinism (render again, compare).
+    violations: list[str] = list(config_problems)
     for path, text in rendered.items():
         is_skill = _kind_for(path) is ArtifactKind.COMMAND
         violations += [f"{path.name}: {v}"
@@ -271,6 +351,65 @@ def _run_codex(args) -> int:
         return 1
     print(f"codex: {len(artifacts)} artifacts pass structural gates")
     return 0
+
+
+def _codex_readfollow_refs(rendered: dict[Path, str]) -> set[str]:
+    """The set of ``agents/<file>.md`` filenames the dispatch templates read.
+
+    Role-agnostic (any ``agents/<name>.md``, not a hardcoded role list) so a typo'd
+    or renamed ref to an agent file the bundle does NOT produce is caught by the
+    write-path correspondence assertion — a narrow allowlist would fail *open* for a
+    new/misspelled name (3B code review)."""
+    import re
+    refs: set[str] = set()
+    for text in rendered.values():
+        for m in re.finditer(r"agents/([\w.-]+\.md)", text):
+            refs.add(m.group(1))
+    return refs
+
+
+def _write_codex_bundle(out: Path, rendered: dict[Path, str], *, plugin_root: Path,
+                        plugin_name: str) -> None:
+    """Materialize the full self-hosted marketplace bundle: build into a fresh
+    staging dir beside the target, then rename-aside swap it into ``out`` (same
+    crash-safety as the OpenCode path — a crash leaves *either* the old or the new
+    tree at ``out``, never partial). The bundle has two roots in one tree: the
+    marketplace (``.agents/plugins/marketplace.json``) and the plugin
+    (``plugins/<name>/``)."""
+    _guard_out(out, marker=CODEX_BUNDLE_MARKER)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(dir=str(out.parent), prefix=f".{out.name}.staging."))
+    (staging / CODEX_BUNDLE_MARKER).write_text(
+        "fr-security-review Codex bundle (generated; do not edit)\n", encoding="utf-8")
+    plugin_out = staging / "plugins" / plugin_name
+    backup: Path | None = None
+    try:
+        # bundle_core appends `core/` itself → pass the plugin dir, not .../core.
+        bundle_core(plugin_out, plugin_root=plugin_root)
+        for path, text in rendered.items():
+            dest = codex_out_path(path, plugin_out)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_write(dest, text.encode("utf-8"))
+        copy_codex_static_configs(plugin_out, harness_root=_HARNESS_CODEX)
+        place_codex_marketplace(staging, harness_root=_HARNESS_CODEX)
+        # Fail closed if a dispatch template reads an agent file we did not emit.
+        produced = {p.name for p in (plugin_out / "core" / "agents").glob("*.md")}
+        missing = _codex_readfollow_refs(rendered) - produced
+        if missing:
+            raise AssertionError(
+                f"dispatch templates read agent files not in the bundle: {sorted(missing)}")
+        if out.exists():
+            backup = out.with_name(f".{out.name}.backup.{os.getpid()}")
+            os.replace(out, backup)      # move the old bundle aside
+        os.replace(staging, out)         # put the new one in place
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        if backup is not None and not out.exists():
+            os.replace(backup, out)      # restore the old bundle on failure
+        raise
+    finally:
+        if backup is not None and backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
 
 
 def _write_bundle(out: Path, rendered: dict[Path, str], *, plugin_root: Path) -> None:
@@ -313,12 +452,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plugin-root", type=Path, default=_DEFAULT_PLUGIN_ROOT)
     parser.add_argument("--artifact", type=Path, action="append", default=None,
                         help="Specific artifact(s); default = discovered set.")
-    parser.add_argument("--out", type=Path, default=_DIST_OPENCODE,
-                        help="Bundle output root (opencode --mode=write only; "
-                             "no-op for claude, which writes back to source).")
+    parser.add_argument("--out", type=Path, default=None,
+                        help="Bundle output root (codex/opencode --mode=write only; "
+                             "defaults per harness under dist/; no-op for claude, "
+                             "which writes back to source).")
     args = parser.parse_args(argv)
 
-    if args.harness == "claude" and args.out != _DIST_OPENCODE:
+    if args.harness == "claude" and args.out is not None:
         print("note: --out is ignored for --harness=claude (writes in place).",
               file=sys.stderr)
 

@@ -15,10 +15,12 @@ runtime, the latter is non-deterministic.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
-from gates import check_dispatch_template
+import codex_manifest
+from gates import check_dispatch_template, check_codex_dispatch_template
 
 # Filtered out of the runtime engine at any depth.
 _EXCLUDE_DIRS = frozenset({"tests", "__pycache__"})
@@ -32,6 +34,13 @@ STATIC_CONFIGS = ("opencode.json", "adapter.json", "INSTALL.md")
 # occur in the authored source tree — `adapter.json` would falsely mark
 # `harness/opencode/` (a git-tracked source dir) as a clobber-safe bundle.
 BUNDLE_MARKER = ".fr-opencode-bundle"
+# Codex sentinel — distinct from OpenCode's, so a codex write cannot mistake an
+# opencode bundle (or vice versa) for its own to overwrite.
+CODEX_BUNDLE_MARKER = ".fr-codex-bundle"
+# Codex authored configs copied verbatim into the plugin dir; plugin.json and
+# marketplace.json land at special paths (see copy_codex_static_configs / the
+# marketplace placement), so they are NOT in this flat list.
+CODEX_PLUGIN_CONFIGS = ("adapter.json", "INSTALL.md")
 
 _ADAPTER_REQUIRED = frozenset({
     "entrypoint_kind", "fanout", "worker_invocation", "core_root",
@@ -159,3 +168,115 @@ def _load_json(path: Path):
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         return f"{path.name} unreadable/invalid: {exc}"
+
+
+# --- Codex bundle (3B-pkg) ---------------------------------------------------
+def copy_codex_static_configs(plugin_out: Path, *, harness_root: Path) -> list[Path]:
+    """Copy the authored Codex configs into the plugin dir: ``adapter.json`` +
+    ``INSTALL.md`` beside the plugin, and ``plugin.json`` into ``.codex-plugin/``.
+    Returns the sorted list of written paths."""
+    plugin_out.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for name in CODEX_PLUGIN_CONFIGS:
+        src = harness_root / name
+        if not src.is_file():
+            raise FileNotFoundError(f"missing authored config: {src}")
+        dest = plugin_out / name
+        shutil.copy2(src, dest)
+        written.append(dest)
+    manifest_src = harness_root / "plugin.json"
+    if not manifest_src.is_file():
+        raise FileNotFoundError(f"missing authored config: {manifest_src}")
+    manifest_dest = plugin_out / ".codex-plugin" / "plugin.json"
+    manifest_dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(manifest_src, manifest_dest)
+    written.append(manifest_dest)
+    return sorted(written)
+
+
+def place_codex_marketplace(bundle_root: Path, *, harness_root: Path) -> Path:
+    """Copy the authored ``marketplace.json`` to
+    ``<bundle_root>/.agents/plugins/marketplace.json`` (the marketplace ROOT the
+    operator registers with ``codex plugin marketplace add``)."""
+    src = harness_root / "marketplace.json"
+    if not src.is_file():
+        raise FileNotFoundError(f"missing authored config: {src}")
+    dest = bundle_root / ".agents" / "plugins" / "marketplace.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dest)
+    return dest
+
+
+# The plugin name doubles as a filesystem path component (plugins/<name>/), so it
+# must be a safe token — the real validate_plugin.py only checks non-emptiness, so
+# this is a build-side invariant on top of the faithful mirror (guards the
+# `name: "../../evil"` path-traversal class before any disk write).
+_FS_SAFE_NAME = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def safe_plugin_name(harness_root: Path) -> str | None:
+    """The authored plugin name if it is a filesystem-safe token, else None
+    (never raises — a malformed plugin.json is surfaced as a gate problem)."""
+    pj = _load_json(harness_root / "plugin.json")
+    if not isinstance(pj, dict):
+        return None
+    name = pj.get("name")
+    if isinstance(name, str) and _FS_SAFE_NAME.fullmatch(name):
+        return name
+    return None
+
+
+def validate_codex_configs(harness_root: Path) -> list[str]:
+    """Return violations (empty = ok) for the authored Codex configs.
+
+    Self-contained: derives the plugin name from plugin.json and validates the
+    marketplace entry against it (gate-reconciled). Runs in BOTH ``--mode=check``
+    (vets the in-git files) and before ``--mode=write`` (fail-closed). The
+    plugin-manifest half is additionally pinned against the REAL ``validate_plugin.py``
+    by a durable skip-if-unavailable test; the marketplace half has no runnable oracle
+    (that validator never reads a marketplace file), so it is anchored by the mirror +
+    a golden test."""
+    problems: list[str] = []
+    pj = _load_json(harness_root / "plugin.json")
+    name: str | None = None
+    if isinstance(pj, str):
+        problems.append(pj)
+    else:
+        problems += codex_manifest.validate_plugin_manifest(pj)
+        raw = pj.get("name") if isinstance(pj, dict) else None
+        if isinstance(raw, str) and _FS_SAFE_NAME.fullmatch(raw):
+            name = raw
+        else:
+            problems.append("plugin.json `name` must be a filesystem-safe "
+                            "[A-Za-z0-9_-]+ token (it is the plugins/<name>/ dir)")
+    mp = _load_json(harness_root / "marketplace.json")
+    if isinstance(mp, str):
+        problems.append(mp)
+    elif name is not None:
+        problems += codex_manifest.validate_marketplace(mp, plugin_name=name)
+    else:
+        problems.append("cannot validate marketplace: plugin.json name unresolved")
+    problems += _validate_codex_adapter(harness_root / "adapter.json")
+    return problems
+
+
+def _validate_codex_adapter(path: Path) -> list[str]:
+    """Codex variant of ``_validate_adapter``: the same required keys, but
+    ``entrypoint_kind`` must be ``"skill"`` (not ``"command"``) and the
+    ``worker_invocation`` is checked with ``check_codex_dispatch_template``."""
+    data = _load_json(path)
+    if isinstance(data, str):
+        return [data]
+    if not isinstance(data, dict):
+        return [f"{path.name} is not a JSON object"]
+    problems: list[str] = []
+    missing = _ADAPTER_REQUIRED - data.keys()
+    if missing:
+        problems.append(f"{path.name} missing keys: {sorted(missing)}")
+    if data.get("entrypoint_kind") != "skill":
+        problems.append(f"{path.name} entrypoint_kind must be 'skill'")
+    if data.get("fanout") != "external_process":
+        problems.append(f"{path.name} fanout must be 'external_process'")
+    problems += [f"{path.name} worker_invocation: {v}"
+                 for v in check_codex_dispatch_template(str(data.get("worker_invocation", "")))]
+    return problems
