@@ -61,11 +61,15 @@ class ExitCodeTests(unittest.TestCase):
                              "--plugin-root", str(PLUGIN_ROOT)])
         self.assertEqual(rc, 0)
 
-    def test_codex_write_exit_2(self):
-        # codex --mode=write (bundle) is Phase 3B → NotImplementedError → exit 2.
-        rc = run_main(["--harness=codex", "--mode=write",
-                             "--plugin-root", str(PLUGIN_ROOT)])
-        self.assertEqual(rc, 2)
+    def test_codex_write_exit_0(self):
+        # Phase 3B-pkg: codex --mode=write materializes the bundle (was exit 2 in 3A).
+        tmp = Path(tempfile.mkdtemp(prefix="frcodex_"))
+        try:
+            rc = run_main(["--harness=codex", "--mode=write", "--out", str(tmp / "codex"),
+                           "--plugin-root", str(PLUGIN_ROOT)])
+            self.assertEqual(rc, 0)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_bad_plugin_root_exit_2(self):
         tmp = Path(tempfile.mkdtemp(prefix="frempty_"))
