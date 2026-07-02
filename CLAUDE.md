@@ -163,6 +163,51 @@ Build-time only — live `opencode run` smoke (semantic parity) remains 2C.
   runs in **both** modes — `check` vets the in-git authored files, `write` is
   fail-closed. `dist/` is gitignored; tests build into a tmp `--out`, never the real dist.
 
+### Multi-environment build (Phase 3A-core: Codex derivation)
+
+Codex is the **second** derived harness over the *same* section IR as OpenCode
+(`build/sections.py` + the same `PROSE_COUPLING.md` pins + the same 12 coupled
+`(artifact, anchor)` pairs + `DISPATCH_ANCHORS`). 3A-core is build-time only — it
+proves the derivation *mechanism* structurally; bundle/manifest/`dist/codex`/live
+`codex exec` are 3B-pkg / 3C. Claude stays byte-identical (token fold, never the
+section path).
+
+- **Token rendering** (`CodexAdapter`, `build/adapters.py`) — diverges from OpenCode
+  on four tokens: `${CLAUDE_PLUGIN_ROOT}`→`${CORE_ROOT}` (same); **`$ARGUMENTS`→a
+  neutral phrase** (Codex has NO `$ARGUMENTS` substitution, unlike OpenCode commands —
+  so it also JOINS the no-leak set); **command frontmatter→a *skill* block (`name`
+  from the artifact stem + `description`)** (OpenCode = description-only); **agent
+  frontmatter→stripped** (a Codex worker is a plain read-follow file, no registration);
+  MCP/AUQ→the same neutral phrases (`MCP_PHRASE`/`AUQ_PHRASE`). Xrefs use
+  `_strip_codex_xrefs` — it strips **only** the two ORCHESTRATOR refs
+  (`security-project.md`/`security-changes.md`), and **preserves** agent read-follow
+  refs (`agents/*.md`, `security-recon.md`…) because for Codex those are REAL bundled
+  files a worker opens under `${CORE_ROOT}/agents/` (C1). The skill `name` reaches the
+  `_splice` frontmatter via instance state set in `render_section` (the frontmatter
+  lives in the uncoupled `_preamble`, which has no ctx).
+- **Read-follow worker contract.** Codex has no named agents: `codex exec [PROMPT]`
+  reads instructions from its arg. Each dispatch template names an exact bundled
+  `agents/<role>.md` + "read and follow it" + the per-role inputs (the analog of
+  OpenCode's `--agent <name>`). Worker prose lands at `core/agents/<role>.md` (under
+  `${CORE_ROOT}`, 3B). In the **fan-out** `--worker-cmd-template` the path uses the
+  `dispatch.py` `{core_root}` placeholder — `${CORE_ROOT}/agents/…` would raise
+  `str.format` KeyError before any process launches (E-C10); recon/refute role
+  templates use `<CORE_ROOT>`-style slots the orchestrator pre-substitutes. Inputs are
+  authored **flag-free `key=value`** (`console_mode=` / `exclude=` / `diff_files=`),
+  the read-follow agent maps them to `recon_inventory.py` flags — no leading-`--` CLI
+  collision (the OpenCode 2C `--` incident class).
+- **Structural gates** (`build/gates.py`, additive — OpenCode's gates unchanged, R-C3):
+  `check_codex_output(text, *, is_skill)` = no-leak over `CODEX_FORBIDDEN_CATS`
+  (+`$ARGUMENTS`) + frontmatter (skills positively assert non-empty `name`+`description`
+  and no `allowed-tools`/`argument-hint`; agents must NOT carry a leading `---` block,
+  E-C3) + codex-xref (only orchestrator refs are a violation). `check_codex_dispatch_template`
+  asserts `codex exec` + `-m` + `--add-dir` (the composite-repo write invariant, M1-DS)
+  + a bundled `agents/<role>.md` read-follow ref (NOT `--agent`) + no `${CORE_ROOT}/agents/`.
+  Both run in `build --harness=codex --mode=check` (exit 0 clean / 1 gate / 2 error);
+  `--mode=write` raises `NotImplementedError`→exit 2 (bundle is 3B). Templates live under
+  `harness/codex/sections/<artifact>/<anchor>.md` (same 12 anchors as `harness/opencode/
+  sections/`, authored fresh). The pre-commit hook now gates codex `--mode=check` too.
+
 ### Multi-environment runtime (Phase 2A: shared helpers)
 
 Stdlib-only helpers under `security-review/bin/shared/` (a subpackage like
