@@ -54,8 +54,16 @@ class ExitCodeTests(unittest.TestCase):
                              "--plugin-root", str(PLUGIN_ROOT)])
         self.assertEqual(rc, 0)
 
-    def test_codex_stub_exit_2(self):
+    def test_codex_check_exit_0(self):
+        # Phase 3A: CodexAdapter is no longer a stub — check-mode passes the
+        # structural gates (superseded the old `codex → exit 2` stub assertion).
         rc = run_main(["--harness=codex", "--mode=check",
+                             "--plugin-root", str(PLUGIN_ROOT)])
+        self.assertEqual(rc, 0)
+
+    def test_codex_write_exit_2(self):
+        # codex --mode=write (bundle) is Phase 3B → NotImplementedError → exit 2.
+        rc = run_main(["--harness=codex", "--mode=write",
                              "--plugin-root", str(PLUGIN_ROOT)])
         self.assertEqual(rc, 2)
 

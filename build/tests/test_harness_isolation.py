@@ -11,16 +11,27 @@ import unittest
 
 import _common  # noqa: F401
 
-from adapters import ClaudeAdapter, FakeAdapter, OpenCodeAdapter
+from adapters import (
+    ClaudeAdapter,
+    CodexAdapter,
+    FakeAdapter,
+    OpenCodeAdapter,
+    get_adapter,
+)
 
 
 class ClaudeIsolationTests(unittest.TestCase):
     def test_claude_adapter_has_no_render_section(self):
+        # Claude byte-identity holds only because it never walks the section fold.
         self.assertFalse(hasattr(ClaudeAdapter(), "render_section"))
         self.assertFalse(hasattr(FakeAdapter(), "render_section"))
 
-    def test_opencode_adapter_has_render_section(self):
+    def test_section_walking_adapters_have_render_section(self):
         self.assertTrue(hasattr(OpenCodeAdapter(), "render_section"))
+        self.assertTrue(hasattr(CodexAdapter(), "render_section"))
+
+    def test_codex_in_adapter_map(self):
+        self.assertIsInstance(get_adapter("codex"), CodexAdapter)
 
 
 if __name__ == "__main__":
