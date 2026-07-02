@@ -24,6 +24,12 @@ The orchestrator passes you in text:
 - `--exclude=<csv>` — additional path prefixes (relative to project_root) to skip *before* parsing (optional). Forward to the utility as-is. The utility will combine them with the built-in `DEFAULT_EXCLUDE` (vendor, var/cache, node_modules, etc.).
 - `--recipe=<name>` — recipe name (optional, override detect). If passed — skip step 1, use `<name>` directly in step 2.
 
+**Flag-free `key=value` inputs (external-process harnesses).** Some harnesses dispatch you as a standalone process whose whole instruction is a single quoted prompt, so they cannot pass leading-`--` flags safely (a dropped quote would collide with the launcher's own options). They instead pass the same inputs as `key=value`; map each to the flag above before invoking the utility, and forward that flag verbatim:
+- `project_root=<path>` → `<project_root>`, `review_root=<path>` → `<review_root>`
+- `diff_files=<path>` → `--diff-files=<path>` (this is the only `scope=changes` signal — if you drop it, recon silently runs in project scope and `touched_by_diff` is never set)
+- `exclude=<csv>` → `--exclude=<csv>`
+- `console_mode=off` → `--no-console`; `console_mode=<a shell command>` → `--console-cmd=<that command>`; `console_mode=auto` (or absent) → pass neither (the utility auto-selects the host runner)
+
 If at least one required argument (`<project_root>`, `<review_root>`) is not passed — return an error to the orchestrator.
 
 ## PROHIBITIONS (hard)

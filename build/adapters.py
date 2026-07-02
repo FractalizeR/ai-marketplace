@@ -78,7 +78,9 @@ class FakeAdapter:
 
 
 class _StubAdapter:
-    """Phase 2/3 placeholder: refuses to render any tagged segment."""
+    """Placeholder: refuses to render any tagged segment (no live stub adapters
+    remain — Claude/OpenCode/Codex are all implemented — but the class is kept
+    as the divergence-test base and a template for a future harness)."""
 
     name = "stub"
 
@@ -86,16 +88,11 @@ class _StubAdapter:
         if seg.category == NEUTRAL_CATEGORY:
             return seg.original_text
         raise NotImplementedError(
-            f"{self.name} adapter does not render {seg.category!r} yet "
-            f"(Phase 2/3 work)"
+            f"{self.name} adapter does not render {seg.category!r} yet"
         )
 
     def capabilities(self) -> dict[str, Tier]:
         return {NEUTRAL_CATEGORY: Tier.NEUTRAL}
-
-
-class CodexAdapter(_StubAdapter):
-    name = "codex"
 
 
 # --- OpenCode rendering constants -------------------------------------------
@@ -204,22 +201,141 @@ class OpenCodeAdapter:
         return {c: Tier.ACTIVE_PARSED for c in _ALL_CATEGORIES}
 
 
-def _synthesize_frontmatter(attrs: dict) -> str:
+def _clean_description(attrs: dict) -> str:
+    """Unwrap → length-bound → escape the raw ``description`` value.
+
+    ``extract._kv`` keeps the surrounding quotes; unwrap so truncation/escaping act
+    on the value, never producing an unterminated quoted scalar. Shared by the
+    OpenCode (description-only) and Codex (name+description) frontmatter synths."""
     raw = attrs.get("description") or ""
-    # extract._kv keeps the surrounding quotes; unwrap so truncation/escaping act
-    # on the value, never producing an unterminated quoted scalar.
     if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
         value = raw[1:-1]
     else:
         value = raw
     if len(value) > _MAX_DESC:
         value = value[:_MAX_DESC].rsplit(" ", 1)[0]
-    value = value.replace("\\", "\\\\").replace('"', '\\"')
-    return f'---\ndescription: "{value}"\n---\n'
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _synthesize_frontmatter(attrs: dict) -> str:
+    return f'---\ndescription: "{_clean_description(attrs)}"\n---\n'
 
 
 def _strip_xrefs(text: str) -> str:
     return _XREF_FILE.sub(r"\1", text)
+
+
+# --- Codex rendering constants ----------------------------------------------
+CODEX_CORE_ROOT = OPENCODE_CORE_ROOT          # ${CORE_ROOT}; operator exports it (same as OpenCode)
+CODEX_ARGS_PHRASE = "the invocation arguments"  # $ARGUMENTS has NO Codex substitution → neutral prose
+MCP_PHRASE = OPENCODE_MCP_PHRASE              # harness-neutral aliases (reused verbatim)
+AUQ_PHRASE = OPENCODE_AUQ_PHRASE
+# Codex strips only ORCHESTRATOR file refs (security-project.md / security-changes.md):
+# a standalone skill body cannot resolve a sibling orchestrator. Agent-role refs
+# (agents/*.md, security-recon.md, security-refute.md) are REAL bundled read-follow
+# files a codex worker opens under ${CORE_ROOT}/agents/ — they MUST survive (C1/CX1).
+# `security-project`/`security-changes` are orchestrator-only names (no agent shares
+# them), so strip them wherever they appear; the left guard `(?<![\w-])` only blocks a
+# match inside a longer word/hyphenated token (a fixed-length `agents/` lookbehind
+# would spuriously spare `subagents/security-project.md`).
+_CODEX_ORCH_XREF = re.compile(r"(?<![\w-])(security-(?:project|changes))\.md\b")
+
+
+def _strip_codex_xrefs(text: str) -> str:
+    return _CODEX_ORCH_XREF.sub(r"\1", text)
+
+
+def _synthesize_skill_frontmatter(attrs: dict, *, name: str) -> str:
+    """A Codex skill needs non-empty ``name`` + ``description`` frontmatter.
+    ``name`` is the artifact stem (threaded via instance state); ``description``
+    reuses the OpenCode unwrap/truncate/escape hygiene."""
+    return f'---\nname: {name}\ndescription: "{_clean_description(attrs)}"\n---\n'
+
+
+class CodexAdapter:
+    """Derives a Codex artifact: a *second* harness over the same section IR as
+    OpenCode. Diverges only in token rendering (AC3), coupled-section template
+    content, and structural gates. No byte oracle — the gates are the safety net.
+
+    ``$ARGUMENTS`` renders to a neutral phrase (Codex has no substitution), command
+    frontmatter → a skill block (name+description), agent frontmatter is stripped
+    (the worker is a plain read-follow file). ``template_loader`` is injected for
+    tests; the default loads from ``harness/codex/sections/``.
+    """
+
+    name = "codex"
+
+    def __init__(self, template_loader=None, *, template_root: Path | None = None):
+        if template_loader is None:
+            root = template_root or (
+                Path(__file__).resolve().parent.parent
+                / "harness" / "codex" / "sections"
+            )
+            template_loader = _default_codex_template_loader(root)
+        self._load = template_loader
+        self._artifact_basename = ""   # set per section (M2-DS: reaches _splice frontmatter)
+
+    def render_segment(self, seg: Segment) -> str:
+        cat = seg.category
+        if cat == NEUTRAL_CATEGORY:
+            return seg.original_text
+        if cat == CAT_CORE_ROOT:
+            return CODEX_CORE_ROOT
+        if cat == CAT_ARGS:
+            return CODEX_ARGS_PHRASE            # NO Codex substitution → neutral phrase
+        if cat == CAT_CMD_FRONTMATTER:
+            return _synthesize_skill_frontmatter(seg.attrs, name=self._artifact_basename)
+        if cat == CAT_AGENT_FRONTMATTER:
+            return ""                            # worker prose is a plain read-follow file
+        if cat == CAT_MCP:
+            return MCP_PHRASE
+        if cat == CAT_AUQ:
+            if seg.attrs.get("occurrence_kind") == "labeled-block":
+                raise AssertionError(
+                    "labeled-block AskUserQuestion must be inside a coupled section"
+                )
+            return AUQ_PHRASE                    # prose-mention -> neutral phrase
+        if cat == CAT_TASK:
+            raise AssertionError("task_block must be inside a coupled section")
+        raise NotImplementedError(f"codex adapter has no render for {cat!r}")
+
+    def render_section(self, section, ctx: RenderContext) -> str:
+        # M2-DS: frontmatter lives in the uncoupled _preamble (rendered via _splice →
+        # render_segment, which has no ctx), so surface the stem via instance state.
+        self._artifact_basename = ctx.artifact_basename
+        if section.is_coupled:
+            out = self._load(ctx.artifact_basename, section.section_anchor)
+        else:
+            out = self._splice(section)
+        return _strip_codex_xrefs(out)
+
+    def _splice(self, section) -> str:
+        base = section.span[0]
+        text = section.original_text
+        pieces: list[str] = []
+        cursor = 0
+        for seg in sorted(section.inner_segments, key=lambda s: s.span[0]):
+            rel_start = seg.span[0] - base
+            rel_end = seg.span[1] - base
+            pieces.append(text[cursor:rel_start])
+            pieces.append(self.render_segment(seg))
+            cursor = rel_end
+        pieces.append(text[cursor:])
+        return "".join(pieces)
+
+    def capabilities(self) -> dict[str, Tier]:
+        return {c: Tier.ACTIVE_PARSED for c in _ALL_CATEGORIES}
+
+
+def _default_codex_template_loader(root: Path):
+    def load(artifact_basename: str, section_anchor: str) -> str:
+        path = root / artifact_basename / f"{section_anchor}.md"
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"missing Codex section template: {artifact_basename}/{section_anchor}.md"
+            )
+        return path.read_text(encoding="utf-8")
+    return load
 
 
 _ADAPTERS = {

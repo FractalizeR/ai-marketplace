@@ -10,8 +10,10 @@ chosen adapter, re-encodes, and compares **bytes-out == bytes-in**.
 
 For ``--harness=claude`` the round-trip is byte-identical by construction; the
 default ``--mode=check`` therefore doubles as a self-consistency gate that
-protects the authoritative files. ``codex`` / ``opencode`` adapters are stubs
-(Phase 2/3) and raise on any tagged segment → exit 2.
+protects the authoritative files. ``opencode`` (Phase 2B) and ``codex`` (Phase 3A)
+walk the coarser *section* IR instead: they render coupled sections from authored
+templates and token-fold the rest, then run structural gates (no byte oracle).
+``codex --mode=write`` is not yet implemented (Phase 3B) → exit 2.
 """
 
 from __future__ import annotations
@@ -34,7 +36,13 @@ from sections import (
     assert_coupling_guards,
 )
 from prose_coupling import load_pins, pins_for
-from gates import check_opencode_output, check_dispatch_template, DISPATCH_ANCHORS
+from gates import (
+    check_opencode_output,
+    check_dispatch_template,
+    check_codex_output,
+    check_codex_dispatch_template,
+    DISPATCH_ANCHORS,
+)
 from bundle import (
     bundle_core,
     copy_static_configs,
@@ -79,6 +87,36 @@ def render_opencode_artifact(path: Path, adapter, pins) -> str:
     for sec in sections:
         if sec.is_coupled and sec.section_anchor in DISPATCH_ANCHORS:
             problems = check_dispatch_template(adapter.render_section(sec, ctx))
+            if problems:
+                raise AssertionError(
+                    f"{file_rel} [{sec.section_anchor}]: {'; '.join(problems)}"
+                )
+    return build_sectioned(sections, adapter, ctx)
+
+
+def render_codex_artifact(path: Path, adapter, pins) -> str:
+    """Full Codex derivation pipeline for one authoritative artifact.
+
+    Mirrors ``render_opencode_artifact`` over the SAME section IR + pins; only the
+    adapter (token render), the coupled-section templates, and the dispatch guard
+    (``check_codex_dispatch_template``: ``codex exec`` read-follow, not ``--agent``)
+    diverge."""
+    source = path.read_bytes().decode("utf-8")
+    kind = _kind_for(path)
+    segments = extract(source, kind)
+    assert_partition(segments, source)
+    task_spans = [s.span for s in segments if s.category == CAT_TASK]
+    sections = partition_sections(source, task_spans=task_spans)
+    assert_section_partition(sections, source)
+    sections = attach_segments(sections, segments)
+    file_rel = f"{path.parent.name}/{path.name}"
+    sections = detect_coupling(sections, [p.pinned for p in pins_for(pins, file_rel)])
+    assert_coupling_guards(sections)
+    ctx = RenderContext(path.stem)
+    # Build-time guard: every dispatch template must wire `codex exec` read-follow.
+    for sec in sections:
+        if sec.is_coupled and sec.section_anchor in DISPATCH_ANCHORS:
+            problems = check_codex_dispatch_template(adapter.render_section(sec, ctx))
             if problems:
                 raise AssertionError(
                     f"{file_rel} [{sec.section_anchor}]: {'; '.join(problems)}"
@@ -207,6 +245,34 @@ def _run_opencode(args) -> int:
     return 0
 
 
+def _run_codex(args) -> int:
+    # Bundling core + prose → dist/codex, the manifest, and the atomic write path
+    # are Phase 3B-pkg; 3A-core proves the derivation MECHANISM structurally only.
+    if args.mode == "write":
+        raise NotImplementedError(
+            "codex --mode=write is Phase 3B-pkg (bundle + manifest not implemented)"
+        )
+    adapter = get_adapter("codex")
+    pins = load_pins(_REGISTER)
+    artifacts = args.artifact or discover_artifacts(args.plugin_root)
+    rendered = {p: render_codex_artifact(p, adapter, pins) for p in artifacts}
+
+    violations: list[str] = []
+    for path, text in rendered.items():
+        is_skill = _kind_for(path) is ArtifactKind.COMMAND
+        violations += [f"{path.name}: {v}"
+                       for v in check_codex_output(text, is_skill=is_skill)]
+    for path in artifacts:
+        if render_codex_artifact(path, adapter, pins) != rendered[path]:
+            violations.append(f"{path.name}: non-deterministic render")
+    if violations:
+        for v in violations:
+            print(f"GATE: {v}", file=sys.stderr)
+        return 1
+    print(f"codex: {len(artifacts)} artifacts pass structural gates")
+    return 0
+
+
 def _write_bundle(out: Path, rendered: dict[Path, str], *, plugin_root: Path) -> None:
     """Materialize the full bundle: build into a fresh staging dir beside the
     target, then swap it in by moving any existing bundle aside first
@@ -259,6 +325,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.harness == "opencode":
             return _run_opencode(args)
+        if args.harness == "codex":
+            return _run_codex(args)
         adapter = get_adapter(args.harness)
         artifacts = args.artifact or discover_artifacts(args.plugin_root)
         # Two-phase: rebuild everything (each with assert_partition) before

@@ -22,6 +22,9 @@ fi
 echo "Running build byte-identity check..."
 python3 build/build.py --harness=claude --mode=check
 
+echo "Running Codex derivation structural gates..."
+python3 build/build.py --harness=codex --mode=check
+
 echo "Running build test suite..."
 python3 -m unittest discover -s build/tests
 
