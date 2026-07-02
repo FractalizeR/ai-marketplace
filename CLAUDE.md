@@ -204,9 +204,56 @@ section path).
   asserts `codex exec` + `-m` + `--add-dir` (the composite-repo write invariant, M1-DS)
   + a bundled `agents/<role>.md` read-follow ref (NOT `--agent`) + no `${CORE_ROOT}/agents/`.
   Both run in `build --harness=codex --mode=check` (exit 0 clean / 1 gate / 2 error);
-  `--mode=write` raises `NotImplementedError`→exit 2 (bundle is 3B). Templates live under
+  `--mode=write` builds the bundle (Phase 3B-pkg below). Templates live under
   `harness/codex/sections/<artifact>/<anchor>.md` (same 12 anchors as `harness/opencode/
   sections/`, authored fresh). The pre-commit hook now gates codex `--mode=check` too.
+
+### Multi-environment build (Phase 3B-pkg: Codex bundle)
+
+3B-pkg turns the 3A-core derivation into a self-contained, installable **self-hosted
+Codex marketplace bundle** `dist/codex/` (gitignored) via a codex path in `build/bundle.py`
++ the `--out` write path in `build.py`. Build-time only — live `codex exec` smoke (semantic
+parity) is 3C. Mirrors the OpenCode 2B-pkg bundle but diverges in topology (a marketplace
+ROOT + `.codex-plugin` + skills + read-follow agents under `core/`).
+
+- **Topology.** `dist/codex/` = the dir handed to `codex plugin marketplace add` (a marketplace
+  ROOT): a bundle-root sentinel `.fr-codex-bundle` + `.agents/plugins/marketplace.json` +
+  `plugins/fr-security-review/{.codex-plugin/plugin.json, skills/{security-project,security-changes}/
+  SKILL.md, core/{bin,checklists,agents/{security,security-recon,security-refute}.md}, adapter.json,
+  INSTALL.md}`. **Orchestrators are Codex _skills_** (`skills/<name>/SKILL.md`, name+description
+  frontmatter); **workers are read-follow files under `core/`** (`core/agents/<role>.md`, frontmatter
+  stripped) — placed under `${CORE_ROOT}` so the dispatch templates' `{core_root}/agents/<role>.md`
+  (fan-out) and `<CORE_ROOT>/agents/<role>.md` (recon/refute) resolve. This is the deliberate
+  divergence from OpenCode's top-level *registered* `agents/`. The `<plugin-name>` is read once from
+  the authored `plugin.json.name` and gate-reconciled with the marketplace entry name / `source.path`.
+- **Manifest gate = stdlib mirror.** The authoritative Codex `validate_plugin.py` imports PyYAML
+  (non-stdlib) + is codex-tooling-local, so `build/codex_manifest.py` re-implements its manifest +
+  marketplace + skill-frontmatter shape checks in pure stdlib: allowed top-level keys, strict-semver
+  `version`, `author.name`, `interface` (displayName/shortDescription/longDescription/developerName/
+  category non-empty + `capabilities` array-of-strings + `defaultPrompt|default_prompt` present),
+  recursive `[TODO:` reject, `skills` normalizes to `"skills"`. The **oracle covers only the plugin
+  manifest + skills** (the real validator never reads a marketplace file), so DoD pins that half with a
+  **durable skip-if-PyYAML-absent test** that runs the REAL `validate_plugin.py` on the emitted bundle,
+  and the marketplace half is anchored by a golden-shape test. `interface.defaultPrompt` is authored as
+  an **array** (spec + all bundled manifests use one; the validator only existence-checks it).
+- **Authored static configs** under `harness/codex/` (`plugin.json`, `marketplace.json`, `adapter.json`,
+  `INSTALL.md`) are copied verbatim (copier, not generator). `validate_codex_configs` runs in **both**
+  modes — `check` vets the in-git files, `write` is fail-closed. `adapter.json` (§4) diverges from
+  opencode's: `entrypoint_kind:"command"`→**`"skill"`**, `worker_invocation` is a `codex exec` string
+  (checked by `check_codex_dispatch_template`, not the opencode one), `model_discovery_cmd:"codex debug
+  models"`, `permission_config:null` (Codex has no `opencode.json`-style perm file — the offline posture
+  rests on the `codex exec -s workspace-write` sandbox default, documented in INSTALL.md, verified at 3C).
+- **Write path** = the OpenCode rename-aside atomic swap: `build --harness=codex --mode=write
+  --out=dist/codex` validates configs + runs codex gates on every rendered artifact → builds a staging
+  tree beside `--out` (both roots: marketplace + plugin) → asserts every `agents/<role>.md` a dispatch
+  template reads was actually emitted (fail-closed) → `_guard_out` (now marker-parametrized, defaulting
+  to the opencode sentinel so the existing caller is untouched; protects `harness/codex` too, and refuses
+  an `--out` carrying the OTHER harness's sentinel) → swaps. `bundle_core` is reused verbatim and already
+  appends `core/` (so the write passes the plugin dir, not `.../core`). `--artifact` is rejected in codex
+  write; `--out` defaults per harness (`dist/codex` vs `dist/opencode`) and is ignored for claude. Build
+  is byte-deterministic (`diff -r` of two writes empty). **Reinstalling an already-installed plugin needs
+  a cachebuster version bump + re-`codex plugin add` — a documented 3C step (done on a smoke copy so the
+  committed `plugin.json` stays a clean semver), not a build change.**
 
 ### Multi-environment runtime (Phase 2A: shared helpers)
 
