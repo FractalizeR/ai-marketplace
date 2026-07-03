@@ -20,6 +20,15 @@ After that, plugins from the marketplace become available for installation:
 claude /plugin install fr-security-review@fractalizer-marketplace
 ```
 
+## Other harnesses (Codex CLI / OpenCode)
+
+`fr-security-review` also runs on **Codex CLI** and **OpenCode**. The same audit engine is *derived* from the Claude-authoritative prose by an in-repo build (the Claude artifacts stay byte-for-byte identical), then bundled into a self-contained, installable package. Fan-out on these harnesses uses external `codex exec` / `opencode run` processes instead of native subagents, so per-wave model tiering still works.
+
+Per-harness build + install + model-setup guides:
+
+- Codex CLI — [`harness/codex/INSTALL.md`](./harness/codex/INSTALL.md)
+- OpenCode — [`harness/opencode/INSTALL.md`](./harness/opencode/INSTALL.md)
+
 ## License
 
 All plugins in this marketplace are distributed under the [Elastic License 2.0](./LICENSE).

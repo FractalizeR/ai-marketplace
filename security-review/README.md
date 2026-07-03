@@ -4,6 +4,8 @@ Framework-aware static-first security audit for Claude Code: recipe-driven recon
 
 Supported stacks: Symfony, Laravel, generic PHP. The GraphQL layer (lighthouse, rebing-laravel, api-platform, webonyx) is detected automatically in Symfony and Laravel.
 
+Primarily a Claude Code plugin, but the same engine also runs on **Codex CLI** and **OpenCode** (derived from the Claude prose, with external-process fan-out) — see [`harness/codex/INSTALL.md`](../harness/codex/INSTALL.md) and [`harness/opencode/INSTALL.md`](../harness/opencode/INSTALL.md).
+
 ## Quick start
 
 After installing the plugin from the marketplace, use two slash commands:
