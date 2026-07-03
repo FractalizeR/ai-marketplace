@@ -4,6 +4,30 @@ All notable changes to this plugin will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.2.0] — 2026-07-03
+
+### Multi-environment support
+
+The same audit engine now runs on **Codex CLI** and **OpenCode** in addition to Claude Code. The Claude behaviour is byte-for-byte unchanged; the secondary harnesses are **derived** from the Claude-authoritative command/agent prose by a build, so there is a single source of truth and no parallel implementation to drift. See [`harness/codex/INSTALL.md`](../harness/codex/INSTALL.md) and [`harness/opencode/INSTALL.md`](../harness/opencode/INSTALL.md) for install and model-setup on each harness.
+
+On Claude, fan-out stays native `Task(model=…)` in batches of ≤6. On Codex/OpenCode the same waves fan out as external `codex exec -m <model>` / `opencode run -m <model>` processes (one per slice, ≤6 concurrent), because neither harness supports reliable in-process subagents. The worker→file contract (`<review_root>/waves/<slice_id>.md`) and the recon/plan/dedupe Python are identical everywhere.
+
+#### Added
+
+- **`bin/shared/` runtime helpers** (stdlib-only, ships with the plugin; Claude does not use them — they are the foundation the Codex/OpenCode derivations invoke as staged stage-commands).
+  - **`model_resolver.py`** — model resolution as `discover → propose → confirm → persist` a `{high, fast}` tier map. Discovery is harness-shape-sniffed (`codex debug models` JSON vs `opencode models` lines); proposal ranks by capability signals (fast-first); the chosen map persists to `<review_root>/.model_map.json` and is reused on re-run unless `--remodel`. Non-interactive by default; `--models=high=<id>,fast=<id>` bypass; an unresolved tier fails loudly instead of silently picking. The Claude path returns the static `{high: opus, fast: sonnet}` and never persists.
+  - **`dispatch.py`** — bounded external-process wave dispatcher (≤6 concurrent) plus a single-process `dispatch_role` for recon/refute. Planned wave files are deleted before fan-out, so a stale prior-run file plus a crashed worker is still counted as a gap (`timeout` / `crash` / `missing_write` distinguished). `--allow-gaps` writes `dispatch_gaps.json` and marks the run degraded instead of aborting the whole fan-out on one failed worker.
+  - **`contracts.py`** — typed seams (`Roots`, `RunResult`, the runner/builder callables, typed exceptions). Subprocess is the single injected seam, so tests never spawn a real `codex` / `opencode`.
+- **`dedupe_findings.py --dispatch-gaps=<path>`** — folds wave-dispatch gaps into REPORT.md's `## Coverage Gaps` (alongside the existing `console_gap`) and surfaces a prominent **INCOMPLETE** marker. With recorded gaps but zero wave files it renders a minimal INCOMPLETE report instead of erroring out.
+
+#### Changed
+
+- **`agents/security-recon.md` input contract** documents the harness-neutral `key=value` → `recon_inventory.py` flag mapping (e.g. `console_mode=off` → `--no-console`). The Codex/OpenCode recon dispatch passes flag-free `key=value` inputs to avoid a leading-`--` collision with the worker CLI's own option parsing; the agent is now the single documented source of that mapping.
+
+#### Fixed
+
+- **`bin/shared/dispatch.py` feeds workers EOF stdin** (`stdin=DEVNULL`). `codex exec` reads additional prompt input from stdin, so a fanned-out worker that inherited a non-EOF orchestrator stdin would block forever. Harness-neutral (a non-interactive worker must never read stdin); OpenCode is unaffected.
+
 ## [4.1.0] — 2026-05-23
 
 ### Environment-aware console enrichment
