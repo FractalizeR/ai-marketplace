@@ -23,6 +23,8 @@ python3 ${CORE_ROOT}/bin/shared/dispatch.py \
 
 `diff_files` is the **only** signal to the recon process that `scope=changes` is needed. If it is dropped, recon silently runs in project mode and `touched_by_diff` will NOT be set — the entire mode=changes pipeline breaks.
 
+**Placeholder discipline.** `dispatch.py --role-cmd-template` substitutes only `{…}`-form placeholders (`{project_root}`, `{review_root}`, `{core_root}` — the same ones the fan-out worker template uses), never `<…>` slots. Replace every `<…>` slot in the template string — `<HIGH_TIER>`, `<PROJECT_ROOT>`, `<REVIEW_ROOT>`, `<CORE_ROOT>`, `<CONSOLE_MODE>`, `<EXCLUDE_CSV>` — with its concrete value **before** invoking `dispatch.py`. An unsubstituted `<HIGH_TIER>` reaches `codex exec` verbatim (`-m <HIGH_TIER>`) and the recon process fails; the dispatcher will not expand it for you.
+
 `<HIGH_TIER>` is the high-tier model id from the resolved `<REVIEW_ROOT>/.model_map.json` (`shared/model_resolver.py`). `--add-dir <REVIEW_ROOT>` grants the CONTEXT.md write (the review root lies outside `project_root` in a composite repo, so `workspace-write` would otherwise deny it).
 
 After the process returns — success means `<REVIEW_ROOT>/CONTEXT.md` was materialized and `codex exec` exited 0 (the dispatcher reports `output_present`). If CONTEXT.md is missing, the captured last message (`-o …/recon.capture.txt`) is the partial safety net: read it and recover CONTEXT.md, otherwise abort with a clear error.

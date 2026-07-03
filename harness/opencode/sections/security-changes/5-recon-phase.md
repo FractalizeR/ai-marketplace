@@ -19,6 +19,8 @@ python3 ${CORE_ROOT}/bin/shared/dispatch.py \
   --role-cmd-template 'opencode run -m <HIGH_TIER> --agent security-recon -- "project_root=<PROJECT_ROOT> review_root=<REVIEW_ROOT> --diff-files=<REVIEW_ROOT>/diff_files.txt [--no-console | --console-cmd=<tpl>] [--exclude=<EXCLUDE_CSV>]"'
 ```
 
+**Placeholder discipline.** `dispatch.py --role-cmd-template` substitutes only `{…}`-form placeholders (`{project_root}`, `{review_root}`, `{core_root}` — the same ones the fan-out worker template uses), never `<…>` slots. Replace every `<…>` slot in the template string — `<HIGH_TIER>`, `<PROJECT_ROOT>`, `<REVIEW_ROOT>`, and the console/`<EXCLUDE_CSV>` choices — with its concrete value **before** invoking `dispatch.py`. An unsubstituted `<HIGH_TIER>` reaches `opencode run` verbatim (`-m <HIGH_TIER>`) and the recon process fails; the dispatcher will not expand it for you.
+
 `<HIGH_TIER>` is the high-tier model id from the resolved `<REVIEW_ROOT>/.model_map.json` (`shared/model_resolver.py`).
 
 **Keep the `--` before the message.** This recon message carries `--diff-files=`, `--no-console` / `--console-cmd=`, and `--exclude=` — all starting with `--`. `dispatch.py` shlex-splits the template into argv, so without the `--` terminator `opencode run` consumes those as *its own* CLI flags (prints help, exits 1) and recon never runs — even when the quotes around the message are dropped while resolving the `[…|…]` choice. The `--` stops OpenCode's option parsing; everything after it is joined into the agent's `$ARGUMENTS` verbatim (empirically verified), so the flags reach `recon_inventory.py` intact regardless of quoting.
