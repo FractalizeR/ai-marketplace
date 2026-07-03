@@ -514,6 +514,29 @@ class RegressionFixTests(unittest.TestCase):
         self.assertFalse(result.timed_out)
         self.assertNotIn(result.returncode, (0, None))
 
+    def test_default_runner_feeds_devnull_stdin(self):
+        # A fanned-out worker is non-interactive; `codex exec` reads extra prompt
+        # input from stdin, so an inherited non-EOF stdin blocks it forever. The
+        # runner MUST pass stdin=DEVNULL (verified live, 3C). Harness-neutral.
+        import subprocess as _sp
+        from unittest import mock
+
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured.update(kwargs)
+
+            class _P:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            return _P()
+
+        with mock.patch.object(dp.subprocess, "run", fake_run):
+            dp.default_runner(["echo", "hi"], 5)
+        self.assertEqual(captured.get("stdin"), _sp.DEVNULL)
+
     def test_clean_run_removes_stale_gaps_file(self):
         # A stale dispatch_gaps.json from a prior allow-gaps run must be cleared by
         # a subsequent clean run so dedupe can't mark a healthy report INCOMPLETE

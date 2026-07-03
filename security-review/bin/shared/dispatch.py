@@ -124,6 +124,11 @@ def default_runner(argv, timeout):  # pragma: no cover - thin stdlib wrapper
     A spawn failure (missing/unspawnable binary → OSError) becomes a non-zero
     `RunResult`, NOT a raised exception, so `dispatch_waves` classifies that slice
     as a `crash` gap instead of aborting the whole batch (AD-2A6/E13, review H1).
+
+    `stdin=DEVNULL` is mandatory: a fanned-out worker is non-interactive, and
+    `codex exec` (0.142+) reads *additional* prompt input from stdin — inheriting a
+    non-EOF orchestrator stdin makes every worker block forever (verified live, 3C).
+    Feeding EOF is harness-neutral (opencode run is unaffected).
     """
     try:
         proc = subprocess.run(
@@ -132,6 +137,7 @@ def default_runner(argv, timeout):  # pragma: no cover - thin stdlib wrapper
             text=True,
             timeout=timeout,
             start_new_session=True,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired as exc:
         return RunResult(
