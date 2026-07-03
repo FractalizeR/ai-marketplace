@@ -14,10 +14,10 @@ All commands are run from the repo root unless stated otherwise.
 
 ### Tests
 
-The plugin's Python pipeline is covered by a stdlib-only `unittest` suite (~1130 tests, no third-party deps, no `pytest.ini`).
+The plugin's Python pipeline is covered by a stdlib-only `unittest` suite (~1219 tests, no third-party deps, no `pytest.ini`).
 
 ```bash
-# Full suite (used as the CI gate; takes ~50 seconds)
+# Full engine suite (~1219 tests, ~50 seconds)
 python3 -m unittest discover -s security-review/bin/tests
 
 # Build tooling suite (fast; multi-environment build, see below)
@@ -30,8 +30,26 @@ python3 -m unittest security-review.bin.tests.test_dedupe_findings
 python3 -m unittest security-review.bin.tests.test_plan_waves.PlanWavesTests.test_balanced_model_assignment
 ```
 
-There are no linters or formatters wired into CI; rely on the unittest suites
-(engine under `security-review/bin/tests`, build tooling under `build/tests`).
+There are no linters or formatters; rely on the unittest suites (engine under
+`security-review/bin/tests`, build tooling under `build/tests`).
+
+### No CI — validation is local
+
+This repo has **no CI pipeline and no Sentry**. Every gate runs on the maintainer's
+machine; commits go straight to `main` (see "Direct-to-`main` workflow" below).
+The `.githooks/pre-commit` hook runs the *fast* subset automatically; the full gate
+below is run manually after any substantive change before committing.
+
+**Full local validation gate** (run all, all must pass):
+
+```bash
+python3 build/build.py --harness=claude   --mode=check   # byte-identity anti-drift (exit 0)
+python3 build/build.py --harness=opencode --mode=check   # OpenCode structural gates
+python3 build/build.py --harness=codex    --mode=check   # Codex structural gates
+python3 -m unittest discover -s build/tests              # build tooling suite (~241, fast)
+python3 -m unittest discover -s security-review/bin/tests # engine suite (~1219, ~50s)
+claude plugin validate .                                 # marketplace metadata
+```
 
 ### Plugin validation (pre-commit hook)
 
@@ -77,8 +95,8 @@ renderer landed in Phase 2B-core (below); the Codex renderer is still a stub
   `build/ADR-0001-artifacts-are-prompts.md` for why prose, not only tokens, is the
   rewrite surface.
 - Tests: `python3 -m unittest discover -s build/tests`. The `.githooks/pre-commit`
-  hook runs `build --mode=check` + the build suite (fast); the ~1130 engine suite
-  stays manual/CI.
+  hook runs `build --mode=check` + the build suite (fast); the ~1219 engine suite
+  stays manual (no CI — see "No CI — validation is local").
 
 ### Multi-environment build (Phase 2B-core: OpenCode derivation)
 
@@ -206,7 +224,8 @@ section path).
   Both run in `build --harness=codex --mode=check` (exit 0 clean / 1 gate / 2 error);
   `--mode=write` builds the bundle (Phase 3B-pkg below). Templates live under
   `harness/codex/sections/<artifact>/<anchor>.md` (same 12 anchors as `harness/opencode/
-  sections/`, authored fresh). The pre-commit hook now gates codex `--mode=check` too.
+  sections/`, authored fresh). The pre-commit hook gates all three harnesses'
+  `--mode=check` (claude byte-identity + opencode + codex structural gates).
 
 ### Multi-environment build (Phase 3B-pkg: Codex bundle)
 
