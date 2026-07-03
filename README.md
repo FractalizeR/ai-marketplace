@@ -24,7 +24,15 @@ claude /plugin install fr-security-review@fractalizer-marketplace
 
 `fr-security-review` also runs on **Codex CLI** and **OpenCode**. The same audit engine is *derived* from the Claude-authoritative prose by an in-repo build (the Claude artifacts stay byte-for-byte identical), then bundled into a self-contained, installable package. Fan-out on these harnesses uses external `codex exec` / `opencode run` processes instead of native subagents, so per-wave model tiering still works.
 
-Per-harness build + install + model-setup guides:
+Quick install from a clone of this repo (idempotent; re-run to update):
+
+```bash
+make install-codex      # build + register a self-hosted Codex marketplace + install the plugin
+make install-opencode   # build + drop commands/agents into ~/.config/opencode (OPENCODE_SCOPE=project for per-project)
+make help               # list all targets (build-*, check, test-*)
+```
+
+The bundles land in `dist/` (gitignored), so each machine builds its own. Each installer then prints the `CORE_ROOT` (and, for OpenCode, `OPENCODE_CONFIG`) export you set in the session where you run an audit — these are per-harness and must **not** go in your shell rc globally. For the full manual steps, model setup, and the permission/offline posture, see:
 
 - Codex CLI — [`harness/codex/INSTALL.md`](./harness/codex/INSTALL.md)
 - OpenCode — [`harness/opencode/INSTALL.md`](./harness/opencode/INSTALL.md)

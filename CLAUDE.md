@@ -51,6 +51,13 @@ python3 -m unittest discover -s security-review/bin/tests # engine suite (~1219,
 claude plugin validate .                                 # marketplace metadata
 ```
 
+The whole gate is also wrapped as **`make check`**. Other `make` targets (see
+`make help`): `build-{codex,opencode}` (write a bundle to `dist/`),
+`install-{codex,opencode}` (build + install the derived bundle on the local
+Codex/OpenCode CLI via `scripts/install-*.sh` — idempotent, re-run to update),
+`test-build`, `test-engine`. The `Makefile` and `scripts/` are dev tooling, not
+shipped inside the plugin.
+
 ### Plugin validation (pre-commit hook)
 
 A pre-commit hook in `.githooks/pre-commit` runs `claude plugin validate .` against the marketplace metadata. After cloning, enable the hook once:

@@ -7,6 +7,18 @@ Claude-authoritative command/agent prose — do not hand-edit files under
 Distribution is **self-hosted** (a local/team marketplace you host yourself); there
 is no OpenAI store submission.
 
+## Quick path
+
+From the repo root, `make install-codex` runs steps 1–2 (and, on re-runs, bumps the
+cachebuster per §6) in one idempotent command, then prints the `CORE_ROOT` export:
+
+```bash
+make install-codex
+```
+
+Steps 3–5 (export `CORE_ROOT`, resolve models, run) still happen in the session where
+you run the audit. The manual walkthrough below explains each step.
+
 ## 1. Build the bundle
 
 From the repo root:

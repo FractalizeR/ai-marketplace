@@ -4,6 +4,21 @@ Verified against **OpenCode 1.17.10**. This bundle is *derived* from the
 Claude-authoritative command/agent prose — do not hand-edit files under
 `dist/opencode/`; re-run the build instead (see the repo's `build/`).
 
+## Quick path
+
+From the repo root, `make install-opencode` runs steps 1–2 in one idempotent command
+(global scope by default; `OPENCODE_SCOPE=project make install-opencode` for the
+current project's `.opencode/`), leaves your existing `opencode.json` untouched, and
+prints the `OPENCODE_CONFIG` + `CORE_ROOT` exports:
+
+```bash
+make install-opencode
+```
+
+Steps 3–5 (point at the permission config, export `CORE_ROOT`, resolve models, run)
+still happen in the session where you run the audit. The manual walkthrough below
+explains each step.
+
 ## 1. Build the bundle
 
 From the repo root:
