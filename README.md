@@ -40,7 +40,9 @@ frsr project --harness codex                        # prints the prepared comman
 frsr changes --harness opencode -- --no-console     # extra flags after --
 ```
 
-The bundles land in `dist/` (gitignored), so each machine builds its own. Each installer then prints the `FR_SECURITY_CORE_ROOT` (and, for OpenCode, `OPENCODE_CONFIG`) export you set in the session where you run an audit — these are per-harness and must **not** go in your shell rc globally. For the full manual steps, model setup, and the permission/offline posture, see:
+The bundles land in `dist/` (gitignored), so each machine builds its own. Each installer then prints the `FR_SECURITY_CORE_ROOT` (and, for OpenCode, `OPENCODE_CONFIG`) export you set in the session where you run an audit — these are per-harness and must **not** go in your shell rc globally.
+
+The [multi-environment guide](./docs/multi-environment.md) is the big picture — architecture, model tiering, the offline posture, and troubleshooting. For the exact per-harness install steps, model setup, and permissions, see:
 
 - Codex CLI — [`harness/codex/INSTALL.md`](./harness/codex/INSTALL.md)
 - OpenCode — [`harness/opencode/INSTALL.md`](./harness/opencode/INSTALL.md)

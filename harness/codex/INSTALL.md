@@ -7,6 +7,9 @@ Claude-authoritative command/agent prose — do not hand-edit files under
 Distribution is **self-hosted** (a local/team marketplace you host yourself); there
 is no OpenAI store submission.
 
+> For the architecture, model tiering, and troubleshooting across all three
+> harnesses, see the [multi-environment guide](../../docs/multi-environment.md).
+
 ## Quick path
 
 From the repo root, `make install-codex` runs steps 1–2 (and, on re-runs, bumps the

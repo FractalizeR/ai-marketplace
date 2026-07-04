@@ -4,6 +4,9 @@ Verified against **OpenCode 1.17.10**. This bundle is *derived* from the
 Claude-authoritative command/agent prose — do not hand-edit files under
 `dist/opencode/`; re-run the build instead (see the repo's `build/`).
 
+> For the architecture, model tiering, and troubleshooting across all three
+> harnesses, see the [multi-environment guide](../../docs/multi-environment.md).
+
 ## Quick path
 
 From the repo root, `make install-opencode` runs steps 1–2 in one idempotent command
