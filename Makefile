@@ -2,7 +2,10 @@
 # `make` or `make help` lists targets. Codex/OpenCode bundles land in dist/ (gitignored).
 
 .DEFAULT_GOAL := help
-.PHONY: help build-codex build-opencode install-codex install-opencode check test-build test-engine
+.PHONY: help build-codex build-opencode install-codex install-opencode install-launchers check test-build test-engine
+
+REPO := $(CURDIR)
+BINDIR ?= $(HOME)/.local/bin
 
 help: ## List available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -19,6 +22,15 @@ install-codex: ## Build + register + install the Codex plugin (self-hosted marke
 
 install-opencode: ## Build + install OpenCode commands/agents (OPENCODE_SCOPE=global|project)
 	./scripts/install-opencode.sh
+
+install-launchers: ## Install the `frsr` launcher into BINDIR (default ~/.local/bin)
+	@mkdir -p "$(BINDIR)"
+	@sed 's|@@REPO@@|$(REPO)|g' scripts/frsr > "$(BINDIR)/frsr"
+	@chmod +x "$(BINDIR)/frsr"
+	@echo "Installed $(BINDIR)/frsr (repo baked as $(REPO))"
+	@case ":$$PATH:" in *":$(BINDIR):"*) : ;; \
+		*) echo "WARNING: $(BINDIR) is not on PATH — add it to your shell rc" ;; esac
+	@echo "Try: frsr project --harness opencode --dry-run"
 
 check: ## Full local validation gate (3-harness anti-drift + build + engine + plugin validate)
 	python3 build/build.py --harness=claude   --mode=check

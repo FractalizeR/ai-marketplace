@@ -32,6 +32,14 @@ make install-opencode   # build + drop commands/agents into ~/.config/opencode (
 make help               # list all targets (build-*, check, test-*)
 ```
 
+`make install-launchers` additionally puts an `frsr` command on your `PATH` (default `~/.local/bin`) so you can run an audit from any directory — it sets the per-harness env vars, resolves the model tiers, and invokes the harness:
+
+```bash
+frsr project --harness opencode                    # full run (headless)
+frsr project --harness codex                        # prints the prepared command; add --go to run
+frsr changes --harness opencode -- --no-console     # extra flags after --
+```
+
 The bundles land in `dist/` (gitignored), so each machine builds its own. Each installer then prints the `FR_SECURITY_CORE_ROOT` (and, for OpenCode, `OPENCODE_CONFIG`) export you set in the session where you run an audit — these are per-harness and must **not** go in your shell rc globally. For the full manual steps, model setup, and the permission/offline posture, see:
 
 - Codex CLI — [`harness/codex/INSTALL.md`](./harness/codex/INSTALL.md)

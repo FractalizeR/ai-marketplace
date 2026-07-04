@@ -55,6 +55,10 @@ The whole gate is also wrapped as **`make check`**. Other `make` targets (see
 `make help`): `build-{codex,opencode}` (write a bundle to `dist/`),
 `install-{codex,opencode}` (build + install the derived bundle on the local
 Codex/OpenCode CLI via `scripts/install-*.sh` — idempotent, re-run to update),
+`install-launchers` (bake the repo path into `scripts/frsr` and drop it in
+`BINDIR`, default `~/.local/bin`, so `frsr <project|changes> --harness
+<codex|opencode>` runs an audit from any cwd — env + model resolve + invoke;
+codex needs `--go` since it runs the orchestrator unsandboxed to spawn workers),
 `test-build`, `test-engine`. The `Makefile` and `scripts/` are dev tooling, not
 shipped inside the plugin.
 
