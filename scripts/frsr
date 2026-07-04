@@ -80,6 +80,14 @@ export FR_SECURITY_CORE_ROOT="$CORE"
 : "${REVIEW_ROOT:=security-review-$HARNESS}"
 CMD="security-$SUB"
 
+# The orchestrator parses $ARGUMENTS by splitting on whitespace, so a space in
+# a path truncates --project-root/--review-root at the space. This is a limit of
+# the shared argument contract (same for the manual `opencode run`/Claude path),
+# not something frsr can quote around — warn rather than silently mis-run.
+case "$PROJECT_ROOT" in *[[:space:]]*) WS=1 ;; *) WS=0 ;; esac
+case "$REVIEW_ROOT" in *[[:space:]]*) WS=1 ;; esac
+[ "$WS" = 1 ] && echo "frsr: WARNING: a path contains whitespace; the orchestrator splits its arguments on spaces, so --project-root/--review-root may be truncated. Prefer space-free paths." >&2
+
 echo "frsr: harness=$HARNESS  project_root=$PROJECT_ROOT  review_root=$REVIEW_ROOT"
 echo "frsr: FR_SECURITY_CORE_ROOT=$FR_SECURITY_CORE_ROOT"
 
@@ -110,7 +118,7 @@ if [ "$HARNESS" = opencode ]; then
   # `--` before the message: ARGS starts with --project-root=, which opencode
   # would otherwise parse as its own CLI flags (prints help + exits). Same class
   # as the 2C recon-template fix.
-  RUN=(opencode run "${MFLAG[@]}" --command "$CMD" -- "$ARGS")
+  RUN=(opencode run ${MFLAG[@]+"${MFLAG[@]}"} --command "$CMD" -- "$ARGS")
   if [ "$DRY" = 1 ]; then printf 'DRY: '; printf '%q ' "${RUN[@]}"; echo; exit 0; fi
   exec "${RUN[@]}"
 else
@@ -118,7 +126,7 @@ else
   # path. The orchestrator must run UNSANDBOXED to spawn worker processes; the
   # workers it launches stay `-s workspace-write` sandboxed + offline.
   PROMPT="read and follow $PLUGIN/skills/$CMD/SKILL.md then run it: $ARGS"
-  RUN=(codex exec "${MFLAG[@]}" --dangerously-bypass-approvals-and-sandbox "$PROMPT")
+  RUN=(codex exec ${MFLAG[@]+"${MFLAG[@]}"} --dangerously-bypass-approvals-and-sandbox "$PROMPT")
   if [ "$DRY" = 1 ] || [ "$GO" != 1 ]; then
     echo
     echo "Prepared Codex command (orchestrator runs UNSANDBOXED to spawn workers;"

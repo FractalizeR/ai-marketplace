@@ -25,7 +25,7 @@ install-opencode: ## Build + install OpenCode commands/agents (OPENCODE_SCOPE=gl
 
 install-launchers: ## Install the `frsr` launcher into BINDIR (default ~/.local/bin)
 	@mkdir -p "$(BINDIR)"
-	@sed 's|@@REPO@@|$(REPO)|g' scripts/frsr > "$(BINDIR)/frsr"
+	@python3 -c 'import sys,pathlib; src,dst,repo=sys.argv[1:4]; pathlib.Path(dst).write_text(pathlib.Path(src).read_text().replace("@@REPO@@", repo))' scripts/frsr "$(BINDIR)/frsr" '$(REPO)'
 	@chmod +x "$(BINDIR)/frsr"
 	@echo "Installed $(BINDIR)/frsr (repo baked as $(REPO))"
 	@case ":$$PATH:" in *":$(BINDIR):"*) : ;; \
