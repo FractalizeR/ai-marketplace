@@ -10,13 +10,13 @@ is no OpenAI store submission.
 ## Quick path
 
 From the repo root, `make install-codex` runs steps 1–2 (and, on re-runs, bumps the
-cachebuster per §6) in one idempotent command, then prints the `CORE_ROOT` export:
+cachebuster per §6) in one idempotent command, then prints the `FR_SECURITY_CORE_ROOT` export:
 
 ```bash
 make install-codex
 ```
 
-Steps 3–5 (export `CORE_ROOT`, resolve models, run) still happen in the session where
+Steps 3–5 (export `FR_SECURITY_CORE_ROOT`, resolve models, run) still happen in the session where
 you run the audit. The manual walkthrough below explains each step.
 
 ## 1. Build the bundle
@@ -37,7 +37,7 @@ dist/codex/                                   # = the dir you register with code
     .codex-plugin/plugin.json                 # plugin manifest
     skills/security-project/SKILL.md          # orchestrator skills
     skills/security-changes/SKILL.md
-    core/                                     # = $CORE_ROOT
+    core/                                     # = $FR_SECURITY_CORE_ROOT
       bin/  checklists/
       agents/security.md  agents/security-recon.md  agents/security-refute.md
     adapter.json                              # build metadata (not read by Codex at runtime)
@@ -64,19 +64,19 @@ codex plugin marketplace list
 After installing, start a **new Codex thread** so the plugin's skills and tools are
 picked up.
 
-## 3. Export `CORE_ROOT`
+## 3. Export `FR_SECURITY_CORE_ROOT`
 
-The derived prose references the portable engine as `${CORE_ROOT}`. Codex does not
+The derived prose references the portable engine as `${FR_SECURITY_CORE_ROOT}`. Codex does not
 substitute this — it is a plain shell variable the orchestrator's bash steps expand,
 and it propagates to every `codex exec` worker the dispatcher launches. Export it to
 the absolute path of the installed plugin's `core/` directory:
 
 ```bash
-export CORE_ROOT=/abs/path/to/dist/codex/plugins/fr-security-review/core
-echo "$CORE_ROOT"   # verify — if empty, every ${CORE_ROOT}/bin/... path breaks
+export FR_SECURITY_CORE_ROOT=/abs/path/to/dist/codex/plugins/fr-security-review/core
+echo "$FR_SECURITY_CORE_ROOT"   # verify — if empty, every ${FR_SECURITY_CORE_ROOT}/bin/... path breaks
 ```
 
-The worker read-follow files live at `$CORE_ROOT/agents/{security,security-recon,security-refute}.md`.
+The worker read-follow files live at `$FR_SECURITY_CORE_ROOT/agents/{security,security-recon,security-refute}.md`.
 
 ## 4. Resolve models
 
@@ -85,7 +85,7 @@ The wave dispatcher tiers workers into `{high, fast}` (trust-boundary waves on
 
 ```bash
 codex debug models                               # inspect what your account exposes
-python3 "$CORE_ROOT/bin/shared/model_resolver.py" \
+python3 "$FR_SECURITY_CORE_ROOT/bin/shared/model_resolver.py" \
   --discovery-cmd "codex debug models" \
   --review-root security-review-codex
 ```
@@ -101,7 +101,7 @@ Start a Codex session (or `codex exec`) and invoke the orchestrator skill
 external-process fan-out (one `codex exec -m <tier>` per slice, ≤6 concurrent) →
 dedupe, writing artifacts under the review root you choose. Recon and each worker run
 as independent `codex exec` processes that **read and follow** the bundled
-`$CORE_ROOT/agents/<role>.md` file — Codex has no named agents, so role prose is
+`$FR_SECURITY_CORE_ROOT/agents/<role>.md` file — Codex has no named agents, so role prose is
 delivered as a file, not a `--agent` handle.
 
 ## 6. Updating during local development
@@ -138,11 +138,11 @@ Codex has no `opencode.json`-style permission file. The security posture rests o
   surface and network access is disabled by default; the methodology is static and
   offline, matching the OpenCode sibling's `webfetch/websearch: deny` promise. Verify
   this default in your Codex config before a hostile-repo audit.
-- **Read scope of `$CORE_ROOT`** — each worker must *read* `${CORE_ROOT}/agents/*.md`,
-  `${CORE_ROOT}/bin/*.py`, and the checklists, which live **outside** `project_root`
+- **Read scope of `$FR_SECURITY_CORE_ROOT`** — each worker must *read* `${FR_SECURITY_CORE_ROOT}/agents/*.md`,
+  `${FR_SECURITY_CORE_ROOT}/bin/*.py`, and the checklists, which live **outside** `project_root`
   and `review_root`. If your Codex `workspace-write` sandbox restricts reads to the
   workspace + `--add-dir` roots (rather than allowing full-disk read), add
-  `--add-dir "${CORE_ROOT}"` to each dispatch template so workers can open the engine.
+  `--add-dir "${FR_SECURITY_CORE_ROOT}"` to each dispatch template so workers can open the engine.
   On a default 0.135.0 install reads are unrestricted, but confirm this before the
   first fan-out (it is the first thing the live smoke checks).
 

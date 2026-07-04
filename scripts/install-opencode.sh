@@ -38,12 +38,12 @@ Done. Commands (/security-project, /security-changes) and agents (security,
 security-recon, security-refute) are installed for scope: $SCOPE.
 
 Before running an audit, point OpenCode at the bundle's scoped permission config
-and export CORE_ROOT (a plain shell variable OpenCode does not substitute):
+and export FR_SECURITY_CORE_ROOT (a plain shell variable OpenCode does not substitute):
 
   export OPENCODE_CONFIG="$DIST/opencode.json"
-  export CORE_ROOT="$DIST/core"
+  export FR_SECURITY_CORE_ROOT="$DIST/core"
 
-Do NOT put CORE_ROOT in your shell rc globally — it is per-harness and would
+Do NOT put FR_SECURITY_CORE_ROOT in your shell rc globally — it is per-harness and would
 collide with the Codex value. Set it in the session where you run the audit.
 
 Run headless:

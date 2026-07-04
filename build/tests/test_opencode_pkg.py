@@ -152,7 +152,7 @@ class InstallDocTests(unittest.TestCase):
         self.text = (HARNESS_ROOT / "INSTALL.md").read_text(encoding="utf-8")
 
     def test_mentions_install_targets_and_setup(self):
-        for anchor in (".opencode/commands", ".opencode/agents", "CORE_ROOT",
+        for anchor in (".opencode/commands", ".opencode/agents", "FR_SECURITY_CORE_ROOT",
                        "OPENCODE_CONFIG", "opencode models", "external_directory"):
             self.assertIn(anchor, self.text, f"INSTALL.md missing {anchor!r}")
 

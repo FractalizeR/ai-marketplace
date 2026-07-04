@@ -2,7 +2,7 @@
   "entrypoint_kind": "skill",
   "fanout": "external_process",
   "worker_invocation": "codex exec -m {model} -C {project_root} -s workspace-write --add-dir {review_root} --skip-git-repo-check -o {capture} \"read and follow {core_root}/agents/security.md then audit this slice: review_root={review_root} project_root={project_root} core_root={core_root} slice_id={slice_id} slice_config={slice_config} mode={mode}\"",
-  "core_root": "${CORE_ROOT}",
+  "core_root": "${FR_SECURITY_CORE_ROOT}",
   "model_discovery_cmd": "codex debug models",
   "tier_defaults": { "high": null, "fast": null },
   "interactive_gates": ["model", "recon_quality", "scope", "console_runner", "winf_warning"],

@@ -123,7 +123,7 @@ has no `render_section`, so Claude can never enter the section path.
   (`assert_coupling_guards`) — they must sit inside a coupled section or the build
   errors. A bare `AskUserQuestion` *prose-mention* token-renders to a neutral phrase.
 - **Token rendering** (`OpenCodeAdapter`, `build/adapters.py`): `${CLAUDE_PLUGIN_ROOT}`
-  → `${CORE_ROOT}`; `$ARGUMENTS` kept verbatim (OpenCode commands support it
+  → `${FR_SECURITY_CORE_ROOT}`; `$ARGUMENTS` kept verbatim (OpenCode commands support it
   natively); **both command and agent frontmatter → synthesized `description`-only
   block** (≤1024, re-quoted/escaped) — an OpenCode agent needs a `description` to
   register under `--agent <name>`; the model comes from the dispatcher's `-m <tier>`,
@@ -153,7 +153,7 @@ has no `render_section`, so Claude can never enter the section path.
 `dist/opencode/` (gitignored) via `build/bundle.py` + the `--out` path in `build.py`.
 Build-time only — live `opencode run` smoke (semantic parity) remains 2C.
 
-- **Topology.** `dist/opencode/` = `core/{bin,checklists}` (= `${CORE_ROOT}`) +
+- **Topology.** `dist/opencode/` = `core/{bin,checklists}` (= `${FR_SECURITY_CORE_ROOT}`) +
   `commands/{security-project,security-changes}.md` + `agents/{security,security-recon,
   security-refute}.md` + authored `opencode.json`/`adapter.json`/`INSTALL.md` + a
   `.fr-opencode-bundle` sentinel. **Orchestrators are OpenCode _commands_** (flat
@@ -161,8 +161,8 @@ Build-time only — live `opencode run` smoke (semantic parity) remains 2C.
   (`agents/<name>.md`, dispatched `opencode run --agent <name>`). This corrected the
   provisional 2B-core `skills/<name>/SKILL.md` topology (verified against OpenCode
   1.17.10 docs + binary: skills are a distinct on-demand primitive).
-- **Shared core + env var (`${CORE_ROOT}`).** The engine is copied **once** into
-  `core/` and both commands + all agents reference `${CORE_ROOT}` — a plain shell
+- **Shared core + env var (`${FR_SECURITY_CORE_ROOT}`).** The engine is copied **once** into
+  `core/` and both commands + all agents reference `${FR_SECURITY_CORE_ROOT}` — a plain shell
   variable the operator exports (OpenCode has no `${CLAUDE_PLUGIN_ROOT}`-style
   substitution). The dispatcher forwards it as `--core-root` → `core_root=` to each
   worker. `bundle_core` copies `bin/` (minus `tests/`/`__pycache__`/`.pyc`/`.DS_Store`)
@@ -198,7 +198,7 @@ proves the derivation *mechanism* structurally; bundle/manifest/`dist/codex`/liv
 section path).
 
 - **Token rendering** (`CodexAdapter`, `build/adapters.py`) — diverges from OpenCode
-  on four tokens: `${CLAUDE_PLUGIN_ROOT}`→`${CORE_ROOT}` (same); **`$ARGUMENTS`→a
+  on four tokens: `${CLAUDE_PLUGIN_ROOT}`→`${FR_SECURITY_CORE_ROOT}` (same); **`$ARGUMENTS`→a
   neutral phrase** (Codex has NO `$ARGUMENTS` substitution, unlike OpenCode commands —
   so it also JOINS the no-leak set); **command frontmatter→a *skill* block (`name`
   from the artifact stem + `description`)** (OpenCode = description-only); **agent
@@ -207,17 +207,17 @@ section path).
   `_strip_codex_xrefs` — it strips **only** the two ORCHESTRATOR refs
   (`security-project.md`/`security-changes.md`), and **preserves** agent read-follow
   refs (`agents/*.md`, `security-recon.md`…) because for Codex those are REAL bundled
-  files a worker opens under `${CORE_ROOT}/agents/` (C1). The skill `name` reaches the
+  files a worker opens under `${FR_SECURITY_CORE_ROOT}/agents/` (C1). The skill `name` reaches the
   `_splice` frontmatter via instance state set in `render_section` (the frontmatter
   lives in the uncoupled `_preamble`, which has no ctx).
 - **Read-follow worker contract.** Codex has no named agents: `codex exec [PROMPT]`
   reads instructions from its arg. Each dispatch template names an exact bundled
   `agents/<role>.md` + "read and follow it" + the per-role inputs (the analog of
   OpenCode's `--agent <name>`). Worker prose lands at `core/agents/<role>.md` (under
-  `${CORE_ROOT}`, 3B). In the **fan-out** `--worker-cmd-template` the path uses the
-  `dispatch.py` `{core_root}` placeholder — `${CORE_ROOT}/agents/…` would raise
+  `${FR_SECURITY_CORE_ROOT}`, 3B). In the **fan-out** `--worker-cmd-template` the path uses the
+  `dispatch.py` `{core_root}` placeholder — `${FR_SECURITY_CORE_ROOT}/agents/…` would raise
   `str.format` KeyError before any process launches (E-C10); recon/refute role
-  templates use `<CORE_ROOT>`-style slots the orchestrator pre-substitutes. Inputs are
+  templates use `<FR_SECURITY_CORE_ROOT>`-style slots the orchestrator pre-substitutes. Inputs are
   authored **flag-free `key=value`** (`console_mode=` / `exclude=` / `diff_files=`),
   the read-follow agent maps them to `recon_inventory.py` flags — no leading-`--` CLI
   collision (the OpenCode 2C `--` incident class).
@@ -227,7 +227,7 @@ section path).
   and no `allowed-tools`/`argument-hint`; agents must NOT carry a leading `---` block,
   E-C3) + codex-xref (only orchestrator refs are a violation). `check_codex_dispatch_template`
   asserts `codex exec` + `-m` + `--add-dir` (the composite-repo write invariant, M1-DS)
-  + a bundled `agents/<role>.md` read-follow ref (NOT `--agent`) + no `${CORE_ROOT}/agents/`.
+  + a bundled `agents/<role>.md` read-follow ref (NOT `--agent`) + no `${FR_SECURITY_CORE_ROOT}/agents/`.
   Both run in `build --harness=codex --mode=check` (exit 0 clean / 1 gate / 2 error);
   `--mode=write` builds the bundle (Phase 3B-pkg below). Templates live under
   `harness/codex/sections/<artifact>/<anchor>.md` (same 12 anchors as `harness/opencode/
@@ -248,8 +248,8 @@ ROOT + `.codex-plugin` + skills + read-follow agents under `core/`).
   SKILL.md, core/{bin,checklists,agents/{security,security-recon,security-refute}.md}, adapter.json,
   INSTALL.md}`. **Orchestrators are Codex _skills_** (`skills/<name>/SKILL.md`, name+description
   frontmatter); **workers are read-follow files under `core/`** (`core/agents/<role>.md`, frontmatter
-  stripped) — placed under `${CORE_ROOT}` so the dispatch templates' `{core_root}/agents/<role>.md`
-  (fan-out) and `<CORE_ROOT>/agents/<role>.md` (recon/refute) resolve. This is the deliberate
+  stripped) — placed under `${FR_SECURITY_CORE_ROOT}` so the dispatch templates' `{core_root}/agents/<role>.md`
+  (fan-out) and `<FR_SECURITY_CORE_ROOT>/agents/<role>.md` (recon/refute) resolve. This is the deliberate
   divergence from OpenCode's top-level *registered* `agents/`. The `<plugin-name>` is read once from
   the authored `plugin.json.name` and gate-reconciled with the marketplace entry name / `source.path`.
 - **Manifest gate = stdlib mirror.** The authoritative Codex `validate_plugin.py` imports PyYAML

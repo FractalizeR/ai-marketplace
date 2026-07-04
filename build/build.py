@@ -149,7 +149,7 @@ def codex_out_path(path: Path, plugin_out: Path) -> Path:
     """Output topology under the plugin dir: orchestrators are Codex *skills*
     (``skills/<name>/SKILL.md``); workers are read-follow files under the shared
     core (``core/agents/<name>.md``), where the dispatch templates' absolute
-    ``${CORE_ROOT}/agents/<name>.md`` / ``{core_root}/agents/<name>.md`` resolve."""
+    ``${FR_SECURITY_CORE_ROOT}/agents/<name>.md`` / ``{core_root}/agents/<name>.md`` resolve."""
     if path.parent.name == "commands":
         return plugin_out / "skills" / path.stem / "SKILL.md"
     return plugin_out / "core" / "agents" / f"{path.stem}.md"

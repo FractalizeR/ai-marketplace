@@ -13,7 +13,7 @@ from adapters import get_adapter, RenderContext
 from build import render_codex_artifact
 
 
-CLEAN_SKILL = '---\nname: security-project\ndescription: "audit"\n---\nbody with ${CORE_ROOT}\n'
+CLEAN_SKILL = '---\nname: security-project\ndescription: "audit"\n---\nbody with ${FR_SECURITY_CORE_ROOT}\n'
 
 
 class OutputGateUnitTests(unittest.TestCase):
@@ -86,7 +86,7 @@ class DispatchTemplateGateTests(unittest.TestCase):
     GOOD_RECON = ('codex exec -m <HIGH_TIER> -C <PROJECT_ROOT> -s workspace-write '
                   '--add-dir <REVIEW_ROOT> --skip-git-repo-check '
                   '-o <REVIEW_ROOT>/captures/recon.capture.txt '
-                  '"read and follow <CORE_ROOT>/agents/security-recon.md"')
+                  '"read and follow <FR_SECURITY_CORE_ROOT>/agents/security-recon.md"')
 
     def test_good_worker_passes(self):
         self.assertEqual(check_codex_dispatch_template(self.GOOD_WORKER), [])
@@ -115,9 +115,9 @@ class DispatchTemplateGateTests(unittest.TestCase):
             self.GOOD_WORKER.replace("{core_root}/agents/security.md", "somewhere")))
 
     def test_dollar_core_root_agents_flagged(self):
-        # E-C10: ${CORE_ROOT}/agents in a fan-out template = str.format KeyError.
+        # E-C10: ${FR_SECURITY_CORE_ROOT}/agents in a fan-out template = str.format KeyError.
         bad = self.GOOD_WORKER.replace("{core_root}/agents/security.md",
-                                       "${CORE_ROOT}/agents/security.md")
+                                       "${FR_SECURITY_CORE_ROOT}/agents/security.md")
         self.assertTrue(check_codex_dispatch_template(bad))
 
 

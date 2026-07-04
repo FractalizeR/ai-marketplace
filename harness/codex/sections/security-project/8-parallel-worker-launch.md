@@ -5,19 +5,19 @@ Codex has no named agents and no in-process subagent fan-out — each wave runs 
 Run the whole plan in **one** dispatcher call — it batches internally (`max_parallel=6`) so you do not split batches by hand:
 
 ```bash
-python3 ${CORE_ROOT}/bin/shared/dispatch.py \
+python3 ${FR_SECURITY_CORE_ROOT}/bin/shared/dispatch.py \
   --plan "<REVIEW_ROOT>/waves_plan.json" \
   --model-map "<REVIEW_ROOT>/.model_map.json" \
   --project-root "<PROJECT_ROOT>" \
   --review-root "<REVIEW_ROOT>" \
-  --core-root "${CORE_ROOT}" \
+  --core-root "${FR_SECURITY_CORE_ROOT}" \
   --max-parallel 6 \
   --capture-dir "<REVIEW_ROOT>/captures" \
   --allow-gaps \
   --worker-cmd-template 'codex exec -m {model} -C {project_root} -s workspace-write --add-dir {review_root} --skip-git-repo-check -o {capture} "read and follow {core_root}/agents/security.md then audit this slice: review_root={review_root} project_root={project_root} core_root={core_root} slice_id={slice_id} slice_config={slice_config} mode=project"'
 ```
 
-The read-follow path uses the `{core_root}` **dispatch placeholder**, not `${CORE_ROOT}` — the dispatcher `str.format`-substitutes the template into argv, and `${CORE_ROOT}` would be parsed as an unknown `{CORE_ROOT}` field and abort the fan-out before any process launches. `-C {project_root}` sets each worker's cwd; `--add-dir {review_root}` grants the wave-file write (the review root lies outside `project_root` in a composite repo, so `workspace-write` would otherwise deny it); `-o {capture}` records the worker's last message under `--capture-dir` for the safety net.
+The read-follow path uses the `{core_root}` **dispatch placeholder**, not `${FR_SECURITY_CORE_ROOT}` — the dispatcher `str.format`-substitutes the template into argv, and `${FR_SECURITY_CORE_ROOT}` would be parsed as an unknown `{FR_SECURITY_CORE_ROOT}` field and abort the fan-out before any process launches. `-C {project_root}` sets each worker's cwd; `--add-dir {review_root}` grants the wave-file write (the review root lies outside `project_root` in a composite repo, so `workspace-write` would otherwise deny it); `-o {capture}` records the worker's last message under `--capture-dir` for the safety net.
 
 `--allow-gaps` is **required**, not optional: in strict mode a single crashed or timed-out worker raises `DispatchGapError` (exit 2) *before* the JSON result or `dispatch_gaps.json` is written, and a blind re-run would then delete every already-written wave file (freshness protocol) and redo all workers. With `--allow-gaps` the gap is recorded instead (exit 1), the JSON result is printed, and step 9 reconciles it.
 

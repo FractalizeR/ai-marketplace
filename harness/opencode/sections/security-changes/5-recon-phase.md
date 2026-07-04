@@ -2,7 +2,7 @@
 
 Recon collects the inventory **across the whole project** (for full context), but the recipe marks `touched_by_diff: true/false` on applicable items per the list of changed files.
 
-**If `--skip-recon` AND `<REVIEW_ROOT>/CONTEXT.md` exists:** run fingerprint validation — `python3 ${CORE_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>"` then `python3 ${CORE_ROOT}/bin/compute_fingerprint.py . --json`, comparing `project_fingerprint` / `code_fingerprint` against the existing CONTEXT.md frontmatter. project_fingerprint mismatch → abort (full recon required); both match → reuse as-is; project match + code mismatch → continue only with `--force-skip-recon`, otherwise abort with that hint (OpenCode cannot prompt, so there is no interactive confirm — `--interactive` downgrades the abort to a stale-context warning and continues with `recon_confidence: medium`, no auto-retry).
+**If `--skip-recon` AND `<REVIEW_ROOT>/CONTEXT.md` exists:** run fingerprint validation — `python3 ${FR_SECURITY_CORE_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>"` then `python3 ${FR_SECURITY_CORE_ROOT}/bin/compute_fingerprint.py . --json`, comparing `project_fingerprint` / `code_fingerprint` against the existing CONTEXT.md frontmatter. project_fingerprint mismatch → abort (full recon required); both match → reuse as-is; project match + code mismatch → continue only with `--force-skip-recon`, otherwise abort with that hint (OpenCode cannot prompt, so there is no interactive confirm — `--interactive` downgrades the abort to a stale-context warning and continues with `recon_confidence: medium`, no auto-retry).
 
 **Otherwise:**
 
@@ -11,11 +11,11 @@ Launch **one** recon process. OpenCode has no in-process subagent — recon runs
 Forward `--diff-files=<REVIEW_ROOT>/diff_files.txt` to the recon process (it forwards to the utility as-is — see contract in `agents/security-recon.md`). Forward the console decision from step 4c (`CONSOLE_CMD`: `--no-console`, `--console-cmd=<tpl>`, or nothing). If step 4a collected a non-empty `EXCLUDE_CSV`, add `--exclude=<EXCLUDE_CSV>`. Both paths are forwarded **absolute** (Step 0.4 invariant):
 
 ```bash
-python3 ${CORE_ROOT}/bin/shared/dispatch.py \
+python3 ${FR_SECURITY_CORE_ROOT}/bin/shared/dispatch.py \
   --role recon \
   --project-root "<PROJECT_ROOT>" \
   --review-root "<REVIEW_ROOT>" \
-  --core-root "${CORE_ROOT}" \
+  --core-root "${FR_SECURITY_CORE_ROOT}" \
   --role-cmd-template 'opencode run -m <HIGH_TIER> --agent security-recon -- "project_root=<PROJECT_ROOT> review_root=<REVIEW_ROOT> --diff-files=<REVIEW_ROOT>/diff_files.txt [--no-console | --console-cmd=<tpl>] [--exclude=<EXCLUDE_CSV>]"'
 ```
 
@@ -32,7 +32,7 @@ After the process returns — success means `<REVIEW_ROOT>/CONTEXT.md` was mater
 Run filesystem coverage sanity-check:
 
 ```bash
-python3 ${CORE_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>" --sanity --project-root "<PROJECT_ROOT>"
+python3 ${FR_SECURITY_CORE_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>" --sanity --project-root "<PROJECT_ROOT>"
 ```
 
 `--project-root` is required here — without it `validate_context.py` falls back to inferring from `parent(review_root)`, which fails for composite repos (parent has no `composer.json` / `package.json`) and prints `WARNING: project_root not specified and could not be inferred — sanity coverage skipped`. The fallback exists for legacy CLI callers; the orchestrator must always be explicit.

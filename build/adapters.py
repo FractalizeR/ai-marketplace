@@ -96,7 +96,7 @@ class _StubAdapter:
 
 
 # --- OpenCode rendering constants -------------------------------------------
-OPENCODE_CORE_ROOT = "${CORE_ROOT}"          # bundled-core placeholder (NOT Claude's)
+OPENCODE_CORE_ROOT = "${FR_SECURITY_CORE_ROOT}"          # bundled-core placeholder (NOT Claude's)
 OPENCODE_AUQ_PHRASE = "an interactive prompt"
 OPENCODE_MCP_PHRASE = "a semantic IDE tool"
 _MAX_DESC = 1024
@@ -226,14 +226,14 @@ def _strip_xrefs(text: str) -> str:
 
 
 # --- Codex rendering constants ----------------------------------------------
-CODEX_CORE_ROOT = OPENCODE_CORE_ROOT          # ${CORE_ROOT}; operator exports it (same as OpenCode)
+CODEX_CORE_ROOT = OPENCODE_CORE_ROOT          # ${FR_SECURITY_CORE_ROOT}; operator exports it (same as OpenCode)
 CODEX_ARGS_PHRASE = "the invocation arguments"  # $ARGUMENTS has NO Codex substitution → neutral prose
 MCP_PHRASE = OPENCODE_MCP_PHRASE              # harness-neutral aliases (reused verbatim)
 AUQ_PHRASE = OPENCODE_AUQ_PHRASE
 # Codex strips only ORCHESTRATOR file refs (security-project.md / security-changes.md):
 # a standalone skill body cannot resolve a sibling orchestrator. Agent-role refs
 # (agents/*.md, security-recon.md, security-refute.md) are REAL bundled read-follow
-# files a codex worker opens under ${CORE_ROOT}/agents/ — they MUST survive (C1/CX1).
+# files a codex worker opens under ${FR_SECURITY_CORE_ROOT}/agents/ — they MUST survive (C1/CX1).
 # `security-project`/`security-changes` are orchestrator-only names (no agent shares
 # them), so strip them wherever they appear; the left guard `(?<![\w-])` only blocks a
 # match inside a longer word/hyphenated token (a fixed-length `agents/` lookbehind

@@ -2,7 +2,7 @@
 
 An OpenCode artifact is not just the derived command/agent prose — workers must
 read ``bin/`` + ``checklists/`` with no out-of-worktree hop, so the build copies
-the engine once into ``<out>/core/`` (= ``${CORE_ROOT}``) and drops the authored
+the engine once into ``<out>/core/`` (= ``${FR_SECURITY_CORE_ROOT}``) and drops the authored
 runtime configs (``opencode.json`` / ``adapter.json`` / ``INSTALL.md``) beside it.
 
 Deterministic and idempotent: a filtered, sorted walk copies byte-identical

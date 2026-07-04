@@ -168,9 +168,9 @@ def check_codex_dispatch_template(text: str) -> list[str]:
     if not _CODEX_AGENT_READFOLLOW_RE.search(text):
         out.append("dispatch template has no read-follow ref to a bundled `agents/<role>.md`")
     # E-C10: a fan-out template is str.format-substituted by dispatch.py, so the
-    # read-follow path must use the {core_root} placeholder — ${CORE_ROOT}/agents/…
-    # would raise `str.format` KeyError('CORE_ROOT') before any process launches.
-    if re.search(r"\$\{CORE_ROOT\}/agents/", text):
-        out.append("read-follow path uses ${CORE_ROOT}/agents (str.format KeyError) — "
+    # read-follow path must use the {core_root} placeholder — ${FR_SECURITY_CORE_ROOT}/agents/…
+    # would raise `str.format` KeyError('FR_SECURITY_CORE_ROOT') before any process launches.
+    if re.search(r"\$\{FR_SECURITY_CORE_ROOT\}/agents/", text):
+        out.append("read-follow path uses ${FR_SECURITY_CORE_ROOT}/agents (str.format KeyError) — "
                    "use the {core_root} dispatch placeholder")
     return out

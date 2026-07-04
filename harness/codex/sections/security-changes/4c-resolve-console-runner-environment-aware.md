@@ -10,11 +10,11 @@ Skip this whole step (set `CONSOLE_MODE = off`) when **any** holds:
 
 Otherwise:
 
-1. Detect the recipe: `python3 ${CORE_ROOT}/bin/recon_inventory.py "<PROJECT_ROOT>" --detect`. Console enrichment applies to **Symfony** only — for other recipes proceed with `CONSOLE_MODE = off`.
+1. Detect the recipe: `python3 ${FR_SECURITY_CORE_ROOT}/bin/recon_inventory.py "<PROJECT_ROOT>" --detect`. Console enrichment applies to **Symfony** only — for other recipes proceed with `CONSOLE_MODE = off`.
 2. Probe (read-only, safe even for untrusted repos):
 
    ```bash
-   python3 ${CORE_ROOT}/bin/recon/environment.py "<PROJECT_ROOT>" --console-entrypoint "php bin/console"
+   python3 ${FR_SECURITY_CORE_ROOT}/bin/recon/environment.py "<PROJECT_ROOT>" --console-entrypoint "php bin/console"
    ```
 
    It prints JSON: `{containerized, container_signals, host_php_present, host_php_version, suggested_php_service, suggestions:[{mode, cmd_template, label, source, detail}], reason}`.

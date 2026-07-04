@@ -9,13 +9,13 @@ Claude-authoritative command/agent prose — do not hand-edit files under
 From the repo root, `make install-opencode` runs steps 1–2 in one idempotent command
 (global scope by default; `OPENCODE_SCOPE=project make install-opencode` for the
 current project's `.opencode/`), leaves your existing `opencode.json` untouched, and
-prints the `OPENCODE_CONFIG` + `CORE_ROOT` exports:
+prints the `OPENCODE_CONFIG` + `FR_SECURITY_CORE_ROOT` exports:
 
 ```bash
 make install-opencode
 ```
 
-Steps 3–5 (point at the permission config, export `CORE_ROOT`, resolve models, run)
+Steps 3–5 (point at the permission config, export `FR_SECURITY_CORE_ROOT`, resolve models, run)
 still happen in the session where you run the audit. The manual walkthrough below
 explains each step.
 
@@ -31,7 +31,7 @@ This emits a self-contained tree:
 
 ```
 dist/opencode/
-  core/                 # the portable engine (= $CORE_ROOT)
+  core/                 # the portable engine (= $FR_SECURITY_CORE_ROOT)
     bin/  checklists/
   commands/             # entrypoints: /security-project, /security-changes
     security-project.md
@@ -73,19 +73,19 @@ export OPENCODE_CONFIG=path/to/dist/opencode/opencode.json
 (The `OPENCODE_CONFIG` env var is a separate precedence layer from the
 `.opencode/` directories — set one or the other, not necessarily both.)
 
-## 4. Export `CORE_ROOT`
+## 4. Export `FR_SECURITY_CORE_ROOT`
 
-The derived prose references the portable engine as `${CORE_ROOT}`. OpenCode
+The derived prose references the portable engine as `${FR_SECURITY_CORE_ROOT}`. OpenCode
 does **not** substitute this the way Claude substitutes `${CLAUDE_PLUGIN_ROOT}` —
 it is a plain shell variable that the orchestrator's bash steps expand, and it
 propagates to every `opencode run` worker the dispatcher launches. Export it to
 the absolute path of the bundle's `core/` directory:
 
 ```bash
-export CORE_ROOT=/abs/path/to/dist/opencode/core
+export FR_SECURITY_CORE_ROOT=/abs/path/to/dist/opencode/core
 # on the same machine you just built on:
-#   export CORE_ROOT=$(pwd)/dist/opencode/core
-echo "$CORE_ROOT"   # verify — if empty, every ${CORE_ROOT}/bin/... path breaks
+#   export FR_SECURITY_CORE_ROOT=$(pwd)/dist/opencode/core
+echo "$FR_SECURITY_CORE_ROOT"   # verify — if empty, every ${FR_SECURITY_CORE_ROOT}/bin/... path breaks
 ```
 
 ## 5. Resolve models
@@ -95,7 +95,7 @@ The wave dispatcher tiers workers into `{high, fast}` (trust-boundary waves on
 
 ```bash
 opencode models                                  # inspect what your providers expose
-python3 "$CORE_ROOT/bin/shared/model_resolver.py" \
+python3 "$FR_SECURITY_CORE_ROOT/bin/shared/model_resolver.py" \
   --discovery-cmd "opencode models" \
   --review-root security-review-opencode
 ```
@@ -126,7 +126,7 @@ writing artifacts under `security-review-opencode/`.
 - `webfetch: "deny"`, `websearch: "deny"` — the methodology is static and
   offline; a security auditor has no reason to reach the network.
 - `external_directory: "allow"`, `bash: "allow"`, `read`/`edit: "allow"` — the
-  pipeline reads `$CORE_ROOT`, `project_root`, and `review_root`, which normally
+  pipeline reads `$FR_SECURITY_CORE_ROOT`, `project_root`, and `review_root`, which normally
   live **outside** the OpenCode worktree, and writes wave files across them; it
   also runs `python3`/`php`/`opencode`. These paths are only known at runtime,
   so they cannot be pattern-scoped in a static config, and a headless

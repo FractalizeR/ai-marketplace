@@ -157,7 +157,7 @@ class InstallDocTests(unittest.TestCase):
         self.text = (HARNESS_ROOT / "INSTALL.md").read_text(encoding="utf-8")
 
     def test_marketplace_add_and_plugin_add_present(self):
-        for anchor in ("codex plugin marketplace add", "CORE_ROOT",
+        for anchor in ("codex plugin marketplace add", "FR_SECURITY_CORE_ROOT",
                        "codex debug models", "workspace-write"):
             self.assertIn(anchor, self.text, f"INSTALL.md missing {anchor!r}")
 

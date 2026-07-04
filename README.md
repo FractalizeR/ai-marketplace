@@ -32,7 +32,7 @@ make install-opencode   # build + drop commands/agents into ~/.config/opencode (
 make help               # list all targets (build-*, check, test-*)
 ```
 
-The bundles land in `dist/` (gitignored), so each machine builds its own. Each installer then prints the `CORE_ROOT` (and, for OpenCode, `OPENCODE_CONFIG`) export you set in the session where you run an audit — these are per-harness and must **not** go in your shell rc globally. For the full manual steps, model setup, and the permission/offline posture, see:
+The bundles land in `dist/` (gitignored), so each machine builds its own. Each installer then prints the `FR_SECURITY_CORE_ROOT` (and, for OpenCode, `OPENCODE_CONFIG`) export you set in the session where you run an audit — these are per-harness and must **not** go in your shell rc globally. For the full manual steps, model setup, and the permission/offline posture, see:
 
 - Codex CLI — [`harness/codex/INSTALL.md`](./harness/codex/INSTALL.md)
 - OpenCode — [`harness/opencode/INSTALL.md`](./harness/opencode/INSTALL.md)

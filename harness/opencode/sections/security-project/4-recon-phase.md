@@ -2,8 +2,8 @@
 
 **If `--skip-recon` is passed AND `<REVIEW_ROOT>/CONTEXT.md` exists:**
 
-1. Validate the schema: `python3 ${CORE_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>"`
-2. Compute current fingerprints: `python3 ${CORE_ROOT}/bin/compute_fingerprint.py . --json`
+1. Validate the schema: `python3 ${FR_SECURITY_CORE_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>"`
+2. Compute current fingerprints: `python3 ${FR_SECURITY_CORE_ROOT}/bin/compute_fingerprint.py . --json`
 3. Extract `project_fingerprint` and `code_fingerprint` from the frontmatter of the existing `<REVIEW_ROOT>/CONTEXT.md`, compare:
    - **project_fingerprint mismatch** → `abort`: "Configuration/dependencies changed, full recon required"
    - **project_fingerprint match + code_fingerprint match** → use context as-is
@@ -16,11 +16,11 @@
 Launch **one** recon process. OpenCode has no in-process subagent — recon runs as a single external `opencode run` invocation (the recon SKILL), driven through the shared role dispatcher (`shared/dispatch.py`, `dispatch_role`) so freshness, stdout capture, and gap classification match every other stage. The recon process picks the recipe itself (detect) and calls `recon_inventory.py`, which writes `<REVIEW_ROOT>/CONTEXT.md`. Forward the same inputs the in-process path forwarded — both paths **absolute** (Step 0.4 invariant), the console decision from step 3b (`CONSOLE_CMD`: `--no-console`, `--console-cmd=<tpl>`, or nothing), and, if step 3a collected a non-empty `EXCLUDE_CSV`, `--exclude=<EXCLUDE_CSV>`:
 
 ```bash
-python3 ${CORE_ROOT}/bin/shared/dispatch.py \
+python3 ${FR_SECURITY_CORE_ROOT}/bin/shared/dispatch.py \
   --role recon \
   --project-root "<PROJECT_ROOT>" \
   --review-root "<REVIEW_ROOT>" \
-  --core-root "${CORE_ROOT}" \
+  --core-root "${FR_SECURITY_CORE_ROOT}" \
   --role-cmd-template 'opencode run -m <HIGH_TIER> --agent security-recon -- "project_root=<PROJECT_ROOT> review_root=<REVIEW_ROOT> [--no-console | --console-cmd=<tpl>] [--exclude=<EXCLUDE_CSV>]"'
 ```
 
@@ -37,7 +37,7 @@ After the process returns — success means `<REVIEW_ROOT>/CONTEXT.md` was mater
 Then additionally run sanity-check with filesystem coverage:
 
 ```bash
-python3 ${CORE_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>" --sanity --project-root "<PROJECT_ROOT>"
+python3 ${FR_SECURITY_CORE_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>" --sanity --project-root "<PROJECT_ROOT>"
 ```
 
 `--project-root` is required here — without it `validate_context.py` falls back to inferring from `parent(review_root)`, which fails for composite repos (parent has no `composer.json` / `package.json`) and prints `WARNING: project_root not specified and could not be inferred — sanity coverage skipped`. The fallback exists for legacy CLI callers; the orchestrator must always be explicit.

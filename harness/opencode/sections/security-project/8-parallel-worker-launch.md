@@ -5,12 +5,12 @@ OpenCode has no in-process subagent fan-out — each wave runs as its own extern
 Run the whole plan in **one** dispatcher call — it batches internally (`max_parallel=6`) so you do not split batches by hand:
 
 ```bash
-python3 ${CORE_ROOT}/bin/shared/dispatch.py \
+python3 ${FR_SECURITY_CORE_ROOT}/bin/shared/dispatch.py \
   --plan "<REVIEW_ROOT>/waves_plan.json" \
   --model-map "<REVIEW_ROOT>/.model_map.json" \
   --project-root "<PROJECT_ROOT>" \
   --review-root "<REVIEW_ROOT>" \
-  --core-root "${CORE_ROOT}" \
+  --core-root "${FR_SECURITY_CORE_ROOT}" \
   --max-parallel 6 \
   --capture-dir "<REVIEW_ROOT>/captures" \
   --allow-gaps \

@@ -52,12 +52,12 @@ codex plugin list 2>/dev/null | grep -F "${PLUGIN}@${MARKET}" || true
 
 cat <<EOF
 
-Done. Before running an audit in a Codex session, export CORE_ROOT (the portable
-engine — Codex does not substitute \${CORE_ROOT}, it is a plain shell variable):
+Done. Before running an audit in a Codex session, export FR_SECURITY_CORE_ROOT (the portable
+engine — Codex does not substitute \${FR_SECURITY_CORE_ROOT}, it is a plain shell variable):
 
-  export CORE_ROOT="$PLUGIN_DIR/core"
+  export FR_SECURITY_CORE_ROOT="$PLUGIN_DIR/core"
 
-Do NOT put CORE_ROOT in your shell rc globally — it is per-harness and would
+Do NOT put FR_SECURITY_CORE_ROOT in your shell rc globally — it is per-harness and would
 collide with the OpenCode value. Set it in the session where you run the audit.
 
 Then start a NEW Codex thread and invoke the skill: security-project / security-changes.

@@ -15,7 +15,7 @@ from build import render_opencode_artifact, opencode_out_path
 
 class GateUnitTests(unittest.TestCase):
     def test_clean_text_passes(self):
-        self.assertEqual(check_opencode_output("# ok\n$ARGUMENTS and ${CORE_ROOT}\n"), [])
+        self.assertEqual(check_opencode_output("# ok\n$ARGUMENTS and ${FR_SECURITY_CORE_ROOT}\n"), [])
 
     def test_core_root_leak(self):
         self.assertTrue(check_opencode_output("x ${CLAUDE_PLUGIN_ROOT} y"))

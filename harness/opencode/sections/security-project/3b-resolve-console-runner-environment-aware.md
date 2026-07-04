@@ -10,12 +10,12 @@ Skip this whole step (set `CONSOLE_CMD = none`, proceed to step 4) when **any** 
 
 Otherwise:
 
-1. **Detect whether the stack even has console enrichment.** Run `python3 ${CORE_ROOT}/bin/recon_inventory.py "<PROJECT_ROOT>" --detect` and read `recipe`. Only **Symfony** has console enrichment today (Laravel/generic are fully static). If `recipe != symfony` → nothing to resolve, proceed to step 4 with no console flags.
+1. **Detect whether the stack even has console enrichment.** Run `python3 ${FR_SECURITY_CORE_ROOT}/bin/recon_inventory.py "<PROJECT_ROOT>" --detect` and read `recipe`. Only **Symfony** has console enrichment today (Laravel/generic are fully static). If `recipe != symfony` → nothing to resolve, proceed to step 4 with no console flags.
 
 2. **Probe the environment** (read-only; runs only host `php --version` + file reads — safe even for untrusted repos):
 
    ```bash
-   python3 ${CORE_ROOT}/bin/recon/environment.py "<PROJECT_ROOT>" --console-entrypoint "php bin/console"
+   python3 ${FR_SECURITY_CORE_ROOT}/bin/recon/environment.py "<PROJECT_ROOT>" --console-entrypoint "php bin/console"
    ```
 
    This prints JSON: `{containerized, container_signals, host_php_present, host_php_version, suggested_php_service, suggestions:[{mode, cmd_template, label, source, detail}], reason}`.

@@ -2,8 +2,8 @@
 
 **If `--skip-recon` is passed AND `<REVIEW_ROOT>/CONTEXT.md` exists:**
 
-1. Validate the schema: `python3 ${CORE_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>"`
-2. Compute current fingerprints: `python3 ${CORE_ROOT}/bin/compute_fingerprint.py . --json`
+1. Validate the schema: `python3 ${FR_SECURITY_CORE_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>"`
+2. Compute current fingerprints: `python3 ${FR_SECURITY_CORE_ROOT}/bin/compute_fingerprint.py . --json`
 3. Extract `project_fingerprint` and `code_fingerprint` from the frontmatter of the existing `<REVIEW_ROOT>/CONTEXT.md`, compare:
    - **project_fingerprint mismatch** → `abort`: "Configuration/dependencies changed, full recon required"
    - **project_fingerprint match + code_fingerprint match** → use context as-is
@@ -16,17 +16,17 @@
 Launch **one** recon process. Codex has no named agents and no in-process subagent — recon runs as a single external `codex exec` invocation that **reads and follows** the bundled recon agent file, driven through the shared role dispatcher (`shared/dispatch.py`, `dispatch_role`) so freshness, stdout capture, and gap classification match every other stage. The recon process picks the recipe itself (detect) and calls `recon_inventory.py`, which writes `<REVIEW_ROOT>/CONTEXT.md`. Forward the same inputs the in-process path forwarded — both paths **absolute** (Step 0.4 invariant), the console decision from step 3b (`CONSOLE_MODE`), and, if step 3a collected a non-empty exclude list, `EXCLUDE_CSV`:
 
 ```bash
-python3 ${CORE_ROOT}/bin/shared/dispatch.py \
+python3 ${FR_SECURITY_CORE_ROOT}/bin/shared/dispatch.py \
   --role recon \
   --project-root "<PROJECT_ROOT>" \
   --review-root "<REVIEW_ROOT>" \
-  --core-root "${CORE_ROOT}" \
-  --role-cmd-template 'codex exec -m <HIGH_TIER> -C <PROJECT_ROOT> -s workspace-write --add-dir <REVIEW_ROOT> --skip-git-repo-check -o <REVIEW_ROOT>/captures/recon.capture.txt "read and follow <CORE_ROOT>/agents/security-recon.md then run recon: project_root=<PROJECT_ROOT> review_root=<REVIEW_ROOT> console_mode=<CONSOLE_MODE> exclude=<EXCLUDE_CSV>"'
+  --core-root "${FR_SECURITY_CORE_ROOT}" \
+  --role-cmd-template 'codex exec -m <HIGH_TIER> -C <PROJECT_ROOT> -s workspace-write --add-dir <REVIEW_ROOT> --skip-git-repo-check -o <REVIEW_ROOT>/captures/recon.capture.txt "read and follow <FR_SECURITY_CORE_ROOT>/agents/security-recon.md then run recon: project_root=<PROJECT_ROOT> review_root=<REVIEW_ROOT> console_mode=<CONSOLE_MODE> exclude=<EXCLUDE_CSV>"'
 ```
 
 **Author the inputs flag-free (`key=value`).** `codex exec` takes a single positional PROMPT, so the whole read-follow instruction is one quoted argument — never a leading-`--` flag that could collide with `codex exec`'s own options if the surrounding quotes are lost while resolving values. The recon agent maps `console_mode` (`off` | `auto` | a container/Makefile command) and `exclude` to the corresponding `recon_inventory.py` flags (`--no-console` / `--console-cmd=<tpl>` / `--exclude=<csv>`); the read-follow file is the single source of that mapping.
 
-**Placeholder discipline.** `dispatch.py --role-cmd-template` substitutes only `{…}`-form placeholders (`{project_root}`, `{review_root}`, `{core_root}` — the same ones the fan-out worker template uses), never `<…>` slots. Replace every `<…>` slot in the template string — `<HIGH_TIER>`, `<PROJECT_ROOT>`, `<REVIEW_ROOT>`, `<CORE_ROOT>`, `<CONSOLE_MODE>`, `<EXCLUDE_CSV>` — with its concrete value **before** invoking `dispatch.py`. An unsubstituted `<HIGH_TIER>` reaches `codex exec` verbatim (`-m <HIGH_TIER>`) and the recon process fails; the dispatcher will not expand it for you.
+**Placeholder discipline.** `dispatch.py --role-cmd-template` substitutes only `{…}`-form placeholders (`{project_root}`, `{review_root}`, `{core_root}` — the same ones the fan-out worker template uses), never `<…>` slots. Replace every `<…>` slot in the template string — `<HIGH_TIER>`, `<PROJECT_ROOT>`, `<REVIEW_ROOT>`, `<FR_SECURITY_CORE_ROOT>`, `<CONSOLE_MODE>`, `<EXCLUDE_CSV>` — with its concrete value **before** invoking `dispatch.py`. An unsubstituted `<HIGH_TIER>` reaches `codex exec` verbatim (`-m <HIGH_TIER>`) and the recon process fails; the dispatcher will not expand it for you.
 
 `<HIGH_TIER>` is the high-tier model id from the resolved `<REVIEW_ROOT>/.model_map.json` (`shared/model_resolver.py`); recon runs on the high tier. `-C <PROJECT_ROOT>` sets the worker's cwd; `--add-dir <REVIEW_ROOT>` grants write access to the review root — in a composite repo it lies **outside** `project_root`, and the `workspace-write` sandbox would otherwise deny the CONTEXT.md write silently. `--skip-git-repo-check` lets `codex exec` run in a non-git subtree. Recon is a single process — no fan-out — so `dispatch_role` launches one `codex exec` and treats the presence of `<REVIEW_ROOT>/CONTEXT.md` as success.
 
@@ -35,7 +35,7 @@ After the process returns — success means `<REVIEW_ROOT>/CONTEXT.md` was mater
 Then additionally run sanity-check with filesystem coverage:
 
 ```bash
-python3 ${CORE_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>" --sanity --project-root "<PROJECT_ROOT>"
+python3 ${FR_SECURITY_CORE_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>" --sanity --project-root "<PROJECT_ROOT>"
 ```
 
 `--project-root` is required here — without it `validate_context.py` falls back to inferring from `parent(review_root)`, which fails for composite repos (parent has no `composer.json` / `package.json`) and prints `WARNING: project_root not specified and could not be inferred — sanity coverage skipped`. The fallback exists for legacy CLI callers; the orchestrator must always be explicit.
