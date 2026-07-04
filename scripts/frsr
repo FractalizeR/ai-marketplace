@@ -91,11 +91,26 @@ if [ "$RESOLVE" = 1 ]; then
   if [ "$DRY" = 1 ]; then echo "DRY: ${RESOLVE_CMD[*]}"; else "${RESOLVE_CMD[@]}"; fi
 fi
 
-ARGS="project_root=$PROJECT_ROOT review_root=$REVIEW_ROOT"
+# The orchestrator process itself (not just the per-wave workers) needs a capable
+# model — run it on the resolved `high` tier. Workers get their own -m per slice
+# from the persisted map, inside the dispatcher.
+MFLAG=()
+if [ -f "$REVIEW_ROOT/.model_map.json" ]; then
+  HIGH="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("high",""))' \
+          "$REVIEW_ROOT/.model_map.json" 2>/dev/null || true)"
+  [ -n "${HIGH:-}" ] && { MFLAG=(-m "$HIGH"); echo "frsr: orchestrator model=$HIGH"; }
+fi
+
+# The orchestrator parses dash-flags from its arguments (see the command's
+# argument-hint: --review-root=, --project-root=, --no-console, --quick, …).
+ARGS="--project-root=$PROJECT_ROOT --review-root=$REVIEW_ROOT"
 [ ${#PASS[@]} -gt 0 ] && ARGS="$ARGS ${PASS[*]}"
 
 if [ "$HARNESS" = opencode ]; then
-  RUN=(opencode run --command "$CMD" "$ARGS")
+  # `--` before the message: ARGS starts with --project-root=, which opencode
+  # would otherwise parse as its own CLI flags (prints help + exits). Same class
+  # as the 2C recon-template fix.
+  RUN=(opencode run "${MFLAG[@]}" --command "$CMD" -- "$ARGS")
   if [ "$DRY" = 1 ]; then printf 'DRY: '; printf '%q ' "${RUN[@]}"; echo; exit 0; fi
   exec "${RUN[@]}"
 else
@@ -103,7 +118,7 @@ else
   # path. The orchestrator must run UNSANDBOXED to spawn worker processes; the
   # workers it launches stay `-s workspace-write` sandboxed + offline.
   PROMPT="read and follow $PLUGIN/skills/$CMD/SKILL.md then run it: $ARGS"
-  RUN=(codex exec --dangerously-bypass-approvals-and-sandbox "$PROMPT")
+  RUN=(codex exec "${MFLAG[@]}" --dangerously-bypass-approvals-and-sandbox "$PROMPT")
   if [ "$DRY" = 1 ] || [ "$GO" != 1 ]; then
     echo
     echo "Prepared Codex command (orchestrator runs UNSANDBOXED to spawn workers;"

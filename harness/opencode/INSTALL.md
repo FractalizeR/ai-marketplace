@@ -112,7 +112,7 @@ This writes `<review_root>/.model_map.json`, reused on re-runs (pass
 Invoke the command in OpenCode (TUI `/security-project`, or headless):
 
 ```bash
-opencode run --command security-project "project_root=. review_root=security-review-opencode"
+opencode run --command security-project "--project-root=. --review-root=security-review-opencode"
 ```
 
 The orchestrator runs recon → wave planning → external-process fan-out (one
