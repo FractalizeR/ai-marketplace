@@ -257,7 +257,8 @@ class RegistryShape(unittest.TestCase):
         # split off into their own namespace under `addon.<addon_name>`.
         expected_stack_symfony = {
             "voters", "forms", "serializer_groups", "twig_overrides",
-            "doctrine_listeners", "firewalls", "messenger_transports",
+            "doctrine_listeners", "firewalls", "trusted_config",
+            "messenger_transports",
             "graphql_layer", "admin_authz_coverage",
             "routes_authz_matrix", "sensitive_columns",
         }

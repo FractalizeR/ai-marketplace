@@ -1060,6 +1060,38 @@ class ProjectScalarRoutingTests(unittest.TestCase):
         finally:
             p.unlink()
 
+    def test_trusted_config_bag_routed_to_w1(self):
+        """Phase B: recon_bags.stack.symfony.trusted_config (framework.yaml) is
+        wired to W1 via the `request_trust` concept — its source_files must
+        reach W1.target_files in project mode with no diff."""
+        fs = textwrap.dedent("""\
+            stack:
+              symfony:
+                trusted_config:
+                  status: ok
+                  data:
+                    trusted_proxies: "%env(TRUSTED_PROXIES)%"
+                  source_files:
+                    - config/packages/framework.yaml
+        """).strip()
+        p = _build_context(
+            framework="symfony",
+            attack_surface="status: ok\nitems: []",
+            data_access="status: ok\nitems: []",
+            authz_usage="status: ok\nitems: []",
+            recon_bags=fs,
+        )
+        try:
+            ctx = pw.parse_context(p)
+            plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT)  # project mode
+            collected = set()
+            for s in plan:
+                if s["wave_id"] == "W1":
+                    collected |= set(s["target_files"])
+            self.assertIn("config/packages/framework.yaml", collected)
+        finally:
+            p.unlink()
+
     def test_vendor_scalar_source_filtered_in_project_mode(self):
         """Project-mode scalar routing shares the vendor filter — a vendored
         config source_file is dropped by default (parity with channel 2)."""

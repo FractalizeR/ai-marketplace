@@ -65,6 +65,7 @@ from typing import Any, Literal, Optional
 
 Concept = Literal[
     "auth_guards",            # firewalls, voters, policies, guards
+    "request_trust",          # trusted_proxies/hosts/headers — effective client IP/host
     "request_inputs",         # forms, FormRequests, validators
     "output_renderers",       # twig overrides, blade components, view layers
     "messaging",              # messenger transports, queue jobs, listeners
@@ -80,6 +81,7 @@ Concept = Literal[
 
 ALL_CONCEPTS: tuple[Concept, ...] = (
     "auth_guards",
+    "request_trust",
     "request_inputs",
     "output_renderers",
     "messaging",
@@ -102,6 +104,9 @@ CONCEPT_RESOLVERS: dict[tuple[str, str], tuple[str, ...]] = {
     ("symfony", "auth_guards"): (
         "recon_bags.stack.symfony.voters",
         "recon_bags.stack.symfony.firewalls",
+    ),
+    ("symfony", "request_trust"): (
+        "recon_bags.stack.symfony.trusted_config",
     ),
     ("symfony", "request_inputs"): (
         "recon_bags.stack.symfony.forms",
@@ -207,6 +212,7 @@ WAVES: tuple[WaveSpec, ...] = (
         ),
         relevant_concepts=(
             "auth_guards",
+            "request_trust",
             "graphql_layer",
             "admin_surface",
             # 3.4.0: route-level authz matrix + sensitive entity-fields +

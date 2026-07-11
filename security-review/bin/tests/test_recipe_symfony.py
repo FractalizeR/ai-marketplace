@@ -1085,5 +1085,100 @@ class TripleReviewRegressions(unittest.TestCase):
         self.assertEqual(len([it for it in items if it["file"] == "src/Foo.php"]), 1)
 
 
+class TrustedConfigTests(unittest.TestCase):
+    """Phase B — framework.yaml request trust boundary → trusted_config bag.
+
+    `collect_trusted_config` returns a SectionPayload object (attribute access),
+    unlike the `_section_payload` helper above which returns a parsed dict.
+    """
+
+    def _write_framework(self, body: str) -> Path:
+        td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, td, ignore_errors=True)
+        root = Path(td)
+        pkg = root / "config" / "packages"
+        pkg.mkdir(parents=True)
+        (pkg / "framework.yaml").write_text(body, encoding="utf-8")
+        return root
+
+    def test_framework_setting_inline_scalar(self):
+        from recon.recipes.symfony import _framework_setting
+        text = "framework:\n    trusted_proxies: '%env(TRUSTED_PROXIES)%'\n"
+        self.assertEqual(_framework_setting(text, "trusted_proxies"), "%env(TRUSTED_PROXIES)%")
+
+    def test_framework_setting_list_form(self):
+        from recon.recipes.symfony import _framework_setting
+        text = (
+            "framework:\n"
+            "    trusted_headers:\n"
+            "        - x-forwarded-for\n"
+            "        - x-forwarded-host\n"
+        )
+        self.assertEqual(_framework_setting(text, "trusted_headers"), "(list)")
+
+    def test_framework_setting_absent(self):
+        from recon.recipes.symfony import _framework_setting
+        text = "framework:\n    secret: '%env(APP_SECRET)%'\n"
+        self.assertIsNone(_framework_setting(text, "trusted_proxies"))
+
+    def test_framework_setting_ignores_key_outside_framework_block(self):
+        from recon.recipes.symfony import _framework_setting
+        # A same-named key under a different top-level block must not leak in.
+        text = "other:\n    trusted_proxies: 1.2.3.4\nframework:\n    secret: x\n"
+        self.assertIsNone(_framework_setting(text, "trusted_proxies"))
+
+    def test_framework_setting_ignores_nested_subblock_key(self):
+        from recon.recipes.symfony import _framework_setting
+        # trusted_proxies nested under a framework sub-block is NOT
+        # framework.trusted_proxies — must not borrow its value.
+        text = (
+            "framework:\n"
+            "    http_client:\n"
+            "        trusted_proxies: 9.9.9.9\n"
+            "    secret: x\n"
+        )
+        self.assertIsNone(_framework_setting(text, "trusted_proxies"))
+
+    def test_framework_setting_strips_inline_comment(self):
+        from recon.recipes.symfony import _framework_setting
+        text = "framework:\n    trusted_proxies: '127.0.0.1' # local only\n"
+        self.assertEqual(_framework_setting(text, "trusted_proxies"), "127.0.0.1")
+
+    def test_framework_setting_inline_flow_list(self):
+        from recon.recipes.symfony import _framework_setting
+        text = "framework:\n    trusted_headers: ['x-forwarded-for']\n"
+        self.assertEqual(_framework_setting(text, "trusted_headers"), "(list)")
+
+    def test_collect_ok_with_source_files(self):
+        from recon.recipes.symfony import collect_trusted_config
+        root = self._write_framework(
+            "framework:\n"
+            "    trusted_proxies: '10.0.0.0/8'\n"
+            "    trusted_headers:\n"
+            "        - x-forwarded-for\n"
+        )
+        payload = collect_trusted_config(root)
+        self.assertEqual(payload.status, "ok")
+        self.assertEqual(payload.source_files, ["config/packages/framework.yaml"])
+        self.assertEqual(payload.data["trusted_proxies"], "10.0.0.0/8")
+        self.assertEqual(payload.data["trusted_headers"], "(list)")
+        self.assertNotIn("trusted_hosts", payload.data)
+
+    def test_collect_none_when_no_trusted_keys(self):
+        from recon.recipes.symfony import collect_trusted_config
+        root = self._write_framework("framework:\n    secret: '%env(APP_SECRET)%'\n")
+        payload = collect_trusted_config(root)
+        # File present but no trusted_* → 'none' (not routed; safe default).
+        self.assertEqual(payload.status, "none")
+
+    def test_collect_unknown_when_file_absent(self):
+        from recon.recipes.symfony import collect_trusted_config
+        td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, td, ignore_errors=True)
+        payload = collect_trusted_config(Path(td))
+        self.assertEqual(payload.status, "unknown")
+        self.assertEqual(payload.source_files, [])
+
+
 if __name__ == "__main__":
     unittest.main()

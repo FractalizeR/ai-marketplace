@@ -438,6 +438,44 @@ class FrameworkSpecificBag(unittest.TestCase):
             res = vc.validate_context_file(p)
             self.assertFalse(res.ok())
 
+    def test_trusted_config_ok_scalar_accepted(self):
+        # Phase B: `trusted_config` is a required=False scalar bag. A valid
+        # `ok` payload (data + source_files) must NOT produce any error about
+        # itself (other required bags may be missing — assert only on the new
+        # bag, so schema evolution elsewhere doesn't break this).
+        body = all_core_sections_pending()
+        body += (
+            "## Recon Bags\n<!-- section_id: recon_bags -->\n\n"
+            "```yaml\nstack:\n  symfony:\n    trusted_config:\n"
+            "      status: ok\n      data:\n        trusted_proxies: \"10.0.0.0/8\"\n"
+            "      source_files:\n        - config/packages/framework.yaml\n```\n\n"
+        )
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), VALID_FRONTMATTER_V2, body)
+            res = vc.validate_context_file(p)
+            self.assertFalse(
+                any("trusted_config" in e for e in res.errors),
+                msg=f"trusted_config must validate cleanly; errors: {res.errors}",
+            )
+
+    def test_trusted_config_unknown_data_key_warns(self):
+        # Proves the schema is wired for trusted_config: an undeclared data key
+        # warns (closed-schema evolution guard), mirroring item-key handling.
+        body = all_core_sections_pending()
+        body += (
+            "## Recon Bags\n<!-- section_id: recon_bags -->\n\n"
+            "```yaml\nstack:\n  symfony:\n    trusted_config:\n"
+            "      status: ok\n      data:\n        bogus_key: 1\n"
+            "      source_files: []\n```\n\n"
+        )
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), VALID_FRONTMATTER_V2, body)
+            res = vc.validate_context_file(p)
+            self.assertTrue(
+                any("trusted_config" in w and "unknown" in w.lower() for w in res.warnings),
+                msg=f"warnings: {res.warnings}",
+            )
+
 
 # ---------------------------------------------------------------------------
 # Recipe-driven sanity probes — full pipeline integration.

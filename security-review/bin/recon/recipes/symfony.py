@@ -19,7 +19,8 @@ build_inventory pipeline:
 8. fintech_markers — composer deps + entity decimal columns.
 9. frontend_assets — JS bundles / Stimulus / importmap.
 10. recon_bags.stack.symfony.*: voters, forms, serializer_groups, twig_overrides,
-    doctrine_listeners, firewalls, messenger_transports.
+    doctrine_listeners, firewalls, trusted_config (framework.yaml request trust
+    boundary), messenger_transports.
 """
 
 from __future__ import annotations
@@ -86,6 +87,16 @@ RECON_BAGS_SCHEMA: dict[str, dict[str, dict[str, SectionSpec]]] = {
             "firewalls": SectionSpec(
                 shape="scalar",
                 data_keys=frozenset({"firewalls", "access_control"}),
+            ),
+            # Request trust boundary from config/packages/framework.yaml —
+            # trusted_proxies/hosts/headers govern the effective client IP/host
+            # derived from X-Forwarded-* (spoofing → IP-authz / host-injection).
+            # required=False: not every project configures it, and pre-4.x
+            # CONTEXT.md without the bag must still validate.
+            "trusted_config": SectionSpec(
+                shape="scalar",
+                data_keys=frozenset({"trusted_proxies", "trusted_hosts", "trusted_headers"}),
+                required=False,
             ),
             "messenger_transports": SectionSpec(
                 shape="scalar",
@@ -1090,6 +1101,95 @@ def collect_auth_layer_and_firewalls(
             source_files=[rel],
         )
     return auth_layer, firewalls_payload
+
+
+def _framework_setting(text: str, sub_key: str) -> Optional[str]:
+    """Value of `framework: -> sub_key:` from framework.yaml.
+
+    Inline scalar (`trusted_proxies: '%env(TRUSTED_PROXIES)%'`) → its
+    inline-comment-stripped, quote-stripped string. List form — block
+    (`trusted_headers:` then indented `- x-forwarded-for`) or inline flow
+    (`['x-forwarded-for']`) — → the marker `"(list)"` (the bag is a hint; the
+    worker reads the routed source_file for the exact items). Absent — or a
+    bare key with no value and no children — → None.
+
+    Matches only **direct children** of the top-level `framework:` block: a
+    same-named key nested under a sub-block (e.g. `framework: http_client:
+    trusted_proxies:`) is ignored, so the recorded value is never borrowed from
+    an unrelated setting.
+    """
+    lines = text.splitlines()
+    in_fw = False
+    child_indent: Optional[int] = None
+    for i, raw in enumerate(lines):
+        line = raw.rstrip()
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        stripped = line.strip()
+        if not in_fw:
+            if indent == 0 and re.match(r"^framework\s*:\s*$", stripped):
+                in_fw = True
+            continue
+        if indent == 0:
+            break  # left the framework: block
+        if child_indent is None:
+            child_indent = indent  # first direct child fixes the level
+        if indent != child_indent:
+            continue  # nested deeper than a direct child — not framework.<key>
+        m = re.match(rf"^{re.escape(sub_key)}\s*:\s*(.*)$", stripped)
+        if not m:
+            continue
+        tail = _strip_inline_comment(m.group(1).strip()).strip()
+        if tail:
+            # Inline flow-list → the same "(list)" marker as the block form.
+            if tail.startswith("["):
+                return "(list)"
+            return _strip_yaml_quotes(tail)
+        # Empty tail → value lives on following more-indented lines.
+        for nxt in lines[i + 1:]:
+            nl = nxt.rstrip()
+            if not nl.strip() or nl.lstrip().startswith("#"):
+                continue
+            if (len(nl) - len(nl.lstrip(" "))) <= child_indent:
+                break  # nothing indented under the key → treat as unset
+            return "(list)"
+        return None
+    return None
+
+
+def collect_trusted_config(project_root: Path) -> SectionPayload:
+    """Parse config/packages/framework.yaml for the request trust boundary
+    (trusted_proxies / trusted_hosts / trusted_headers).
+
+    Scalar bag `recon_bags.stack.symfony.trusted_config`, routed into W1 via
+    the `request_trust` concept (plan_waves) so a worker reads framework.yaml.
+    Status contract mirrors `firewalls`:
+      - file absent/unreadable → `unknown` (bag present in the skeleton, not
+        routed; `scalar_source_files` gates routing on status=="ok").
+      - ≥1 trusted_* key present → `ok` (data + source_files → routed).
+      - file present, no trusted_* key → `none` (safe default, nothing to review).
+    See stacks/symfony/auth.md → "Request trust boundary".
+    """
+    fw_file = project_root / "config" / "packages" / "framework.yaml"
+    if not fw_file.is_file():
+        return SectionPayload(status="unknown", reason="framework.yaml not found", source_files=[])
+    text = _read_text_safe(fw_file)
+    if text is None:
+        return SectionPayload(status="unknown", reason="framework.yaml unreadable", source_files=[])
+    rel = fw_file.relative_to(project_root).as_posix()
+    data: dict = {}
+    for key in ("trusted_proxies", "trusted_hosts", "trusted_headers"):
+        val = _framework_setting(text, key)
+        if val is not None:
+            data[key] = val
+    if data:
+        return SectionPayload(status="ok", data=data, source_files=[rel])
+    return SectionPayload(
+        status="none",
+        reason="no trusted_proxies/hosts/headers configured",
+        source_files=[rel],
+    )
 
 
 def _first_key_under_nested(text: str, path: tuple[str, ...]) -> Optional[str]:
@@ -2748,6 +2848,7 @@ def build_inventory(
     forms_payload = collect_forms(project_root, plugin_root, warnings, exclude=exclude)
     sg_payload = collect_serializer_groups(project_root, plugin_root, warnings, exclude=exclude)
     twig_payload = collect_twig_overrides(project_root)
+    trusted_config_payload = collect_trusted_config(project_root)
     msg_payload = collect_messenger_transports(project_root)
     listeners_payload = collect_doctrine_listeners(project_root, plugin_root, warnings, exclude=exclude)
     easyadmin_crud_payload = collect_easyadmin_crud_controllers(
@@ -2796,6 +2897,7 @@ def build_inventory(
         "twig_overrides": twig_payload,
         "doctrine_listeners": listeners_payload,
         "firewalls": firewalls_payload,
+        "trusted_config": trusted_config_payload,
         "messenger_transports": msg_payload,
         "admin_authz_coverage": admin_authz_payload,
         "routes_authz_matrix": routes_authz_payload,
