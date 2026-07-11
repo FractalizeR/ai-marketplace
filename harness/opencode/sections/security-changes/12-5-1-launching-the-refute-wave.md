@@ -19,5 +19,5 @@ opencode run -m <FAST_TIER> --agent security-refute "\
   findings_slice=<≤20 finding rows from the REPORT.md index>"
 ```
 
-`<FAST_TIER>` is the fast-tier model id from `<REVIEW_ROOT>/.model_map.json` (refute is the mechanical second pass). The refute SKILL appends its YAML verdicts to `<REVIEW_ROOT>/refute.md`; because the runs are sequential there is exactly one writer at any time. Soft timeout 10 minutes per batch — if a process does not return in time, print a warning "adversarial pass partial — N of M findings reviewed" and continue with the partial refute. Refute never blocks the main report.
+`<FAST_TIER>` is the fast-tier model id read directly from the already-resolved `<REVIEW_ROOT>/.model_map.json` — its `fast` value (`python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fast"])' "<REVIEW_ROOT>/.model_map.json"`); do NOT re-resolve, the map is authoritative (refute is the mechanical second pass). The refute SKILL appends its YAML verdicts to `<REVIEW_ROOT>/refute.md`; because the runs are sequential there is exactly one writer at any time. Soft timeout 10 minutes per batch — if a process does not return in time, print a warning "adversarial pass partial — N of M findings reviewed" and continue with the partial refute. Refute never blocks the main report.
 
