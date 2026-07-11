@@ -770,6 +770,30 @@ def collect_files(
     return sorted(collected)
 
 
+def _filter_scalar_files(
+    files: list[str],
+    *,
+    scope_glob: Optional[str],
+    include_vendor: bool,
+    include_tests: bool,
+) -> set[str]:
+    """Shared vendor/tests/scope filter for scalar source_files.
+
+    Single source of truth for channels 2 (changes) and the project-mode
+    scalar path so their filtering can't drift.
+    """
+    out: set[str] = set()
+    for f in files:
+        if not include_vendor and _is_vendor_path(f):
+            continue
+        if not include_tests and _is_tests_path(f):
+            continue
+        if scope_glob and not _matches_scope_glob(f, scope_glob):
+            continue
+        out.add(f)
+    return out
+
+
 def collect_scalar_changes(
     section_paths: tuple[str, ...],
     ctx: ParsedContext,
@@ -792,17 +816,44 @@ def collect_scalar_changes(
         sf = ctx.scalar_source_files(path)
         if not sf:
             continue
-        sf_set = set(sf)
-        if not (sf_set & diff_files):
+        if not (set(sf) & diff_files):
             continue
-        for f in sf:
-            if not include_vendor and _is_vendor_path(f):
-                continue
-            if not include_tests and _is_tests_path(f):
-                continue
-            if scope_glob and not _matches_scope_glob(f, scope_glob):
-                continue
-            out.add(f)
+        out |= _filter_scalar_files(
+            sf,
+            scope_glob=scope_glob,
+            include_vendor=include_vendor,
+            include_tests=include_tests,
+        )
+    return sorted(out)
+
+
+def collect_scalar_project(
+    section_paths: tuple[str, ...],
+    ctx: ParsedContext,
+    *,
+    scope_glob: Optional[str] = None,
+    include_vendor: bool = False,
+    include_tests: bool = False,
+) -> list[str]:
+    """Project-mode analog of channel 2 (no diff-intersection gate).
+
+    Surfaces ALL scalar `source_files` of the wave's sections into
+    target_files. In a full project audit there is no diff to gate on, so
+    recon-known trust-boundary config files (e.g. auth_layer→security.yaml,
+    secrets→.env) must be routed unconditionally — otherwise they are
+    enumerated by recon but never reach any worker's target_files, and
+    catching their vulns silently depends on the model ranging beyond scope.
+
+    Skips list-shape sections (they go through channel 1 / collect_files).
+    """
+    out: set[str] = set()
+    for path in section_paths:
+        out |= _filter_scalar_files(
+            ctx.scalar_source_files(path),
+            scope_glob=scope_glob,
+            include_vendor=include_vendor,
+            include_tests=include_tests,
+        )
     return sorted(out)
 
 
@@ -962,7 +1013,11 @@ def _wave_target_files(
     include_vendor: bool,
     include_tests: bool,
 ) -> list[str]:
-    """Channel 1 + channel 2 union for one wave."""
+    """List-shape items (channel 1) unioned with scalar source_files.
+
+    Scalar files come from the diff-gated channel 2 in changes mode, or the
+    ungated project channel (collect_scalar_project) in project mode.
+    """
     section_paths = tuple(resolved_section_paths(wave, ctx.stack))
     list_files = collect_files(
         section_paths,
@@ -974,15 +1029,24 @@ def _wave_target_files(
         include_tests=include_tests,
     )
     if diff_files is None:
-        return list_files
-    scalar_files = collect_scalar_changes(
-        section_paths,
-        ctx,
-        diff_files,
-        scope_glob=scope_glob,
-        include_vendor=include_vendor,
-        include_tests=include_tests,
-    )
+        # Project mode: no diff to gate on, so route ALL scalar source_files of
+        # the wave's (theme-scoped) sections, not just touched ones (channel 2).
+        scalar_files = collect_scalar_project(
+            section_paths,
+            ctx,
+            scope_glob=scope_glob,
+            include_vendor=include_vendor,
+            include_tests=include_tests,
+        )
+    else:
+        scalar_files = collect_scalar_changes(
+            section_paths,
+            ctx,
+            diff_files,
+            scope_glob=scope_glob,
+            include_vendor=include_vendor,
+            include_tests=include_tests,
+        )
     if not scalar_files:
         return list_files
     return sorted(set(list_files) | set(scalar_files))

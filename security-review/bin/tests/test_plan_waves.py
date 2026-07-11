@@ -973,6 +973,124 @@ class ChangesChannel2Tests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Phase A — project mode routes scalar source_files (no diff gate).
+#
+# In changes mode a scalar section's source_files reach target_files only when
+# they intersect the diff (channel 2). In a full project audit there is no
+# diff, so recon-known trust-boundary config files (auth_layer→security.yaml,
+# secrets→.env) must be routed unconditionally into the wave that reads their
+# section — else they are enumerated by recon but never handed to any worker.
+# ---------------------------------------------------------------------------
+
+
+class ProjectScalarRoutingTests(unittest.TestCase):
+    def test_auth_layer_scalar_routed_to_w1(self):
+        """security.yaml is auth_layer's source_file; W1 reads auth_layer, so
+        project mode must route it into W1.target_files with no diff."""
+        p = _build_context(
+            framework="symfony",
+            attack_surface="status: ok\nitems: []",
+            data_access="status: ok\nitems: []",
+            authz_usage="status: ok\nitems: []",
+            auth_layer=textwrap.dedent("""\
+                status: ok
+                data:
+                  kind: session
+                source_files:
+                  - config/packages/security.yaml
+            """).strip(),
+        )
+        try:
+            ctx = pw.parse_context(p)
+            plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT)  # project mode
+            collected = set()
+            for s in plan:
+                if s["wave_id"] == "W1":
+                    collected |= set(s["target_files"])
+            self.assertIn("config/packages/security.yaml", collected)
+        finally:
+            p.unlink()
+
+    def test_secrets_scalar_routed_to_w4(self):
+        """.env is secrets' source_file; W4 reads secrets — routed with no diff."""
+        p = _build_context(
+            framework="symfony",
+            attack_surface="status: ok\nitems: []",
+            serialization="status: ok\nitems: []",
+            secrets=textwrap.dedent("""\
+                status: ok
+                data:
+                  hardcoded_count: 0
+                source_files:
+                  - .env
+                  - .env.local
+            """).strip(),
+        )
+        try:
+            ctx = pw.parse_context(p)
+            plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT)  # project mode
+            collected = set()
+            for s in plan:
+                if s["wave_id"] == "W4":
+                    collected |= set(s["target_files"])
+            self.assertIn(".env", collected)
+            self.assertIn(".env.local", collected)
+        finally:
+            p.unlink()
+
+    def test_status_unknown_scalar_not_routed_in_project_mode(self):
+        """A scalar section with status != ok has no source_files, so nothing
+        is routed even in project mode."""
+        p = _build_context(
+            framework="symfony",
+            attack_surface="status: ok\nitems: []",
+            data_access="status: ok\nitems: []",
+            authz_usage="status: ok\nitems: []",
+            auth_layer=textwrap.dedent("""\
+                status: unknown
+                reason: detector failed
+            """).strip(),
+        )
+        try:
+            ctx = pw.parse_context(p)
+            plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT)  # project mode
+            for s in plan:
+                if s["wave_id"] == "W1":
+                    self.assertNotIn("config/security.yaml", s["target_files"])
+        finally:
+            p.unlink()
+
+    def test_vendor_scalar_source_filtered_in_project_mode(self):
+        """Project-mode scalar routing shares the vendor filter — a vendored
+        config source_file is dropped by default (parity with channel 2)."""
+        p = _build_context(
+            framework="symfony",
+            attack_surface="status: ok\nitems: []",
+            data_access="status: ok\nitems: []",
+            authz_usage="status: ok\nitems: []",
+            auth_layer=textwrap.dedent("""\
+                status: ok
+                data:
+                  kind: session
+                source_files:
+                  - vendor/acme/pkg/security.yaml
+                  - config/packages/security.yaml
+            """).strip(),
+        )
+        try:
+            ctx = pw.parse_context(p)
+            plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT)  # project mode
+            collected = set()
+            for s in plan:
+                if s["wave_id"] == "W1":
+                    collected |= set(s["target_files"])
+            self.assertIn("config/packages/security.yaml", collected)
+            self.assertNotIn("vendor/acme/pkg/security.yaml", collected)
+        finally:
+            p.unlink()
+
+
+# ---------------------------------------------------------------------------
 # Vendor / tests filters.
 # ---------------------------------------------------------------------------
 
@@ -1394,11 +1512,13 @@ class WinfChunkSizeTests(unittest.TestCase):
             plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT, exploratory=True)
             winf = [s for s in plan if s["wave_id"] == "WINF"]
             self.assertGreater(len(winf), 0)
-            # ceil(197 / 65) = 4 parts max.
+            # 197 http_route items + 2 default scalar source_files
+            # (auth_layer→config/security.yaml, secrets→.env) now routed into
+            # project-mode target_files. ceil(199 / 65) = 4 parts max.
             self.assertLessEqual(len(winf), 4,
-                                 f"WINF should have ≤4 parts for 197 files, got {len(winf)}")
+                                 f"WINF should have ≤4 parts for 199 files, got {len(winf)}")
             total = sum(len(s["target_files"]) for s in winf)
-            self.assertEqual(total, 197)
+            self.assertEqual(total, 199)
         finally:
             p.unlink()
 
@@ -1630,8 +1750,18 @@ class WinfBehaviourTests(unittest.TestCase):
 
     def test_winf_emitted_in_project_mode_even_with_no_files(self):
         """Project mode WINF: target_files may be empty but slice still emits
-        (worker uses CONTEXT.md sections as exploratory anchor)."""
-        p = _build_context(framework="symfony")
+        (worker uses CONTEXT.md sections as exploratory anchor).
+
+        Override the default scalar sections to drop their source_files so the
+        fixture is genuinely fileless — otherwise the project-mode scalar
+        routing (Phase A) legitimately fills target_files with
+        config/security.yaml + .env and this edge case would not be exercised.
+        """
+        p = _build_context(
+            framework="symfony",
+            auth_layer="status: ok\ndata:\n  kind: session",
+            secrets="status: ok\ndata:\n  hardcoded_count: 0",
+        )
         try:
             ctx = pw.parse_context(p)
             plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT, exploratory=True)
@@ -1671,7 +1801,9 @@ class TargetFilesPreciseCountTests(unittest.TestCase):
             self.assertEqual(len(w1), 1, "single chunk for ≤50 files")
             target = set(w1[0]["target_files"])
             # http_route, http_route_admin, cli_command, message_handler are W1
-            # entry kinds; event_listener IS NOT.
+            # entry kinds; event_listener IS NOT. config/security.yaml is the
+            # default auth_layer scalar source_file, now routed into W1's
+            # project-mode target_files (Phase A).
             self.assertEqual(
                 target,
                 {
@@ -1680,6 +1812,7 @@ class TargetFilesPreciseCountTests(unittest.TestCase):
                     "src/Command/Cron.php",
                     "src/Repository/UserRepo.php",
                     "src/Repository/PostRepo.php",
+                    "config/security.yaml",
                 },
             )
         finally:
