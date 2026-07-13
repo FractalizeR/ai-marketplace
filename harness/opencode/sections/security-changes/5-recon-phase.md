@@ -8,7 +8,7 @@ Recon collects the inventory **across the whole project** (for full context), bu
 
 Launch **one** recon process. OpenCode has no in-process subagent — recon runs as a single external `opencode run` invocation (the recon SKILL), driven through the shared role dispatcher (`shared/dispatch.py`, `dispatch_role`) so freshness, stdout capture, and gap classification match every other stage. The recon process detects the recipe and calls `recon_inventory.py`, which writes `<REVIEW_ROOT>/CONTEXT.md`.
 
-Forward `--diff-files=<REVIEW_ROOT>/diff_files.txt` to the recon process (it forwards to the utility as-is — see contract in `agents/security-recon.md`). Forward the console decision from step 4c (`CONSOLE_CMD`: `--no-console`, `--console-cmd=<tpl>`, or nothing). If step 4a collected a non-empty `EXCLUDE_CSV`, add `--exclude=<EXCLUDE_CSV>`. Both paths are forwarded **absolute** (Step 0.4 invariant):
+Forward `--diff-files=<REVIEW_ROOT>/diff_files.txt` to the recon process (it forwards to the utility as-is — see contract in `agents/security-recon.md`). Forward the console decision from step 4c (`CONSOLE_CMD`: `--no-console`, `--console-cmd=<tpl>`, `env` → no console flag since the utility reads `FR_SECURITY_CONSOLE_CMD`, or nothing). If step 4a collected a non-empty `EXCLUDE_CSV`, add `--exclude=<EXCLUDE_CSV>`. Both paths are forwarded **absolute** (Step 0.4 invariant):
 
 ```bash
 python3 ${FR_SECURITY_CORE_ROOT}/bin/shared/dispatch.py \

@@ -42,7 +42,7 @@ Parse flags from `$ARGUMENTS`:
 - `--all-opus` — force opus for all waves (legacy). By default W4/W5 on sonnet (mechanical data flow).
 - `--scope=<glob>` — restrict target_files by a glob pattern (for example `src/Api/**`)
 - `--no-console` — static-only recon: the utility does NOT run the project's console. Use when auditing hostile/untrusted repos (no guarantee that bootstrap will not execute malicious code), when runtime credentials are absent, or in CI scenarios where project execution is forbidden. Ceiling=medium (intentionally). Alternative — isolation via firejail/Docker without the flag.
-- `--console-cmd=<template>` — explicit command for running the project console, e.g. `--console-cmd="docker compose exec -T php php bin/console"`. Use when the project runs **inside a container** (docker compose / Makefile / ddev / Sail) — running `bin/console` on the host would distort the environment (wrong PHP version, missing services). May contain a `{args}` placeholder for Makefile-style passthrough (`--console-cmd="make console CMD={args}"`); otherwise the subcommand is appended. When neither this flag nor `--no-console` is passed and the project looks containerized, **step 3b asks you interactively** (see below) instead of silently degrading. `--no-console` wins over this flag.
+- `--console-cmd=<template>` — explicit command for running the project console, e.g. `--console-cmd="docker compose exec -T php php bin/console"`. Use when the project runs **inside a container** (docker compose / Makefile / ddev / Sail) — running `bin/console` on the host would distort the environment (wrong PHP version, missing services). May contain a `{args}` placeholder for Makefile-style passthrough (`--console-cmd="make console CMD={args}"`); otherwise the subcommand is appended. When neither this flag nor `--no-console` is passed and the project looks containerized, **step 3b asks you interactively** (see below) instead of silently degrading. `--no-console` wins over this flag. **On the derived Codex/OpenCode harnesses** a space-containing value here is truncated by the whitespace-split argument contract — there, set the console command via the `FR_SECURITY_CONSOLE_CMD` environment variable instead (e.g. `frsr --console-cmd "…"`), which step 3b honors; see step 3b.
 - `--exclude=<csv>` — additional path prefixes (relative to `<project_root>`) that will NOT be parsed by the PHP extractor. For example, `--exclude=legacy,src/ThirdParty,generated`. These paths are added to the built-in `DEFAULT_EXCLUDE` (`vendor/`, `var/cache/`, `var/log/`, `node_modules/`, `storage/framework/cache/`, `storage/logs/`, `bootstrap/cache/`, `public/build/`, `.git/`) — they do NOT replace it. If the flag is not passed explicitly — only built-in defaults + items found in CLAUDE.md apply (see step 3a).
 - `--no-adversarial` — **disable** the adversarial refute pass (ON by default). The refute wave reduces the false-positive rate via a second pass through Sonnet. Disable if you need the fastest possible run without the second pass.
 
@@ -221,8 +221,9 @@ Console enrichment (running the project's `bin/console` for routes / ceiling=hig
 
 Skip this whole step (set `CONSOLE_CMD = none`, proceed to step 4) when **any** of these holds:
 
-- `--no-console` was passed → forward `--no-console` to the recon agent (user's explicit static-only choice).
+- `--no-console` was passed → forward `--no-console` to the recon agent (user's explicit static-only choice). Wins over everything below.
 - `--console-cmd=<tpl>` was passed → forward `--console-cmd=<tpl>` verbatim (user already chose the runner).
+- **`FR_SECURITY_CONSOLE_CMD` is set in the environment** (check `[ -n "$FR_SECURITY_CONSOLE_CMD" ]`) — a launcher (`frsr --console-cmd`) or CI exported a console command out-of-band → set `CONSOLE_CMD = env` and forward **no** console flag to the recon agent. `recon_inventory.py` reads the command from the environment itself. **Do NOT read or forward its value** — it may contain spaces that the whitespace-split argument contract cannot carry; passing only the "console available via env" signal is the whole point. (`--no-console` still wins; an explicit `--console-cmd=<tpl>` flag, when present, takes precedence over the env — same order as `recon_inventory._resolve_console_cmd`.)
 - `--skip-recon` path is taken (CONTEXT.md is reused, not regenerated).
 
 Otherwise:
@@ -270,7 +271,7 @@ Otherwise:
 
 **Otherwise (full recon):**
 
-Launch the recon agent. It will pick the recipe itself (detect) and call `recon_inventory.py`, which writes `<REVIEW_ROOT>/CONTEXT.md`. Forward the console decision from step 3b (`CONSOLE_CMD`: `--no-console`, or `--console-cmd=<tpl>`, or nothing). If step 3a collected a non-empty `EXCLUDE_CSV` — forward `--exclude=<EXCLUDE_CSV>`:
+Launch the recon agent. It will pick the recipe itself (detect) and call `recon_inventory.py`, which writes `<REVIEW_ROOT>/CONTEXT.md`. Forward the console decision from step 3b (`CONSOLE_CMD`: `--no-console`, or `--console-cmd=<tpl>`, or — when `CONSOLE_CMD = env` — **no console flag at all**, since the utility reads `FR_SECURITY_CONSOLE_CMD` from the environment, or nothing). If step 3a collected a non-empty `EXCLUDE_CSV` — forward `--exclude=<EXCLUDE_CSV>`:
 
 ```
 Task(subagent_type="security-recon", prompt="""

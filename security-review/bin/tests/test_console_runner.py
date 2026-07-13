@@ -11,11 +11,13 @@ Two layers:
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 THIS_DIR = Path(__file__).resolve().parent
 BIN_DIR = THIS_DIR.parent
@@ -365,6 +367,43 @@ class EnvironmentBlockCLI(unittest.TestCase):
             self.assertEqual(env["console_mode"], "disabled")
             self.assertFalse(env["console_gap"])
             self.assertIsNone(env["console_gap_reason"])
+
+
+class ResolveConsoleCmdEnv(unittest.TestCase):
+    """`_resolve_console_cmd`: --console-cmd flag vs FR_SECURITY_CONSOLE_CMD env.
+
+    Lets a launcher pass a space-containing console template through the process
+    environment instead of the whitespace-delimited prompt contract.
+    """
+
+    ENV = ri.CONSOLE_CMD_ENV
+    CMD = "docker compose exec -T php bin/console"
+
+    def _run(self, flag, no_console, env_val):
+        patch = {} if env_val is None else {self.ENV: env_val}
+        with mock.patch.dict(os.environ, patch, clear=False):
+            if env_val is None:
+                os.environ.pop(self.ENV, None)
+            return ri._resolve_console_cmd(flag, no_console)
+
+    def test_flag_wins_over_env(self):
+        self.assertEqual(
+            self._run("make console CMD={args}", False, self.CMD),
+            "make console CMD={args}")
+
+    def test_env_used_when_no_flag(self):
+        # The space-containing value survives intact (the whole point).
+        self.assertEqual(self._run(None, False, self.CMD), self.CMD)
+
+    def test_no_console_beats_env(self):
+        # Operator's explicit static-only choice is not re-enabled by the env.
+        self.assertIsNone(self._run(None, True, self.CMD))
+
+    def test_empty_env_is_none(self):
+        self.assertIsNone(self._run(None, False, "   "))
+
+    def test_absent_env_is_none(self):
+        self.assertIsNone(self._run(None, False, None))
 
 
 if __name__ == "__main__":

@@ -42,7 +42,7 @@ Parse flags from `$ARGUMENTS`:
 - `--project-root=<path>` — corner of the audited project (where `composer.json` / framework configs live). Defaults to `cwd`. Use in composite repos where CLAUDE.md / cwd is one directory above the actual project root (for example monorepo with `api/` PHP subproject + shared top-level CLAUDE.md). Recon, exclude paths, sanity coverage, and refute path normalization all resolve against this value. Accepts a relative (from cwd) or absolute path.
 - `--interactive`, `--skip-recon`, `--force-skip-recon`, `--all-opus` — as in `security-project`. By default W4/W5 on sonnet (balanced profile); `--all-opus` forces opus everywhere.
 - `--no-console` — static-only recon: the utility does NOT run the project's console. Use when auditing hostile/untrusted repos, when runtime credentials are absent, or in CI scenarios. Ceiling=medium (intentionally). Alternative — isolation via firejail/Docker without the flag.
-- `--console-cmd=<template>` — explicit command for running the project console (e.g. `--console-cmd="docker compose exec -T php php bin/console"`) when the project runs inside a container. May contain a `{args}` placeholder for Makefile passthrough; otherwise the subcommand is appended. When neither this nor `--no-console` is passed and the project looks containerized, **step 4c asks interactively** instead of silently degrading. `--no-console` wins.
+- `--console-cmd=<template>` — explicit command for running the project console (e.g. `--console-cmd="docker compose exec -T php php bin/console"`) when the project runs inside a container. May contain a `{args}` placeholder for Makefile passthrough; otherwise the subcommand is appended. When neither this nor `--no-console` is passed and the project looks containerized, **step 4c asks interactively** instead of silently degrading. `--no-console` wins. **On the derived Codex/OpenCode harnesses** a space-containing value here is truncated by the whitespace-split argument contract — set the console command via the `FR_SECURITY_CONSOLE_CMD` environment variable instead (e.g. `frsr --console-cmd "…"`), which step 4c honors.
 - `--exclude=<csv>` — additional path prefixes (relative to `<project_root>`) that will NOT be parsed by the PHP extractor (see semantics in `security-project.md`). Combined with whatever is found in `<project_root>/CLAUDE.md` in step 4a.
 - `--no-adversarial` — disable the adversarial refute pass (ON by default). Semantics and contract — as in `security-project.md` (see step 12.5 below).
 - `--exploratory` and `--scope=` for diff mode are **not supported** — the diff itself limits the scope.
@@ -309,7 +309,7 @@ Extra target files for waves: <N> (will be merged into every wave's target_files
 
 ### 4c. Resolve console runner (environment-aware)
 
-Identical logic to `security-project` step 3b — decide HOW to run the project console (the only recon step that executes the project), asking the user rather than silently degrading when the project looks containerized. Skip when `--no-console` / `--console-cmd=<tpl>` was passed (forward it) or `--skip-recon` is taken. Otherwise:
+Identical logic to `security-project` step 3b — decide HOW to run the project console (the only recon step that executes the project), asking the user rather than silently degrading when the project looks containerized. Skip when `--no-console` (wins) / `--console-cmd=<tpl>` was passed (forward it), **when `FR_SECURITY_CONSOLE_CMD` is set in the environment** (a launcher/CI exported the console command out-of-band → set `CONSOLE_CMD = env`, forward no console flag; the utility reads the variable itself — do **not** echo its space-containing value into the prompt), or when `--skip-recon` is taken. Otherwise:
 
 1. Detect the recipe (`recon_inventory.py "<PROJECT_ROOT>" --detect`); console enrichment applies to **Symfony** only — for other recipes proceed with no console flags.
 2. Probe: `python3 ${CLAUDE_PLUGIN_ROOT}/bin/recon/environment.py "<PROJECT_ROOT>" --console-entrypoint "php bin/console"` (read-only, safe).
@@ -327,7 +327,7 @@ Recon collects the inventory **across the whole project** (for full context), bu
 
 **Otherwise:**
 
-Forward `--diff-files=` to the recon agent (it forwards to the utility as-is — see contract in `agents/security-recon.md`). Forward the console decision from step 4c (`CONSOLE_CMD`: `--no-console`, `--console-cmd=<tpl>`, or nothing). If step 4a collected a non-empty `EXCLUDE_CSV` — add `--exclude=<EXCLUDE_CSV>`:
+Forward `--diff-files=` to the recon agent (it forwards to the utility as-is — see contract in `agents/security-recon.md`). Forward the console decision from step 4c (`CONSOLE_CMD`: `--no-console`, `--console-cmd=<tpl>`, `env` → no console flag since the utility reads `FR_SECURITY_CONSOLE_CMD`, or nothing). If step 4a collected a non-empty `EXCLUDE_CSV` — add `--exclude=<EXCLUDE_CSV>`:
 
 ```
 Task(subagent_type="security-recon", prompt="""

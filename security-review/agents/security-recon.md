@@ -28,7 +28,7 @@ The orchestrator passes you in text:
 - `project_root=<path>` → `<project_root>`, `review_root=<path>` → `<review_root>`
 - `diff_files=<path>` → `--diff-files=<path>` (this is the only `scope=changes` signal — if you drop it, recon silently runs in project scope and `touched_by_diff` is never set)
 - `exclude=<csv>` → `--exclude=<csv>`
-- `console_mode=off` → `--no-console`; `console_mode=<a shell command>` → `--console-cmd=<that command>`; `console_mode=auto` (or absent) → pass neither (the utility auto-selects the host runner)
+- `console_mode=off` → `--no-console`; `console_mode=<a shell command>` → `--console-cmd=<that command>`; `console_mode=env` → **pass neither** flag (the operator exported `FR_SECURITY_CONSOLE_CMD`; the utility reads the console command from the environment itself — never try to reconstruct it from the prompt, its spaces do not survive the `key=value` split); `console_mode=auto` (or absent) → pass neither (the utility auto-selects the host runner)
 
 If at least one required argument (`<project_root>`, `<review_root>`) is not passed — return an error to the orchestrator.
 

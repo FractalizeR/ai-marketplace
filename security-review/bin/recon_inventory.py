@@ -323,6 +323,31 @@ def _confidence(result: InventoryResult, no_console: bool) -> dict:
 # Console runner resolution (environment-aware).
 # ---------------------------------------------------------------------------
 
+# Environment fallback for the console command template. A launcher (frsr) or CI
+# can export this instead of passing --console-cmd, so a space-containing
+# template (e.g. "docker compose exec -T php bin/console") rides the process
+# environment intact rather than being threaded through the whitespace-delimited
+# orchestrator/dispatch prompt contract (where spaces would truncate it).
+CONSOLE_CMD_ENV = "FR_SECURITY_CONSOLE_CMD"
+
+
+def _resolve_console_cmd(flag_value: Optional[str], no_console: bool) -> Optional[str]:
+    """Explicit --console-cmd wins; otherwise fall back to CONSOLE_CMD_ENV.
+
+    Consulted only when the operator did not force a static-only run:
+    --no-console short-circuits to None so the environment cannot re-enable a
+    console the operator explicitly disabled (decide_console_runner also ranks
+    no_console above console_cmd, so this is belt-and-suspenders).
+    """
+    if flag_value:
+        return flag_value
+    if no_console:
+        return None
+    env_val = os.environ.get(CONSOLE_CMD_ENV)
+    if env_val and env_val.strip():
+        return env_val
+    return None
+
 
 def decide_console_runner(
     probe: "_environment.EnvProbe",
@@ -658,7 +683,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                              "'{args}' placeholder for Makefile-style passthrough "
                              "(e.g. 'make console CMD={args}'); otherwise the subcommand is "
                              "appended. Overrides environment auto-detection. Mutually "
-                             "exclusive in spirit with --no-console (the latter wins).")
+                             "exclusive in spirit with --no-console (the latter wins). "
+                             "If omitted, falls back to the FR_SECURITY_CONSOLE_CMD env var.")
     parser.add_argument("--exclude", default=None,
                         help="CSV of project-root-relative path prefixes to skip pre-parse "
                              "(appended to built-in DEFAULT_EXCLUDE: vendor, var/cache, "
@@ -693,9 +719,10 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     diff_files = _parse_diff_files(args.diff_files)
     exclude = _parse_exclude(args.exclude)
+    console_cmd = _resolve_console_cmd(args.console_cmd, args.no_console)
     return cmd_inventory(
         args.project_root, args.recipe, args.review_root, diff_files, args.no_console,
-        exclude, console_cmd=args.console_cmd,
+        exclude, console_cmd=console_cmd,
     )
 
 

@@ -15,6 +15,11 @@
 #   --review-root <dir>          output dir (default: security-review-<harness> in cwd)
 #   --project-root <dir>         project to audit (default: current dir)
 #   --models high=<id>,fast=<id> pin model tiers (bypasses auto-proposal)
+#   --console-cmd <template>     run the project console via this command (may
+#                                contain spaces, e.g. "docker compose exec -T php
+#                                bin/console"); exported as FR_SECURITY_CONSOLE_CMD
+#                                so it rides the environment intact instead of the
+#                                whitespace-splitting orchestrator arg contract
 #   --no-resolve                 reuse an existing .model_map.json, skip discovery
 #   --go                         (codex) actually execute; without it, the prepared
 #                                command is printed for review (codex runs the
@@ -29,7 +34,7 @@ set -euo pipefail
 REPO="@@REPO@@"
 
 die() { echo "frsr: $*" >&2; exit 2; }
-usage() { sed -n '3,27p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,31p' "$0" | sed 's/^# \{0,1\}//'; }
 
 [ $# -ge 1 ] || { usage; exit 2; }
 SUB="$1"; shift
@@ -39,7 +44,7 @@ case "$SUB" in
   *) die "unknown subcommand '$SUB' (want: project|changes)" ;;
 esac
 
-HARNESS="" ; REVIEW_ROOT="" ; PROJECT_ROOT="$PWD" ; MODELS="" ; RESOLVE=1 ; GO=0 ; DRY=0
+HARNESS="" ; REVIEW_ROOT="" ; PROJECT_ROOT="$PWD" ; MODELS="" ; CONSOLE_CMD="" ; RESOLVE=1 ; GO=0 ; DRY=0
 PASS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -51,6 +56,8 @@ while [ $# -gt 0 ]; do
     --project-root=*) PROJECT_ROOT="${1#*=}"; shift ;;
     --models) MODELS="${2:?}"; shift 2 ;;
     --models=*) MODELS="${1#*=}"; shift ;;
+    --console-cmd) CONSOLE_CMD="${2:?}"; shift 2 ;;
+    --console-cmd=*) CONSOLE_CMD="${1#*=}"; shift ;;
     --no-resolve) RESOLVE=0; shift ;;
     --go|-y) GO=1; shift ;;
     --dry-run) DRY=1; shift ;;
@@ -79,6 +86,17 @@ esac
 export FR_SECURITY_CORE_ROOT="$CORE"
 : "${REVIEW_ROOT:=security-review-$HARNESS}"
 CMD="security-$SUB"
+
+# Console command rides the environment, not $ARGUMENTS: a template like
+# "docker compose exec -T php bin/console" contains spaces, which the shared
+# orchestrator/dispatch prompt contract splits on. Exporting it lets recon pick
+# it up intact (recon_inventory falls back to FR_SECURITY_CONSOLE_CMD), and the
+# orchestrator only needs to see that the var is set to enable console
+# enrichment (no space-bearing value crosses any prose boundary).
+if [ -n "$CONSOLE_CMD" ]; then
+  export FR_SECURITY_CONSOLE_CMD="$CONSOLE_CMD"
+  echo "frsr: FR_SECURITY_CONSOLE_CMD=$FR_SECURITY_CONSOLE_CMD"
+fi
 
 # The orchestrator parses $ARGUMENTS by splitting on whitespace, so a space in
 # a path truncates --project-root/--review-root at the space. This is a limit of
