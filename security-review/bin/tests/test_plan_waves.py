@@ -2441,5 +2441,46 @@ class SavePlanCliTests(unittest.TestCase):
             ctx_path.unlink()
 
 
+class PartialSectionRouting(unittest.TestCase):
+    """`partial` sections must route into waves exactly like `ok` ones.
+
+    Regression: `partial` became a valid section status (so console-enriched
+    recon passes validation), but if section_items/scalar_source_files still
+    gated on status=="ok" the admin_surface / route_authz waves would silently
+    drop the EasyAdmin CRUD controllers and admin routes those sections carry —
+    under-covering exactly the surface `partial` means "look harder at".
+    """
+
+    def _ctx(self, sections):
+        return pw.ParsedContext(frontmatter={}, sections=sections)
+
+    def test_partial_list_section_items_are_routed(self):
+        ctx = self._ctx({"recon_bags": {"addon": {"easyadmin": {"crud_controllers": {
+            "status": "partial",
+            "items": [{"class": "App\\Admin\\FooController",
+                       "file": "src/Admin/FooController.php"}],
+        }}}}})
+        items = ctx.section_items("recon_bags.addon.easyadmin.crud_controllers")
+        self.assertEqual([i["file"] for i in items], ["src/Admin/FooController.php"])
+
+    def test_partial_scalar_source_files_are_routed(self):
+        ctx = self._ctx({"recon_bags": {"stack": {"symfony": {"admin_authz_coverage": {
+            "status": "partial",
+            "data": {"routes_without_voter": 1},
+            "source_files": ["src/Admin/BarController.php"],
+        }}}}})
+        sf = ctx.scalar_source_files("recon_bags.stack.symfony.admin_authz_coverage")
+        self.assertEqual(sf, ["src/Admin/BarController.php"])
+
+    def test_unknown_section_still_not_routed(self):
+        # Control: unknown/none/pending remain unrouted (only ok|partial route).
+        ctx = self._ctx({"recon_bags": {"addon": {"easyadmin": {"crud_controllers": {
+            "status": "unknown", "reason": "x",
+            "items": [{"file": "src/Admin/FooController.php"}],
+        }}}}})
+        self.assertEqual(
+            ctx.section_items("recon_bags.addon.easyadmin.crud_controllers"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

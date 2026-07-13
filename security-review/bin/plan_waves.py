@@ -580,7 +580,12 @@ class ParsedContext:
 
     def section_items(self, path: str) -> list[dict[str, Any]]:
         payload = self.payload_at(path)
-        if not payload or payload.get("status") != "ok":
+        # `partial` is a routable status just like `ok`: the section carries real
+        # items, coverage is merely incomplete (e.g. EasyAdmin CRUD delegating
+        # configureFields() to a parent). Dropping it would silently under-route
+        # the admin_surface / route_authz waves — the opposite of what `partial`
+        # ("look harder here") should mean.
+        if not payload or payload.get("status") not in ("ok", "partial"):
             return []
         items = payload.get("items")
         if not isinstance(items, list):
@@ -591,9 +596,11 @@ class ParsedContext:
         return len(self.section_items(path)) > 0
 
     def scalar_source_files(self, path: str) -> list[str]:
-        """Return source_files of a scalar-shape section (status=ok), else []."""
+        """Return source_files of a scalar-shape section (status ok|partial), else []."""
         payload = self.payload_at(path)
-        if not payload or payload.get("status") != "ok":
+        # `partial` routes like `ok` (see section_items) — e.g. a partial
+        # admin_authz_coverage still lists the admin controllers to audit.
+        if not payload or payload.get("status") not in ("ok", "partial"):
             return []
         # Distinguish list-shape (has `items`) from scalar (has `data` /
         # `source_files`). Scalar sections in schema v2 carry source_files.
