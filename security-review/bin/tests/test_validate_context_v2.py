@@ -335,6 +335,48 @@ class CoreSectionsV2(unittest.TestCase):
             self.assertFalse(res.ok())
             self.assertTrue(any("reason" in e for e in res.errors))
 
+    def test_status_partial_list_validates(self):
+        # `partial` is a valid section status (recipes emit it for incomplete
+        # coverage, e.g. EasyAdmin CRUD delegating to a parent). It carries items
+        # and validates like `ok`. Regression: surfaced once console enrichment
+        # was enabled on real containerized projects.
+        body = (
+            "## Attack Surface\n<!-- section_id: attack_surface -->\n\n"
+            "```yaml\nstatus: partial\nitems: []\n```\n\n"
+        )
+        for sid, (shape, _) in vc.CORE_SECTIONS_V2.items():
+            if sid == "attack_surface":
+                continue
+            body += (
+                f"## {sid}\n<!-- section_id: {sid} -->\n\n"
+                f"```yaml\nstatus: pending_enrichment\nenrichment_hint: \"x\"\n"
+                f"{'items: []' if shape == 'list' else 'source_files: []'}\n```\n\n"
+            )
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), VALID_FRONTMATTER_V2, body)
+            res = vc.validate_context_file(p)
+            self.assertTrue(res.ok(), msg=f"errors: {res.errors}")
+
+    def test_status_partial_list_requires_items(self):
+        # partial is shape-validated like ok, so a list section still needs items.
+        body = (
+            "## Attack Surface\n<!-- section_id: attack_surface -->\n\n"
+            "```yaml\nstatus: partial\n```\n\n"
+        )
+        for sid, (shape, _) in vc.CORE_SECTIONS_V2.items():
+            if sid == "attack_surface":
+                continue
+            body += (
+                f"## {sid}\n<!-- section_id: {sid} -->\n\n"
+                f"```yaml\nstatus: pending_enrichment\nenrichment_hint: \"x\"\n"
+                f"{'items: []' if shape == 'list' else 'source_files: []'}\n```\n\n"
+            )
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), VALID_FRONTMATTER_V2, body)
+            res = vc.validate_context_file(p)
+            self.assertFalse(res.ok())
+            self.assertTrue(any("requires 'items'" in e for e in res.errors))
+
 
 # ---------------------------------------------------------------------------
 # recon_bags bag validation.
@@ -728,6 +770,191 @@ class SanityProbeContentFilter(unittest.TestCase):
                                   recipe_loader=lambda _name: FakeRecipe())
             self.assertFalse(res.ok(),
                              msg="without content_filter the noisy probe should error")
+
+    def _context_with_attack_surface(self, items_yaml: str) -> str:
+        """Full CONTEXT.md body: an `## Attack Surface` section carrying
+        `items_yaml`, plus stubbed unknown sections for every other core id."""
+        body = (
+            "## Attack Surface\n<!-- section_id: attack_surface -->\n\n"
+            "```yaml\nstatus: ok\nitems:\n" + items_yaml + "```\n\n"
+        )
+        for sid, (shape, _) in vc.CORE_SECTIONS_V2.items():
+            if sid == "attack_surface":
+                continue
+            body += (
+                f"## {sid}\n<!-- section_id: {sid} -->\n\n"
+                f"```yaml\nstatus: unknown\nreason: \"stub\"\n```\n\n"
+            )
+        return body
+
+    def test_kind_filter_tuple_unions_sibling_kinds(self):
+        # HTTP controllers are declared under two sibling kinds: http_route and
+        # http_route_admin (EasyAdmin). A tuple kind_filter must union them so
+        # the admin controller is not read as a coverage gap.
+        with tempfile.TemporaryDirectory() as td:
+            project = Path(td) / "project"
+            self._write_php(project, "src/Controller/HomeController.php",
+                "<?php\nclass HomeController {}\n")
+            self._write_php(project, "src/Admin/Controller/ClientController.php",
+                "<?php\nclass ClientController extends AbstractCrudController {}\n")
+
+            from recon.types import SanityProbe
+
+            class FakeRecipe:
+                EXCLUDE_PATHS = ()
+
+                @staticmethod
+                def sanity_probes():
+                    return [SanityProbe(
+                        section_path="attack_surface",
+                        glob_patterns=["src/**/*Controller.php"],
+                        label="HTTP controllers",
+                        kind_filter=("http_route", "http_route_admin"),
+                    )]
+
+            items = (
+                "  - kind: http_route\n    file: src/Controller/HomeController.php\n"
+                "  - kind: http_route_admin\n    file: src/Admin/Controller/ClientController.php\n"
+            )
+            review_root = Path(td) / "review"
+            write_context(review_root, VALID_FRONTMATTER_V2,
+                          self._context_with_attack_surface(items))
+            res = vc.sanity_check(review_root, project_root=project,
+                                  recipe_loader=lambda _name: FakeRecipe())
+            self.assertTrue(res.ok(), msg=f"errors: {res.errors}")
+
+    def test_single_kind_filter_flags_sibling_kind_control(self):
+        # Control: the SAME layout with a single-kind filter must still flag the
+        # http_route_admin controller as missing — pins that the union fix, not
+        # a looser gate, is what clears it.
+        with tempfile.TemporaryDirectory() as td:
+            project = Path(td) / "project"
+            self._write_php(project, "src/Controller/HomeController.php",
+                "<?php\nclass HomeController {}\n")
+            self._write_php(project, "src/Admin/Controller/ClientController.php",
+                "<?php\nclass ClientController extends AbstractCrudController {}\n")
+
+            from recon.types import SanityProbe
+
+            class FakeRecipe:
+                EXCLUDE_PATHS = ()
+
+                @staticmethod
+                def sanity_probes():
+                    return [SanityProbe(
+                        section_path="attack_surface",
+                        glob_patterns=["src/**/*Controller.php"],
+                        label="HTTP controllers",
+                        kind_filter="http_route",
+                    )]
+
+            items = (
+                "  - kind: http_route\n    file: src/Controller/HomeController.php\n"
+                "  - kind: http_route_admin\n    file: src/Admin/Controller/ClientController.php\n"
+            )
+            review_root = Path(td) / "review"
+            write_context(review_root, VALID_FRONTMATTER_V2,
+                          self._context_with_attack_surface(items))
+            res = vc.sanity_check(review_root, project_root=project,
+                                  recipe_loader=lambda _name: FakeRecipe())
+            self.assertFalse(res.ok(),
+                             msg="single-kind filter should flag the admin controller")
+
+    def test_listener_content_filter_excludes_doctrine_and_messenger(self):
+        # `*Listener.php` also matches Doctrine ORM listeners and Messenger
+        # handlers — neither is a kernel event listener. The content_filter must
+        # keep only #[AsEventListener] / EventSubscriberInterface files in `found`.
+        with tempfile.TemporaryDirectory() as td:
+            project = Path(td) / "project"
+            self._write_php(project, "src/EventListener/LoginListener.php",
+                "<?php\nuse Symfony\\Component\\EventDispatcher\\Attribute\\AsEventListener;\n"
+                "#[AsEventListener] class LoginListener {}\n")
+            self._write_php(project, "src/EventSubscriber/AuditSubscriber.php",
+                "<?php\nuse Symfony\\Component\\EventDispatcher\\EventSubscriberInterface;\n"
+                "class AuditSubscriber implements EventSubscriberInterface {}\n")
+            self._write_php(project, "src/ORM/Listener/StampListener.php",
+                "<?php\nuse Doctrine\\Bundle\\DoctrineBundle\\Attribute\\AsDoctrineListener;\n"
+                "#[AsDoctrineListener] class StampListener {}\n")
+            self._write_php(project, "src/Async/ImportListener.php",
+                "<?php\nuse Symfony\\Component\\Messenger\\Attribute\\AsMessageHandler;\n"
+                "#[AsMessageHandler] class ImportListener {}\n")
+            # Decoy: imports EventSubscriberInterface for a type hint but does
+            # NOT implement it (registered elsewhere). The unanchored regex
+            # would wrongly count this as found → false coverage gap; the
+            # `implements`-anchored form must exclude it.
+            self._write_php(project, "src/ORM/Listener/CacheWarmListener.php",
+                "<?php\nuse Symfony\\Component\\EventDispatcher\\EventSubscriberInterface;\n"
+                "final class CacheWarmListener { public function __construct(EventSubscriberInterface $s) {} }\n")
+
+            from recon.types import SanityProbe
+
+            class FakeRecipe:
+                EXCLUDE_PATHS = ()
+
+                @staticmethod
+                def sanity_probes():
+                    return [SanityProbe(
+                        section_path="attack_surface",
+                        glob_patterns=["src/**/*Listener.php", "src/**/*Subscriber.php"],
+                        label="Event listeners/subscribers",
+                        kind_filter="event_listener",
+                        content_filter=r"#\[\s*AsEventListener\b|implements[^{]*\bEventSubscriberInterface\b",
+                    )]
+
+            items = (
+                "  - kind: event_listener\n    file: src/EventListener/LoginListener.php\n"
+                "  - kind: event_listener\n    file: src/EventSubscriber/AuditSubscriber.php\n"
+            )
+            review_root = Path(td) / "review"
+            write_context(review_root, VALID_FRONTMATTER_V2,
+                          self._context_with_attack_surface(items))
+            res = vc.sanity_check(review_root, project_root=project,
+                                  recipe_loader=lambda _name: FakeRecipe())
+            self.assertTrue(res.ok(), msg=f"errors: {res.errors}")
+
+    def test_coverage_false_skips_ratio_but_keeps_hallucination(self):
+        # A coverage=False probe verifies declared files exist but does not gate
+        # on the filesystem-coverage ratio (the section is a semantic subset the
+        # glob cannot reproduce). Ten undeclared entities must NOT error; a
+        # declared file that is absent must STILL warn.
+        with tempfile.TemporaryDirectory() as td:
+            project = Path(td) / "project"
+            for i in range(10):
+                self._write_php(project, f"src/Entity/E{i}.php",
+                                "<?php\n#[ORM\\Column] private $x;\n")
+            self._write_php(project, "src/Entity/User.php",
+                            "<?php\n#[ORM\\Column] private $password;\n")
+
+            from recon.types import SanityProbe
+
+            class FakeRecipe:
+                EXCLUDE_PATHS = ()
+
+                @staticmethod
+                def sanity_probes():
+                    return [SanityProbe(
+                        section_path="attack_surface",
+                        glob_patterns=["src/Entity/**/*.php"],
+                        label="sensitive columns",
+                        coverage=False,
+                    )]
+
+            # Declare the one sensitive entity + one hallucinated (absent) file.
+            items = (
+                "  - file: src/Entity/User.php\n"
+                "  - file: src/Entity/Ghost.php\n"
+            )
+            review_root = Path(td) / "review"
+            write_context(review_root, VALID_FRONTMATTER_V2,
+                          self._context_with_attack_surface(items))
+            res = vc.sanity_check(review_root, project_root=project,
+                                  recipe_loader=lambda _name: FakeRecipe())
+            # No coverage error despite 10 undeclared entities on disk.
+            self.assertTrue(res.ok(), msg=f"errors: {res.errors}")
+            # Hallucination still surfaces as a warning.
+            self.assertTrue(
+                any("not on disk" in w and "Ghost.php" in w for w in res.warnings),
+                msg=f"expected hallucination warning, got: {res.warnings}")
 
 
 # ---------------------------------------------------------------------------

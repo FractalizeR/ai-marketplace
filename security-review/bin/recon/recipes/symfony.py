@@ -308,7 +308,12 @@ def sanity_probes() -> list[SanityProbe]:
             section_path="attack_surface",
             glob_patterns=["src/**/*Controller.php", "app/**/*Controller.php"],
             label="HTTP controllers",
-            kind_filter="http_route",
+            # Controllers are inventoried under two sibling kinds: plain
+            # `http_route` (attribute routes) and `http_route_admin` (EasyAdmin
+            # CRUD/Dashboard controllers, whose entry points are CRUD actions,
+            # not #[Route]). Filtering on `http_route` alone would flag every
+            # EasyAdmin controller as a coverage gap though it is fully declared.
+            kind_filter=("http_route", "http_route_admin"),
         ),
         SanityProbe(
             section_path="attack_surface",
@@ -341,6 +346,19 @@ def sanity_probes() -> list[SanityProbe]:
                            "app/**/*Listener.php", "app/**/*Subscriber.php"],
             label="Event listeners/subscribers",
             kind_filter="event_listener",
+            # `*Listener.php` / `*Subscriber.php` also match Doctrine ORM
+            # listeners (#[AsDoctrineListener] / #[AsEntityListener]) and
+            # Messenger handlers (#[AsMessageHandler]) — none of which are
+            # kernel event listeners. Narrow `found` to the two markers the
+            # collector actually classifies as event_listener so those files
+            # do not read as coverage gaps. (A kernel.event_listener registered
+            # only via a services.yaml tag carries neither marker in its PHP
+            # source and is intentionally out of this glob's reach.)
+            # The EventSubscriberInterface branch is anchored to an `implements`
+            # list (bounded by the class-body `{`) so a mere `use …\
+            # EventSubscriberInterface;` import or a comment mention does not
+            # inflate `found`; `[^{]*` still spans a multi-interface list.
+            content_filter=r"#\[\s*AsEventListener\b|implements[^{]*\bEventSubscriberInterface\b",
         ),
         SanityProbe(
             section_path="recon_bags.addon.easyadmin.crud_controllers",
@@ -370,14 +388,19 @@ def sanity_probes() -> list[SanityProbe]:
             label="symfony.routes_authz_matrix",
             content_filter=r"#\[\s*Route\b",
         ),
-        # Wave 2-D (3.4.0): sensitive entity columns. Glob covers both
-        # canonical (src/Entity/*) and DDD-style (src/<Domain>/Entity/*) layouts.
+        # Wave 2-D (3.4.0): sensitive entity columns. Hallucination-only: the
+        # section lists only entities carrying a column whose NAME matches the
+        # sensitive-field regex — a semantic subset a filename/text glob cannot
+        # reproduce (a whole-file regex also matches the word in an #[ORM\\Table]
+        # name or a comment, which the column-name-scoped collector rightly
+        # ignores). A coverage ratio over "all entity files" is a category error
+        # here, so we verify declared files exist but skip the diff.
         SanityProbe(
             section_path="recon_bags.stack.symfony.sensitive_columns",
             glob_patterns=["src/Entity/**/*.php", "src/**/Entity/*.php",
                            "app/Entity/**/*.php", "app/**/Entity/*.php"],
             label="symfony.sensitive_columns",
-            content_filter=r"#\[\s*ORM\\Column\b",
+            coverage=False,
         ),
     ]
 

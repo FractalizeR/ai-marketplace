@@ -70,7 +70,28 @@ class SanityProbesIncludeNewSections(unittest.TestCase):
         probe = next(p for p in probes if p.label == "symfony.sensitive_columns")
         self.assertEqual(probe.section_path,
                          "recon_bags.stack.symfony.sensitive_columns")
+        # sensitive_columns is a semantic subset (only sensitively-NAMED columns),
+        # not a filename universe, so it is hallucination-only: coverage disabled,
+        # no coverage-ratio content_filter. A filename/whole-file glob cannot
+        # reproduce the collector's column-name-scoped predicate.
+        self.assertFalse(probe.coverage)
+        self.assertIsNone(probe.content_filter)
+
+    def test_http_controllers_probe_unions_admin_kind(self) -> None:
+        # HTTP-controllers probe must accept both http_route and
+        # http_route_admin so EasyAdmin controllers are not false coverage gaps.
+        probes = recipe_symfony.sanity_probes()
+        probe = next(p for p in probes if p.label == "HTTP controllers")
+        self.assertEqual(set(probe.kind_filter), {"http_route", "http_route_admin"})
+
+    def test_event_listener_probe_has_marker_content_filter(self) -> None:
+        # Event-listener probe must narrow found to kernel-event markers so
+        # Doctrine/Messenger "*Listener.php" files are not false coverage gaps.
+        probes = recipe_symfony.sanity_probes()
+        probe = next(p for p in probes if p.label == "Event listeners/subscribers")
         self.assertIsNotNone(probe.content_filter)
+        self.assertIn("AsEventListener", probe.content_filter)
+        self.assertIn("EventSubscriberInterface", probe.content_filter)
 
 
 if __name__ == "__main__":

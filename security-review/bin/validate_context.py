@@ -286,7 +286,12 @@ V2_FRONTMATTER_REQUIRED = {
     "sources_used", "missing_sections", "recon_confidence",
 }
 
-V2_VALID_STATUSES = {"ok", "unknown", "none", "pending_enrichment"}
+# `partial` is a legitimate section state a recipe emits when it computed the
+# section but coverage is incomplete (e.g. EasyAdmin CRUD controllers that
+# delegate configureFields() to a parent, or admin routes lacking an explicit
+# voter). It is shape-validated like `ok` (has items/data) — see below. It first
+# surfaced on real containerized projects once console enrichment was enabled.
+V2_VALID_STATUSES = {"ok", "partial", "unknown", "none", "pending_enrichment"}
 V2_CONFIDENCE_LEVELS = {"high", "medium", "low"}
 V2_CEILING_LEVELS = {"high", "medium", "low"}
 
@@ -565,7 +570,8 @@ def _validate_payload_shape(
         return
     if status == "none":
         return  # valid empty marker
-    # status == "ok"
+    # status == "ok" or "partial" — both carry collected items/data, so both get
+    # the same shape validation (partial just signals incomplete coverage).
     if expected_type == SECTION_TYPE_LIST:
         items = payload.get("items")
         if items is None:
@@ -726,8 +732,10 @@ def _validate_recon_bags(
                 expected_shape = SECTION_TYPE_LIST if spec.shape == "list" else SECTION_TYPE_SCALAR
                 section_label = f"recon_bags.{kind}.{name}.{key}"
                 _validate_payload_shape(section_label, expected_shape, sub_payload, res)
-                # Per-item / per-data key validation when status=ok.
-                if sub_payload.get("status") == "ok":
+                # Per-item / per-data key validation when the section carries
+                # data (status ok or partial — partial still lists items whose
+                # keys must match the allowlist).
+                if sub_payload.get("status") in ("ok", "partial"):
                     if spec.shape == "list" and spec.item_keys is not None:
                         items = sub_payload.get("items", [])
                         if isinstance(items, list):
@@ -799,7 +807,13 @@ def _payload_at_path(text: str, section_path: str) -> Optional[dict]:
     return cur if isinstance(cur, dict) else None
 
 
-def _declared_files(payload: dict, kind_filter: Optional[str] = None) -> set[str]:
+def _declared_files(payload: dict, kind_filter=None) -> set[str]:
+    # kind_filter may be a single kind string or a tuple/list of kinds; a
+    # multi-kind filter matches an item whose `kind` is any member (e.g. HTTP
+    # controllers are filed under both `http_route` and `http_route_admin`).
+    kinds = None
+    if kind_filter is not None:
+        kinds = {kind_filter} if isinstance(kind_filter, str) else set(kind_filter)
     items = payload.get("items")
     if not isinstance(items, list):
         return set()
@@ -807,7 +821,7 @@ def _declared_files(payload: dict, kind_filter: Optional[str] = None) -> set[str
     for it in items:
         if not isinstance(it, dict):
             continue
-        if kind_filter is not None and it.get("kind") != kind_filter:
+        if kinds is not None and it.get("kind") not in kinds:
             continue
         f = it.get("file")
         if isinstance(f, str) and f.strip():
@@ -941,11 +955,12 @@ def sanity_check(
                 f"sanity[{probe.label}]: section {probe.section_path} status=pending_enrichment, coverage check skipped"
             )
             continue
-        if status != "ok":
+        if status not in ("ok", "partial"):
             # unknown / none — no hallucinations possible, skip coverage.
             continue
         declared = _declared_files(payload, kind_filter=probe.kind_filter)
-        # Hallucination check.
+        # Hallucination check (applies to ok and partial alike — a declared file
+        # must exist on disk regardless of coverage completeness).
         hallucinated = sorted(f for f in declared if not (project_root / f).is_file())
         if hallucinated:
             preview = ", ".join(hallucinated[:5])
@@ -953,6 +968,15 @@ def sanity_check(
             res.warnings.append(
                 f"sanity[{probe.label}]: {len(hallucinated)} declared file(s) not on disk: {preview}{extra}"
             )
+        if status == "partial":
+            # `partial` self-declares incomplete coverage, so a coverage-diff
+            # ratio would be a guaranteed (and meaningless) gap. Hallucination
+            # above is the only sanity check that applies.
+            continue
+        if not getattr(probe, "coverage", True):
+            # Hallucination-only probe: the section is a semantic subset the
+            # glob cannot reproduce, so a coverage ratio would be noise.
+            continue
         # Coverage diff ladder.
         found = _glob_files(project_root, probe.glob_patterns, exclude=exclude_paths)
         if probe.content_filter:

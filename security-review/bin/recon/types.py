@@ -15,7 +15,7 @@ from typing import Any, Literal, Optional
 # ---------------------------------------------------------------------------
 
 InventoryStatus = Literal["ok", "partial", "failed"]
-SectionStatus = Literal["ok", "unknown", "none", "pending_enrichment"]
+SectionStatus = Literal["ok", "partial", "unknown", "none", "pending_enrichment"]
 
 
 # ---------------------------------------------------------------------------
@@ -83,18 +83,28 @@ class SanityProbe:
 
     section_path supports dot-notation:
       "attack_surface" or "recon_bags.stack.symfony.voters".
-    kind_filter (optional) filters items by `kind` for attack_surface.
+    kind_filter (optional) filters declared items by `kind` for attack_surface.
+    It accepts either a single kind string or a tuple of kinds — a tuple matches
+    items whose `kind` is any member (e.g. HTTP controllers span both
+    `http_route` and `http_route_admin`, so declaring both keeps EasyAdmin
+    controllers from reading as coverage gaps).
     content_filter (optional) is a regex; when set, only files whose
     text matches are counted as filesystem matches. Used to disambiguate
     name-based collisions (e.g. *Command.php matches both Symfony Console
     commands and DDD/CQRS Command DTOs — the regex narrows to real CLI).
+    coverage: when False, only the hallucination check runs (declared files
+    must exist on disk) and the filesystem-coverage ratio is skipped. Use for
+    sections whose membership is a semantic subset the glob cannot reproduce —
+    e.g. sensitive_columns lists only entities with a sensitively-NAMED column,
+    so a filename glob over all entities is not a meaningful coverage universe.
     """
 
     section_path: str
     glob_patterns: list[str]
     label: str
-    kind_filter: Optional[str] = None
+    kind_filter: Optional[str | tuple[str, ...]] = None
     content_filter: Optional[str] = None
+    coverage: bool = True
 
 
 @dataclass
@@ -119,7 +129,7 @@ class SectionSpec:
     shape: "list" or "scalar".
     item_keys (for list-shape): set of allowed keys per item.
     data_keys (for scalar-shape): set of allowed keys in data dict.
-    required: must be present in build_inventory output (status=ok / unknown / none / pending_enrichment).
+    required: must be present in build_inventory output (status=ok / partial / unknown / none / pending_enrichment).
     """
 
     shape: Literal["list", "scalar"]
