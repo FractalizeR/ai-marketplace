@@ -770,10 +770,20 @@ def collect_attack_surface(
     classes_data, classes_warn = sandbox.run_extractor(
         plugin_root, project_root, "class", project_root, exclude=exclude,
     )
+    fqn_to_file: dict[str, str] = {}
     if classes_warn:
         warnings.append(classes_warn)
     elif classes_data:
         sources_used.append("extract_php_metadata.php:class")
+        # fqn → file over ALL classes (pre-classification), so console
+        # enrichment can resolve a source file for a debug:router route whose
+        # controller is declared without a static #[Route] attribute — the
+        # debug:router JSON carries no file. See _enrich_via_console.
+        for cls in classes_data.get("items", []):
+            _fqn = (cls.get("fqn") or "").strip()
+            _frel = _to_relative(cls.get("file"), project_root)
+            if _fqn and _frel and not _is_excluded(_frel, EXCLUDE_PATHS):
+                fqn_to_file[_fqn] = _frel
         seen_admin_classes: set[str] = set()
         for cls in classes_data.get("items", []):
             kind = _classify_kind(cls, {})
@@ -854,6 +864,7 @@ def collect_attack_surface(
     if getattr(console_runner, "mode", "disabled") != "disabled":
         _enrich_via_console(
             project_root, items, sources_used, warnings, diff_files, console_runner,
+            fqn_to_file,
         )
     else:
         reason = getattr(console_runner, "disabled_reason", None) or ""
@@ -924,6 +935,7 @@ def _enrich_via_console(
     warnings: list[str],
     diff_files: Optional[set[str]],
     runner: "object",
+    fqn_to_file: Optional[dict[str, str]] = None,
 ) -> None:
     """Run console probes via `runner` and fold their output into `items`.
     Per-command failures are captured in `warnings`, not raised — degraded
@@ -966,17 +978,21 @@ def _enrich_via_console(
                 if key in seen:
                     continue
                 seen.add(key)
+                # Resolve the source file from the controller FQN (debug:router
+                # gives `Fqn::method` and no file). Leaves "" when unresolved.
+                cls_fqn = controller.split("::", 1)[0].lstrip("\\") if controller else ""
+                file_rel = (fqn_to_file or {}).get(cls_fqn, "")
                 method_str = info.get("method") or ""
                 items.append({
                     "kind": "http_route",
                     "surface_type": "entry",
                     "identifier": identifier,
                     "handler": controller,
-                    "file": "",
+                    "file": file_rel,
                     "methods": list(method_str.split("|")) if method_str else [],
                     "guards": [],
                     "source": "console:debug_router",
-                    "touched_by_diff": False,
+                    "touched_by_diff": _touched(file_rel, diff_files) if file_rel else False,
                     "line": 0,
                 })
 

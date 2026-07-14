@@ -1180,5 +1180,75 @@ class TrustedConfigTests(unittest.TestCase):
         self.assertEqual(payload.source_files, [])
 
 
+class ConsoleRouteFileResolution(unittest.TestCase):
+    """Regression: console-enriched debug:router routes must resolve `file`
+    from the controller FQN via the class map. `debug:router --format=json`
+    carries no source file, so the field was hardcoded "" — that made the
+    sanity[HTTP controllers] probe (which keys on `file`) report near-total
+    coverage loss on projects whose controllers lack static #[Route] attributes.
+    """
+
+    @staticmethod
+    def _router_json() -> str:
+        import json
+        return json.dumps({
+            "app_admin_auth": {
+                "path": "/admin/auth", "method": "POST",
+                "defaults": {"_controller":
+                             "App\\Api\\Admin\\Controller\\AuthController::authenticate"},
+            },
+            "app_ghost": {  # controller class absent from the map → stays ""
+                "path": "/x", "method": "GET",
+                "defaults": {"_controller": "App\\Unknown\\GhostController::index"},
+            },
+        })
+
+    def _enrich(self, fqn_to_file, diff_files=None):
+        from unittest import mock
+        from recon import sandbox
+        items: list[dict] = []
+
+        def fake_run(runner, args):
+            if args[:1] == ["debug:router"]:
+                return self._router_json(), None
+            return None, None
+
+        with mock.patch.object(sandbox, "try_console_smoke", return_value=(True, None)), \
+             mock.patch.object(sandbox, "run_console_command", side_effect=fake_run):
+            recipe_symfony._enrich_via_console(
+                Path("/proj"), items, [], [], diff_files, object(), fqn_to_file,
+            )
+        return {it["identifier"]: it for it in items if it.get("kind") == "http_route"}
+
+    def test_file_resolved_from_fqn(self):
+        routes = self._enrich(
+            {"App\\Api\\Admin\\Controller\\AuthController":
+             "src/Api/Admin/Controller/AuthController.php"},
+        )
+        self.assertEqual(routes["app_admin_auth"]["file"],
+                         "src/Api/Admin/Controller/AuthController.php")
+
+    def test_unresolved_controller_stays_empty(self):
+        routes = self._enrich(
+            {"App\\Api\\Admin\\Controller\\AuthController":
+             "src/Api/Admin/Controller/AuthController.php"},
+        )
+        self.assertEqual(routes["app_ghost"]["file"], "")
+        self.assertFalse(routes["app_ghost"]["touched_by_diff"])
+
+    def test_touched_by_diff_follows_resolved_file(self):
+        routes = self._enrich(
+            {"App\\Api\\Admin\\Controller\\AuthController":
+             "src/Api/Admin/Controller/AuthController.php"},
+            diff_files={"src/Api/Admin/Controller/AuthController.php"},
+        )
+        self.assertTrue(routes["app_admin_auth"]["touched_by_diff"])
+
+    def test_no_map_degrades_gracefully(self):
+        # Back-compat: fqn_to_file omitted → file "" (old behaviour), no crash.
+        routes = self._enrich(None)
+        self.assertEqual(routes["app_admin_auth"]["file"], "")
+
+
 if __name__ == "__main__":
     unittest.main()
