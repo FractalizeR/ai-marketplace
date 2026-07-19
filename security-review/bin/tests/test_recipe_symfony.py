@@ -1314,6 +1314,49 @@ class ConsoleRouteFileResolution(unittest.TestCase):
         routes = self._enrich(None)
         self.assertEqual(routes["app_admin_auth"]["file"], "")
 
+    def test_array_callable_controller_normalized(self):
+        # Regression: LiipMonitorBundle (and other bundles) register the
+        # controller as a `[class, method]` callable ARRAY, so debug:router
+        # --format=json emits a list, not a "Fqn::method" string. The dedup key
+        # `(name, controller)` then held an unhashable list → the whole recon
+        # crashed with `unhashable type: 'list'` (tinyurl). It must be
+        # normalized to the string form and the source file still resolved.
+        from unittest import mock
+        from recon import sandbox
+        import json as _json
+        items: list[dict] = []
+        router = _json.dumps({
+            "liip_monitor_health": {
+                "path": "/_monitor/health", "method": "GET",
+                "defaults": {"_controller": [
+                    "Liip\\MonitorBundle\\Controller\\HealthCheckController",
+                    "indexAction",
+                ]},
+            },
+        })
+
+        def fake_run(runner, args):
+            if args[:1] == ["debug:router"]:
+                return router, None
+            return None, None
+
+        with mock.patch.object(sandbox, "try_console_smoke", return_value=(True, None)), \
+             mock.patch.object(sandbox, "run_console_command", side_effect=fake_run):
+            recipe_symfony._enrich_via_console(
+                Path("/proj"), items, [], [], None, object(),
+                {"Liip\\MonitorBundle\\Controller\\HealthCheckController":
+                 "vendor/liip/monitor-bundle/Controller/HealthCheckController.php"},
+            )
+        route = next(it for it in items if it.get("identifier") == "liip_monitor_health")
+        self.assertEqual(
+            route["handler"],
+            "Liip\\MonitorBundle\\Controller\\HealthCheckController::indexAction",
+        )
+        self.assertEqual(
+            route["file"],
+            "vendor/liip/monitor-bundle/Controller/HealthCheckController.php",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -984,6 +984,16 @@ def _enrich_via_console(
                 defaults = info.get("defaults") or {}
                 controller = (defaults.get("_controller") if isinstance(defaults, dict) else None) \
                     or info.get("controller") or ""
+                # Some bundles (e.g. LiipMonitorBundle) register the controller
+                # as a `[class, method]` callable array rather than a
+                # `Fqn::method` string, so debug:router --format=json emits a
+                # list. Normalize to the string form the rest of this path (and
+                # the dedup `key`) expects — a list is unhashable and would blow
+                # up `seen.add(key)` with `unhashable type: 'list'`.
+                if isinstance(controller, list):
+                    controller = "::".join(str(p) for p in controller)
+                elif not isinstance(controller, str):
+                    controller = str(controller) if controller else ""
                 identifier = name
                 key = (identifier, controller)
                 if key in seen:
