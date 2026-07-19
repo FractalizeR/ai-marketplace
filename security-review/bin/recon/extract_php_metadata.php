@@ -1302,10 +1302,32 @@ function collectClasses(array $parsed): array {
                     fn($a) => ['name' => $a['name'], 'arguments' => $a['arguments']],
                     $cls['attributes']
                 ),
+                // Compact, deduped list of method-level attribute FQNs across
+                // all methods. Surfaces registrations declared on a method
+                // rather than the class — notably Symfony 6.3+ event listeners
+                // that carry #[AsEventListener] on the handler method (the class
+                // itself may have no attribute, or an unrelated one like
+                // #[AsDoctrineListener]). Names only, no args — keeps the class
+                // inventory small on large projects.
+                'method_attributes' => collectMethodAttributeNames($cls),
             ];
         }
     }
     return ['kind' => 'class', 'items' => $items];
+}
+
+/** Flat, deduped list of resolved attribute FQNs found on any method of $cls. */
+function collectMethodAttributeNames(array $cls): array {
+    $names = [];
+    foreach (($cls['methods'] ?? []) as $m) {
+        foreach (($m['attributes'] ?? []) as $a) {
+            $n = $a['name'] ?? '';
+            if ($n !== '') {
+                $names[$n] = true;
+            }
+        }
+    }
+    return array_keys($names);
 }
 
 /**

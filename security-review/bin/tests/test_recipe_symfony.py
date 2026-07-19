@@ -1087,6 +1087,34 @@ class TripleReviewRegressions(unittest.TestCase):
                "implements": [], "attributes": []}
         self.assertEqual(_classify_kind(cls, {}), "cli_command")
 
+    def test_classify_kind_method_level_as_event_listener(self):
+        # Regression: a class registering as an event listener via a
+        # method-level #[AsEventListener] (no class-level attribute, no
+        # EventSubscriberInterface) used to classify as None, so recon under-
+        # counted listeners and the recon sanity-check aborted the whole audit
+        # (creditcore: RequestIdListener / Vich upload listeners).
+        from recon.recipes.symfony import _classify_kind
+        AsEL = "Symfony\\Component\\EventDispatcher\\Attribute\\AsEventListener"
+        # The `class` kind output carries no full `methods`; the extractor
+        # surfaces the flat set of method-level attribute FQNs as
+        # `method_attributes`. Bare method-level listener (no class attribute).
+        cls = {"extends": None, "implements": [], "attributes": [],
+               "method_attributes": [AsEL]}
+        self.assertEqual(_classify_kind(cls, {}), "event_listener")
+        # Class carries an unrelated class-level #[AsDoctrineListener] while the
+        # event hook is a method-level #[AsEventListener] (Vich upload listener).
+        cls = {
+            "extends": None, "implements": [],
+            "attributes": [{"name": "Doctrine\\Bundle\\DoctrineBundle\\Attribute\\AsDoctrineListener",
+                            "arguments": {}}],
+            "method_attributes": [AsEL],
+        }
+        self.assertEqual(_classify_kind(cls, {}), "event_listener")
+        # A plain service class with no listener markers stays unclassified.
+        cls = {"extends": None, "implements": [], "attributes": [],
+               "method_attributes": []}
+        self.assertIsNone(_classify_kind(cls, {}))
+
     def test_m3_inline_comments_in_yaml_stripped(self):
         # Claude MEDIUM M3: trailing ` # comment` was kept as part of the
         # value, breaking `_classify_dsn` etc.

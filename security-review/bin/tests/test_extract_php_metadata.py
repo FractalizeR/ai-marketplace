@@ -238,6 +238,33 @@ class ClassMetadata(unittest.TestCase):
         # H1: attribute name resolved to FQN.
         self.assertIn("Symfony\\Component\\Messenger\\Attribute\\AsMessageHandler", attrs)
 
+    def test_method_level_attribute_surfaced_as_method_attributes(self):
+        # A Symfony 6.3+ event listener declares #[AsEventListener] on the
+        # handler method, not the class. The `class` kind drops full `methods`,
+        # so the extractor surfaces method-level attribute FQNs as the flat
+        # `method_attributes` set — otherwise the recipe under-counts listeners
+        # and the recon sanity-check aborts the audit. (creditcore regression)
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "RequestIdListener.php"
+            f.write_text(textwrap.dedent("""\
+                <?php
+                namespace App\\Infra;
+                use Symfony\\Component\\EventDispatcher\\Attribute\\AsEventListener;
+                use Symfony\\Component\\HttpKernel\\Event\\RequestEvent;
+                class RequestIdListener {
+                    #[AsEventListener(priority: 280)]
+                    public function addId(RequestEvent $e): void {}
+                }
+                """))
+            rc, out, _ = _run("class", f)
+            self.assertEqual(rc, 0)
+            cls = out["items"][0]
+            self.assertEqual(cls["attributes"], [])  # nothing at class level
+            self.assertIn(
+                "Symfony\\Component\\EventDispatcher\\Attribute\\AsEventListener",
+                cls["method_attributes"],
+            )
+
     def test_parent_chain_traverses_project_local_base_class(self):
         # `MyCommand extends BaseCommand extends Symfony\\...\\Command` — recipe
         # must surface `parent_chain` so CLI-command detection sees the symfony

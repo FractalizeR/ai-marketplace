@@ -694,6 +694,17 @@ def _classify_kind(cls: dict, namespace_uses: dict[str, str]) -> Optional[str]:
         return "event_listener"
     if attr_fqns & _AS_EVENT_LISTENER_FQNS or "AsEventListener" in attr_short:
         return "event_listener"
+    # Method-level #[AsEventListener] (Symfony 6.3+ style: the attribute sits on
+    # the handler method, not the class). Such classes carry no class-level
+    # AsEventListener and may not implement EventSubscriberInterface (they can
+    # even carry an unrelated class-level attribute like #[AsDoctrineListener]),
+    # so the class-level checks above miss them. The extractor surfaces the flat
+    # set of method-level attribute FQNs as `method_attributes` (the `class`
+    # kind output does not carry full `methods`).
+    method_attr_fqns = set(cls.get("method_attributes") or [])
+    method_attr_short = {n.rsplit("\\", 1)[-1] for n in method_attr_fqns}
+    if method_attr_fqns & _AS_EVENT_LISTENER_FQNS or "AsEventListener" in method_attr_short:
+        return "event_listener"
     return None
 
 
