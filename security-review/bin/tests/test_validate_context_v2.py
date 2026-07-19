@@ -771,6 +771,57 @@ class SanityProbeContentFilter(unittest.TestCase):
             self.assertFalse(res.ok(),
                              msg="without content_filter the noisy probe should error")
 
+    def test_abstract_command_base_not_a_coverage_gap(self):
+        # Regression: an abstract `*Command.php` base (extends Symfony Command)
+        # matches the glob + content_filter but is never inventoried (the
+        # classifier skips abstract classes), so it must not read as a coverage
+        # gap. A kind_filter probe drops abstract-class files from `found`.
+        # (pdf-renderer: abstract LockableCommand → false 50% CLI gap → abort.)
+        with tempfile.TemporaryDirectory() as td:
+            project = Path(td) / "project"
+            self._write_php(project, "src/Command/SyncCommand.php",
+                "<?php\nuse Symfony\\Component\\Console\\Command\\Command;\n"
+                "#[AsCommand(name: 'app:sync')] final class SyncCommand extends Command {}\n")
+            self._write_php(project, "src/Core/Command/LockableCommand.php",
+                "<?php\nuse Symfony\\Component\\Console\\Command\\Command;\n"
+                "abstract class LockableCommand extends Command {}\n")
+
+            from recon.types import SanityProbe
+
+            class FakeRecipe:
+                EXCLUDE_PATHS = ()
+
+                @staticmethod
+                def sanity_probes():
+                    return [SanityProbe(
+                        section_path="attack_surface",
+                        glob_patterns=["src/**/*Command.php"],
+                        label="CLI commands",
+                        kind_filter="cli_command",
+                        content_filter=r"Symfony\\Component\\Console\\Command\\Command|#\[\s*AsCommand\b",
+                    )]
+
+            body = (
+                "## Attack Surface\n<!-- section_id: attack_surface -->\n\n"
+                "```yaml\nstatus: ok\nitems:\n"
+                "  - kind: cli_command\n    file: src/Command/SyncCommand.php\n```\n\n"
+            )
+            for sid, (shape, _) in vc.CORE_SECTIONS_V2.items():
+                if sid == "attack_surface":
+                    continue
+                body += (
+                    f"## {sid}\n<!-- section_id: {sid} -->\n\n"
+                    f"```yaml\nstatus: unknown\nreason: \"stub\"\n```\n\n"
+                )
+            review_root = Path(td) / "review"
+            write_context(review_root, VALID_FRONTMATTER_V2, body)
+
+            res = vc.sanity_check(review_root, project_root=project,
+                                  recipe_loader=lambda _name: FakeRecipe())
+            # Only the concrete SyncCommand is declared; the abstract base is
+            # excluded from `found`, so declared 1 == found 1 → no gap.
+            self.assertTrue(res.ok(), msg=f"errors: {res.errors}; warnings: {res.warnings}")
+
     def _context_with_attack_surface(self, items_yaml: str) -> str:
         """Full CONTEXT.md body: an `## Attack Surface` section carrying
         `items_yaml`, plus stubbed unknown sections for every other core id."""

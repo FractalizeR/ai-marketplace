@@ -887,6 +887,34 @@ def _filter_by_content(project_root: Path, files: set[str], pattern: str) -> set
     return out
 
 
+_ABSTRACT_CLASS_RE = re.compile(r"(?m)^\s*abstract\s+class\b")
+
+
+def _exclude_abstract_class_files(project_root: Path, files: set[str]) -> set[str]:
+    """Drop files that declare a top-level `abstract class`.
+
+    Abstract base classes (BaseCommand, an abstract *Listener, an abstract CRUD
+    controller, …) are never user-reachable, so `_classify_kind` deliberately
+    returns None for them and they are absent from the declared inventory. A
+    name-glob sanity probe (`*Command.php`, `*Listener.php`) still matches the
+    base file, so without this exclusion the abstract base reads as a coverage
+    gap and can abort the audit (pdf-renderer: abstract `LockableCommand`).
+    Applied only to probes with a `kind_filter`, i.e. exactly the kinds whose
+    classifier skips abstract classes.
+    """
+    out = set()
+    for rel in files:
+        try:
+            text = (project_root / rel).read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            # Unreadable → keep it (fail toward surfacing, not hiding).
+            out.add(rel)
+            continue
+        if not _ABSTRACT_CLASS_RE.search(text):
+            out.add(rel)
+    return out
+
+
 def _enforce_ceiling(fm: dict, res: ValidationResult) -> None:
     rc = fm.get("recon_confidence")
     if not isinstance(rc, dict):
@@ -981,6 +1009,11 @@ def sanity_check(
         found = _glob_files(project_root, probe.glob_patterns, exclude=exclude_paths)
         if probe.content_filter:
             found = _filter_by_content(project_root, found, probe.content_filter)
+        if probe.kind_filter:
+            # kind_filter probes map to attack-surface kinds whose classifier
+            # skips abstract classes; drop abstract bases so they don't read as
+            # coverage gaps against a declared inventory that rightly omits them.
+            found = _exclude_abstract_class_files(project_root, found)
         if not found:
             continue  # nothing to glob; legit empty case
         missing = found - declared
