@@ -1039,6 +1039,43 @@ class TripleReviewRegressions(unittest.TestCase):
         self.assertEqual(ac[0], {"path": "^/admin", "roles": "ROLE_ADMIN"})
         self.assertEqual(ac[1], {"path": "^/pub", "roles": "PUBLIC_ACCESS"})
 
+    def test_multiline_flow_inline_comment_not_swallowing_next_key(self):
+        # Regression: an inline `# comment` on a line inside a multi-line flow
+        # block used to be joined verbatim with the following line, so
+        # `roles: [...], # or` + `allow_if: ...` produced the invalid key
+        # `# or allow_if`, aborting recon. Comments must be stripped per
+        # physical line before the buffer is joined. (batch security.yaml)
+        from recon.recipes.symfony import _parse_access_control
+        text = (
+            "security:\n"
+            "    access_control:\n"
+            "        - {\n"
+            "            path: ^/api/v1,\n"
+            "            roles: [ROLE_CLIENT, ROLE_ADMIN, ROLE_SERVICE], # or\n"
+            "            allow_if: 'is_granted(\"module_access\")'\n"
+            "          }\n"
+        )
+        ac = _parse_access_control(text)
+        self.assertEqual(len(ac), 1)
+        self.assertEqual(ac[0]["path"], "^/api/v1")
+        self.assertEqual(ac[0]["roles"], "[ROLE_CLIENT, ROLE_ADMIN, ROLE_SERVICE]")
+        self.assertEqual(ac[0]["allow_if"], 'is_granted("module_access")')
+        self.assertNotIn("# or allow_if", ac[0])
+
+    def test_multiline_flow_inline_comment_on_opening_line(self):
+        # The opening `- { ...` line also carries the same risk of a trailing
+        # inline comment swallowing the next buffered line.
+        from recon.recipes.symfony import _parse_access_control
+        text = (
+            "security:\n"
+            "    access_control:\n"
+            "        - { path: ^/admin,  # primary rule\n"
+            "            roles: ROLE_ADMIN }\n"
+        )
+        ac = _parse_access_control(text)
+        self.assertEqual(len(ac), 1)
+        self.assertEqual(ac[0], {"path": "^/admin", "roles": "ROLE_ADMIN"})
+
     def test_m2_classify_kind_does_not_match_app_command(self):
         # Claude MEDIUM M2: `extends_short == "Command"` collided with DDD
         # `App\Domain\Command` base class. FQN-only check fixes this.

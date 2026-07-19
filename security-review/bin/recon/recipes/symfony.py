@@ -1404,10 +1404,15 @@ def _parse_access_control(text: str) -> list[dict[str, str]]:
         if indent <= access_indent and flow_depth == 0:
             break
         stripped = raw.strip()
-        # If we are inside a multi-line flow block, accumulate lines.
+        # If we are inside a multi-line flow block, accumulate lines. Strip any
+        # inline `# comment` per physical line BEFORE buffering: the lines are
+        # later joined with spaces, so an un-stripped trailing comment would
+        # swallow the following line (`roles: [...], # or` + `allow_if: ...`
+        # -> `# or allow_if`, an invalid key).
         if flow_depth > 0:
-            flow_buf.append(stripped)
-            flow_depth += stripped.count("{") - stripped.count("}")
+            clean = _strip_inline_comment(stripped)
+            flow_buf.append(clean)
+            flow_depth += clean.count("{") - clean.count("}")
             if flow_depth <= 0:
                 # Block closed — join and parse.
                 full = " ".join(flow_buf)
@@ -1432,7 +1437,7 @@ def _parse_access_control(text: str) -> list[dict[str, str]]:
             if cur_active:
                 out.append(cur)
                 cur, cur_active = {}, False
-            tail = stripped[2:]  # strip the leading `- `
+            tail = _strip_inline_comment(stripped[2:])  # strip leading `- ` + inline comment
             flow_buf = [tail]
             # Count brace depth; `{` opens it, `}` closes it.
             flow_depth = tail.count("{") - tail.count("}")
