@@ -21,7 +21,7 @@ Minimum run:
 /fr-security-review:security-project
 ```
 
-Artifacts are written to `security-review-<label>/` in the current working directory. The folder is automatically added to a local `.gitignore` (`<review_root>/.gitignore` with the content `*`); the project-level `.gitignore` is not modified.
+Artifacts are written to `security-review-<label>/` in the current working directory. The folder is automatically added to a local `.gitignore` (`<review_root>/.gitignore` with the content `*`). The plugin does not modify the project-level `.gitignore`; if review artifacts are already tracked by git, it warns and prints the command to stop tracking them instead of touching git state itself.
 
 ## Pipeline
 

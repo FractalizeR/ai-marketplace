@@ -14,6 +14,8 @@ allowed-tools:
   - Bash(git diff origin/*)
   - Bash(git status *)
   - Bash(git log *)
+  - Bash(git -C *)
+  - Bash(git check-ignore *)
   - Bash(ls *)
   - Bash(mkdir *)
   - Bash(rm *)
@@ -128,6 +130,61 @@ review_root:  <REVIEW_ROOT> (label: <label or "explicit override">)
 project_root: <PROJECT_ROOT>
 ```
 
+#### 0.5. Git preflight for review artifacts (advisory, never blocking)
+
+The local `.gitignore` created in Step 1 only hides **untracked** files. It cannot
+retroactively hide files already committed (a stale `git add -f`, or a run that
+predates the local `.gitignore`). Three checks surface that hazard; none of them
+aborts the run. Check from `<REVIEW_ROOT>`, not cwd — in composite repos (monorepo
++ PHP subproject) `<REVIEW_ROOT>` and `<PROJECT_ROOT>` can sit in different git
+repositories.
+
+0.5.1. Is `<REVIEW_ROOT>` inside a git repository?
+
+```bash
+git -C "<REVIEW_ROOT>" rev-parse --show-toplevel
+```
+
+Non-zero exit (no repository — including the common first-ever-run case where
+`<REVIEW_ROOT>` does not exist yet, which fails the same way) — print that fact
+and continue; skip 0.5.2 below, there is nothing tracked to find yet. **0.5.3 is
+independent of this result** — it runs later, after Step 1 has created
+`<REVIEW_ROOT>`, when it may well be inside a repository even though it wasn't
+here.
+
+0.5.2. Are review artifacts already tracked by git?
+
+```bash
+git -C "<REVIEW_ROOT>" ls-files --error-unmatch -- "<REVIEW_ROOT>"
+```
+
+Exit 0 (tracked files found) — print, then continue with Step 1:
+
+```
+WARNING: <REVIEW_ROOT> is tracked by git — the local .gitignore will not hide it.
+  To stop tracking:  git rm -r --cached <REVIEW_ROOT>
+  To ignore future runs, add to the project .gitignore:  security-review-*/
+```
+
+0.5.3. Deferred — run this at the end of Step 1, once `<REVIEW_ROOT>/.gitignore`
+exists on disk (`git check-ignore` reads the file's actual content, so running it
+earlier would give a false reading). Self-contained — read its own exit code
+rather than reusing 0.5.1's result:
+
+```bash
+git -C "<REVIEW_ROOT>" check-ignore -q "<REVIEW_ROOT>/.gitignore"
+```
+
+- exit 0 — ignored, the local `.gitignore` is effective; print nothing.
+- exit 1 — a repository exists but the file is not ignored (shadowed by a
+  broader rule, or something odd) — print the warning below.
+- exit 128 — `<REVIEW_ROOT>` is still not inside a git repository — nothing to
+  check, print nothing.
+
+```
+WARNING: <REVIEW_ROOT>/.gitignore does not appear to be in effect (git check-ignore failed). Review artifacts may still show up in `git status`.
+```
+
 ### 1. Ensure review_root layout
 
 Create the directory and local `.gitignore` (content: a single line `*`) idempotently:
@@ -138,7 +195,11 @@ test -f "<REVIEW_ROOT>/.gitignore" || printf '*\n' > "<REVIEW_ROOT>/.gitignore"
 mkdir -p "<REVIEW_ROOT>/waves"
 ```
 
-This **does not modify the project's `.gitignore`** and does not enter git.
+Then run 0.5.3 above to confirm the local `.gitignore` actually takes effect.
+
+The plugin does not modify the project-level `.gitignore` and does not enter git on
+its own; if 0.5.2 found tracked artifacts, the user applies the printed command
+themselves.
 
 ### 2. Legacy v1 detection (warning, not abort)
 
@@ -551,6 +612,6 @@ Security review complete.
 
 ## PRINCIPLES
 
-- Never commit artifacts — the local `.gitignore` inside `<REVIEW_ROOT>/` already ignores all content + the `.gitignore` itself. The user decides themselves to commit via `git add -f`, if they wish.
+- Never commit artifacts — the local `.gitignore` inside `<REVIEW_ROOT>/` already ignores all content + the `.gitignore` itself; the plugin does not modify the project-level `.gitignore`. Step 0.5 warns if artifacts are already tracked (the local `.gitignore` cannot hide those). The user decides themselves to commit via `git add -f`, if they wish.
 - Worker failure ≠ abort the whole review — continue with the remaining
 - Keep all intermediate `<REVIEW_ROOT>/waves/*.md` for audit, do not delete between steps
