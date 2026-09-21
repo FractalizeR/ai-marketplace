@@ -7,6 +7,7 @@ Marketplace of plugins for Claude Code and compatible AI agents.
 | Plugin | Purpose |
 | --- | --- |
 | [`fr-security-review`](./security-review/) | Framework-aware static-first security audit for PHP/Symfony/Laravel: recon, focused worker waves, deterministic deduplication. |
+| [`fr-audit-triage`](./audit-triage/) | Turns a `fr-security-review` `findings.json` into deduplicated, code-verified units of work grouped by fix pattern, plus a triage bucket for leads and a structured verdict channel back into the audit. Claude Code only — not part of the Codex/OpenCode build. |
 
 ## Installing the marketplace in Claude Code
 

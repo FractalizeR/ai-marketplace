@@ -1,0 +1,52 @@
+# fr-audit-triage
+
+Turns a `fr-security-review` audit's `findings.json` into deduplicated, code-verified units of work grouped by fix pattern — with a triage bucket for leads (`needs_validation`) and non-actionable observations (`hardening`), full traceability in `INDEX.md`, and an optional, structured verdict hand-back into the audit's own cross-run memory.
+
+## Status
+
+**Scaffold + methodology only.** This package ships the plugin manifest, the marketplace entry, the orchestrator command's full methodology, the two worker agent prompts, and the user config schema. The `bin/` Python layer (`parse_findings.py`, `build_index.py`) referenced by `commands/triage-findings.md` is a separate, not-yet-implemented package — until it lands, the command cannot actually run end to end. Treat this plugin as documentation of the intended workflow plus a stable contract surface, not a working tool yet.
+
+## Claude Code only
+
+Unlike `fr-security-review`, this plugin is **not** part of the multi-environment build (`build/`). It relies on native parallel `Task` subagents (Phase 4 batch verification, Phase 6 independent review) and on ad-hoc MCP tracker tools, neither of which the Codex/OpenCode derivation currently supports. The build tooling under repo-top `build/` knows about exactly the five `fr-security-review` artifacts; adding this plugin to it is a separate, later piece of work, not something this package does.
+
+## Prerequisite
+
+An audit run from `fr-security-review` that produced `<review_root>/findings.json` (the schema-versioned, machine-readable export — present from the point `fr-security-review` started shipping it; older audit runs need to be redone). This plugin reads that file via `json.load` — never by regexing `REPORT.md`/`REPORT/*.md` — and refuses noisily on a missing or mismatched `schema_version` rather than guessing a different shape.
+
+## Usage
+
+```
+/fr-audit-triage:triage-findings [label|path]
+```
+
+Same label convention as `fr-security-review`: a bare label (`claude`, `codex`, …) resolves to `security-review-<label>/`, and the output lands in the matching `security-tickets-<label>/` so runs against different audit engines don't collide. A full path is used as-is.
+
+## Configuration
+
+Copy [`.audit-triage.example.json`](./.audit-triage.example.json) to `<project_root>/.audit-triage.json` and add it to the project's `.gitignore` — it names your tracker queue and internal conventions, which this plugin deliberately ships no defaults for. If the file (or a field in it) is missing, the command asks instead of guessing. Leave `tracker.tool_prefix`/`tracker.cli_command` empty to run file-only: unit files and `INDEX.md` are still produced in full, but no tracker reads/writes are attempted.
+
+The config's `trust_model` block answers a short mini-interview once per project (are internal calls trusted, does the ingress own `X-Forwarded-For`, is debug mode on in prod, is `.env` deploy-generated) — the answers pre-calibrate severity downgrades and are recorded as `condition_keys` instead of free text, which is what makes the calibration reproducible across runs and across audit engines. `condition_keys` is the same closed 7-value enum `fr-security-review` defines in `security-review/checklists/_meta.md`; the two plugins must be kept in sync the same way the audit plugin's own `sink_kind`/`root_cause_family` enums are (see that project's `CLAUDE.md`).
+
+## Output layout
+
+```
+security-tickets-<label>/
+  .gitignore              # content: *, written on first run (never touches the project .gitignore)
+  <severity>-NN-<slug>.md # tracker-ready units of work
+  INDEX.md                # traceability: finding -> unit, per-location verification status, severity history
+  .work/
+    verify/<unit>.json    # structured, non-free-text verification metadata per unit
+    verdicts.json          # --verdicts-in payload for fr-security-review, see below
+    TRACKER_DEDUP.md       # only when tracker filing was actually run
+```
+
+`security-tickets-*/` and `.work/` describe real vulnerabilities in a real codebase — the command protects them the same way `fr-security-review` protects its own `<review_root>`: a local `.gitignore = *` plus `git ls-files`/`git check-ignore` checks (see `commands/triage-findings.md` Phase 0.3, mirroring `security-review/commands/security-project.md` step 0.5/1).
+
+## The verdict hand-back
+
+`fr-security-review`'s `dedupe_findings.py --verdicts-in=<path>` accepts a fail-closed feedback file so a triage verdict (false-positive / reaffirmed) is remembered across audit re-runs instead of re-litigated every time. This plugin cannot invoke that script itself — it has no path into the audit plugin's own `${CLAUDE_PLUGIN_ROOT}` — so it only **produces** `.work/verdicts.json` in the accepted shape (`schema_version`, `findings_json_sha256`, and a `verdicts[]` list of `{sink_hash, verdict, source, condition_keys?, refute_file?, refute_line?}` — structural fields only, no free text) and prints the command for the user to run against their `fr-security-review` install. There is deliberately no reverse dependency: the audit plugin knows nothing about this one.
+
+## License
+
+Elastic License 2.0, same as the rest of this marketplace — see the root [`LICENSE`](../LICENSE) and [`README.md`](../README.md#license).

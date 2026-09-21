@@ -1,0 +1,33 @@
+{
+  "$comment": "Copy to <project_root>/.audit-triage.json and fill in. Keep the copy out of git (it names your tracker queue and internal conventions) — add '.audit-triage.json' to your project .gitignore.",
+  "schema_version": 1,
+
+  "project_prefix": "MyProject",
+  "ticket_body_language": "en",
+
+  "tracker": {
+    "$comment": "How triage-findings.md reaches your issue tracker. Leave tool_prefix and cli_command empty to work file-only — the plugin then never attempts tracker actions and only produces work-unit files + INDEX.md.",
+    "adapter": "mcp",
+    "tool_prefix": "",
+    "cli_command": "",
+    "queue": "",
+    "comment_prefix": "audit-triage:"
+  },
+
+  "severity_to_priority": {
+    "$comment": "Map fr-security-review severities (crit/high/med/low) to your tracker's priority names.",
+    "crit": "blocker",
+    "high": "blocker",
+    "med": "normal",
+    "low": "minor"
+  },
+  "triage_bucket_priority": "minor",
+
+  "trust_model": {
+    "$comment": "Answers pre-calibrate severity downgrades (Phase 0 of triage-findings.md) and are recorded as condition_keys on every unit they affect, instead of free text. Leave a value null to be asked at run time; fill in once you know the answer for this project and stop being asked.",
+    "internal_calls_trusted": null,
+    "ingress_owns_forwarded_headers": null,
+    "app_debug_in_prod": null,
+    "env_generated_by_deploy": null
+  }
+}
