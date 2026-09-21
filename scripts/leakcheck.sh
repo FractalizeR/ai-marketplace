@@ -12,7 +12,9 @@
 # Usage:
 #   scripts/leakcheck.sh [--staged|--all]   # --all is the default
 #
-#   --all     scan the whole tracked tree (git ls-files)
+#   --all     scan everything git would let you commit: tracked files plus
+#             untracked ones that are not ignored. Tracked-only would be blind
+#             to a brand-new directory -- exactly when new prose enters the tree.
 #   --staged  scan only files staged in the index (git diff --cached)
 #
 # Scope is the tracked tree minus a denylist (dist/, .git/, the local
@@ -70,7 +72,7 @@ if [[ "$mode" == "staged" ]]; then
     < <(git diff --cached --name-only --diff-filter=ACMR -z)
 else
   while IFS= read -r -d '' f; do candidates+=("$f"); done \
-    < <(git ls-files -z)
+    < <(git ls-files --cached --others --exclude-standard -z)
 fi
 
 files=()
