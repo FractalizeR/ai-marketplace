@@ -1,6 +1,6 @@
 #### 12.5.1. Launching the refute wave
 
-Read the `<REVIEW_ROOT>/REPORT.md` index table. Split rows into batches of ≤20 findings (first 20 → batch_index=0, next 20 → batch_index=1, etc.).
+Read the `<REVIEW_ROOT>/REPORT.md` index table — the `## Findings by category` table only. It holds `confirmed` findings; rows never come from `## Needs validation` or `## Hardening notes`, because refutation looks for blocking code and a needs-validation lead is blocked on a fact that is not in the code at all. Split rows into batches of ≤20 findings (first 20 → batch_index=0, next 20 → batch_index=1, etc.).
 
 Each batch is **one `codex exec` process** that reads and follows the bundled refute agent file. **Parallelism is forbidden** — every batch appends to the single file `<REVIEW_ROOT>/refute.md`, so concurrent writers would corrupt it. Drive the batches strictly **sequentially**, one `codex exec` at a time, waiting for each to finish before starting the next.
 
