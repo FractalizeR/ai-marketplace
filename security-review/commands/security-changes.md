@@ -548,7 +548,7 @@ Task(subagent_type="security", model=<from plan, field "model">, prompt="""
 For each Task worker return — same logic as in `security-project.md`:
 
 1. `ls "<REVIEW_ROOT>/waves/<slice_id>.md"` — check existence.
-2. If the file is missing — extract markdown from the worker's response (blocks `# Vulnerability ...`) and write it yourself via Write to the absolute path `<REVIEW_ROOT>/waves/<slice_id>.md`.
+2. If the file is missing — extract markdown from the worker's response (it should start with the `<!-- wave_format: 2 -->` marker as the first non-empty line, followed by the block types defined in `agents/security.md`) and write it yourself via Write to the absolute path `<REVIEW_ROOT>/waves/<slice_id>.md`.
 3. If markdown is also missing — create a stub file with the reason.
 4. Print a status line `✓ <slice_id>: ...` or `⚠ recovered` or `✗ failed`.
 

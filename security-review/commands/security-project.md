@@ -494,7 +494,7 @@ For **each** Task worker return:
    ```bash
    ls "<REVIEW_ROOT>/waves/<slice_id>.md"
    ```
-2. **Safety net (always):** if the file is **missing**, the worker did not perform a Write — extract the markdown body from its response message (it should contain `# Vulnerability ...` blocks) and write it yourself via Write to `<REVIEW_ROOT>/waves/<slice_id>.md`. This guarantees that dedup receives all findings as input.
+2. **Safety net (always):** if the file is **missing**, the worker did not perform a Write — extract the markdown body from its response message (it should start with the `<!-- wave_format: 2 -->` marker as the first non-empty line, followed by the block types defined in `agents/security.md`) and write it yourself via Write to `<REVIEW_ROOT>/waves/<slice_id>.md`. This guarantees that dedup receives all findings as input.
 3. **If the response also has no markdown blocks** (worker returned only text or crashed) — create a file with a header:
    ```markdown
    # Wave <slice_id> — no findings or worker failed

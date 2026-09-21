@@ -34,6 +34,12 @@ from .models import (
     ParsedWave,
     SideRecords,
 )
+from .export import (
+    FINDINGS_JSON_NAME,
+    SCHEMA_VERSION,
+    build_findings_export,
+    write_findings_json,
+)
 from .parser import WaveFormatError, parse_findings_file, parse_wave
 from .pipeline import attach_side_records, dedupe
 from .refute import (
@@ -87,6 +93,11 @@ __all__ = [
     # Pipeline
     "dedupe",
     "attach_side_records",
+    # Export
+    "SCHEMA_VERSION",
+    "FINDINGS_JSON_NAME",
+    "build_findings_export",
+    "write_findings_json",
     # Refute
     "RefuteRecord",
     "RefuteInvalid",

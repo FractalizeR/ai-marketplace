@@ -28,9 +28,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from dedupe.cost import estimate_cost  # noqa: E402
+from dedupe.export import write_findings_json  # noqa: E402
 from dedupe.models import FLAG_PARSE_FAILED  # noqa: E402
-from dedupe.parser import parse_findings_file  # noqa: E402
-from dedupe.pipeline import dedupe  # noqa: E402
+from dedupe.parser import parse_wave  # noqa: E402
+from dedupe.pipeline import attach_side_records, dedupe  # noqa: E402
 from dedupe.refute import (  # noqa: E402
     apply_refute_records,
     compute_refute_summary,
@@ -230,6 +231,10 @@ def main(argv: list[str] | None = None) -> int:
             coverage_gaps=coverage_gaps,
             incomplete=True,
         )
+        # findings.json is the public contract (P2.4) — write it every run,
+        # empty payload included, so a consumer never has to guess whether a
+        # stale file from a previous run is still current.
+        write_findings_json(review_root, [], [], [], [])
         print(
             f"Wrote {args.output} (INCOMPLETE: no input findings; "
             f"{len(dispatch_gap_lines)} dispatch gap(s))"
@@ -237,11 +242,29 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     all_findings = []
+    all_needs_validation = []
+    all_hardening = []
     for p in paths:
-        all_findings.extend(parse_findings_file(p))
+        wave = parse_wave(p)
+        all_findings.extend(wave.findings)
+        all_needs_validation.extend(wave.needs_validation)
+        all_hardening.extend(wave.hardening)
 
     merged, manual = dedupe(all_findings)
     parse_failed_count = sum(1 for m in manual if FLAG_PARSE_FAILED in m.flags)
+
+    # Verdict-bucket attachment (P2.2/P2.4), explicitly BEFORE the refute
+    # pass below. Order is not load-bearing for correctness — refute.py never
+    # reconstructs a MergedFinding (no `MergedFinding(` call site in that
+    # module), so attached needs_validation/hardening annotations survive a
+    # later refute pass unchanged either way — but attaching first means
+    # findings.json and the report reflect buckets even on a run with no
+    # --refute at all. The union `merged + manual` is mandatory, not just
+    # `merged`: a finding that fails custom-sink auto-promotion lands in
+    # `manual`, and only this union call lets its attached annotations render
+    # (see `pipeline.attach_side_records`'s own docstring and
+    # `AttachSideRecordsSpyTests` in test_dedupe_findings.py).
+    side_records = attach_side_records(merged + manual, all_needs_validation, all_hardening)
 
     # Adversarial pass: apply refute.md records on top of dedupe output.
     refute_summary: dict[str, int] | None = None
@@ -315,7 +338,14 @@ def main(argv: list[str] | None = None) -> int:
                 waves_plan=waves_plan,
                 coverage_gaps=coverage_gaps,
                 incomplete=incomplete,
+                unmatched_needs_validation=side_records.unmatched_needs_validation,
+                unmatched_hardening=side_records.unmatched_hardening,
             ),
+        )
+        write_findings_json(
+            review_root, merged, manual,
+            side_records.unmatched_needs_validation,
+            side_records.unmatched_hardening,
         )
         if not args.no_state and str(review_root) not in ("", "."):
             save_state(snapshots, review_root)
@@ -338,12 +368,19 @@ def main(argv: list[str] | None = None) -> int:
         waves_plan=waves_plan,
         coverage_gaps=coverage_gaps,
         incomplete=incomplete,
+        unmatched_needs_validation=side_records.unmatched_needs_validation,
+        unmatched_hardening=side_records.unmatched_hardening,
     )
     if args.refute is not None:
         # Emit audit log of refute records that failed validation. Always write
         # the file when --refute was supplied (even if empty) so operators see
         # an explicit "no invalid records" rather than missing artefact.
         write_refute_invalid_md(refute_invalid_records, details_dir / "refute_invalid.md")
+    write_findings_json(
+        review_root, merged, manual,
+        side_records.unmatched_needs_validation,
+        side_records.unmatched_hardening,
+    )
     if not args.no_state and str(review_root) not in ("", "."):
         save_state(snapshots, review_root)
     print(
