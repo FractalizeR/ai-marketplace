@@ -53,6 +53,8 @@ All plugins in this marketplace are distributed under the [Elastic License 2.0](
 
 **In short:** free use is permitted, including in commercial and proprietary projects. Prohibited: providing the plugin to third parties as a hosted/managed service, circumventing license mechanisms, removing copyright/attribution.
 
+Some checklist content is adapted from third-party projects under their own licenses — see [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
+
 ## Development
 
 A pre-commit hook validates the marketplace via `claude plugin validate .`. After cloning, set up the hook once:

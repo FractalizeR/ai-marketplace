@@ -16,6 +16,8 @@
 
 ## Concurrency / race conditions
 
+The qualified floor above already covers non-monetary state (invite/promo redemption, last-seat inventory, signup uniqueness) when it co-occurs with money handling in this file's scope. `business-logic.md` restates the same qualification as a project-agnostic, always-in-scope checklist (it rides W2, not the fintech-gated W6) for targets where no fintech markers were detected at all.
+
 - Double debit / double card charge: processing without a transactional lock
 - Multiple use of a promo code / discount via parallel requests
 - Check-then-act on balance: `if (balance >= amount) { balance -= amount }` without transaction + row lock

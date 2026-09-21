@@ -9,7 +9,8 @@ checklists/
 ├── _meta.md
 ├── core/                              # always active (any project, any stack)
 │   └── {theme}.md                     # auth, crypto, disclosure, injection, data-access,
-│                                      # output-render, serialization, ssrf-fileops, fintech, frontend-js
+│                                      # output-render, serialization, ssrf-fileops, fintech, frontend-js,
+│                                      # security-headers, business-logic
 ├── languages/                         # generic language layer (PHP/Python/Node)
 │   └── {language}/{theme}.md          # active iff CONTEXT.md frontmatter has `stack.language: <language>`
 ├── stacks/                            # framework layer (symfony, laravel, django, …)
@@ -186,7 +187,7 @@ Precedent: this convention is adapted from Anthropic's `claude-code-security-rev
 
 ## Cross-theme duplication (admin-CRUD)
 
-Within `stacks/symfony/addons/{easyadmin,sonata}/`, both `auth.md` and `data-access.md` contain admin-CRUD sections — this is the sanctioned cross-theme duplication for admin-surface findings. A worker running in W1 (auth) and W2 (injection/data-access) gets admin context both times. The dedupe parser handles `[CROSS_SINK_MERGE]` on these collisions (findings on the same line with different `sink_kind`).
+Within `stacks/symfony/addons/{easyadmin,sonata}/`, both `auth.md` and `data-access.md` contain admin-CRUD sections — this is the sanctioned cross-theme duplication for admin-surface findings. A worker running in W1 (auth) and W2 (injection/data-access/business-logic) gets admin context both times. The dedupe parser handles `[CROSS_SINK_MERGE]` on these collisions (findings on the same line with different `sink_kind`).
 
 ## Cross-theme duplication (GraphQL)
 

@@ -533,6 +533,44 @@ class WaveTriggerTests(unittest.TestCase):
         finally:
             p.unlink()
 
+    def test_business_logic_checklist_present_in_w2_without_fintech(self):
+        """business-logic.md must reach the plan on a non-fintech project.
+
+        Regression guard for the W6-as-carrier mistake: W6 (`trigger=
+        "has_fintech"`) is not planned at all when `fintech_markers` is
+        empty, so a theme carried only by W6 would never run on the
+        majority of targets. business-logic.md is carried by W2
+        (`trigger="always"`) instead. Verified empirically to fail red when
+        "business-logic" is moved from W2's `themes` tuple onto W6's: the
+        `assertIn("core/business-logic.md", checklist_suffixes)` below then
+        raises AssertionError because W2's checklist chain no longer
+        contains it (and W6 itself is skipped on this fixture, per
+        `assertNotIn("W6", wave_ids)` above).
+        """
+        p = _build_context(
+            framework="symfony",
+            attack_surface=_attack_surface(("http_route", "src/Controller/A.php")),
+            fintech_markers="status: ok\nitems: []",
+        )
+        try:
+            ctx = pw.parse_context(p)
+            plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT)
+            wave_ids = {s["wave_id"] for s in plan}
+            self.assertIn("W2", wave_ids)
+            self.assertNotIn("W6", wave_ids, "fintech-only wave must not plan on a non-fintech project")
+            w2 = [s for s in plan if s["wave_id"] == "W2"]
+            self.assertTrue(w2)
+            checklist_suffixes = {
+                c.split("checklists/", 1)[-1] for s in w2 for c in s["checklists"]
+            }
+            self.assertIn(
+                "core/business-logic.md",
+                checklist_suffixes,
+                "business-logic.md must ride W2 (always-on), not W6 (fintech-gated)",
+            )
+        finally:
+            p.unlink()
+
     def test_exploratory_added_with_flag(self):
         p = _build_context()
         try:

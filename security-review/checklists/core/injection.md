@@ -1,5 +1,7 @@
 # Injection (generic) — command, code, XXE, path traversal
 
+> Some items in this file are adapted from `cloudflare/security-audit-skill` (MIT License) — see [`THIRD_PARTY_NOTICES.md`](../../../THIRD_PARTY_NOTICES.md) for the license text and the full list of affected files.
+
 **These are typical patterns of the category, not an exhaustive list.** If you discover an exploitable vulnerability that passes the methodology (input source → transformations → sink + concrete exploit path), reporting is **mandatory**, even if it does not fall under any of the items below. The checklist is a search priority pointer, not a filter.
 
 ## Recommended sink_kinds
@@ -94,6 +96,16 @@ Anti-patterns for template engines live in `output-render.md` (core) and framewo
 - Couchbase N1QL string concatenation (`SELECT * FROM bucket WHERE name = "' + name + '"`) — analogous to classic SQL injection but on JSON queries; bind parameters are the safe form
 - ElasticSearch query DSL injection — user-controlled `_source` filter (exfiltrates excluded fields), or full request-body relay
 - `script` field with a Painless script — DSL-level data exfiltration / side-channel computation / search-time DoS. RCE primitive only on legacy Groovy (deprecated, off by default since ES 5) or ES with a known scripting CVE.
+
+## Second-order injection (stored safely, used dangerously)
+
+Data that was safely stored or validated on the way in can become a live injection primitive later, in a different context that trusts it because "it was already checked once." Classify the finding by the sink it actually reaches, not by where the value originated.
+
+- A user-controlled field name or key (e.g. a custom-field name saved during profile setup) is later interpolated into a JSON-path expression, a `jsonb_set()`/`jsonb_insert()` path argument, or a document-store field selector — sink_kind `nosql_injection` or `native_sql_concat` depending on the store.
+- A user-controlled slug, filename, or identifier accepted and stored at write time (e.g. "choose your page slug") is later concatenated into a filesystem path when the page is rendered or exported — sink_kind `path_traversal` or `file_include_dynamic`.
+- A stored string (user bio, saved search, webhook payload template) is later passed as the *pattern* argument to a regex engine, or as the *source* of a template compile step, rather than as data interpolated into a fixed pattern/template — sink_kind `ssti` (template) or `other:regex_injection` (regex engine, not in the closed enum — use the escape hatch).
+- Escaped/encoded text stored for one rendering context (e.g. HTML-escaped for the web view) is later read back and fed into a different raw-rendering context (PDF generator, email template, admin CLI report) that does not apply the same escaping — sink_kind `unsafe_html_render` or `template_raw` depending on the second consumer.
+- A value validated against an allowlist at write time is normalized or transformed before storage (case-folded, trimmed, decoded) in a way that changes its meaning by the time a later read path uses it as a query fragment, path segment, or shell argument.
 
 ## PHP Object Injection
 

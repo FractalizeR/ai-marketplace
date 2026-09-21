@@ -1,5 +1,7 @@
 # SSRF / HTTP Client / File operations / Uploads
 
+> Some items in this file are adapted from `cloudflare/security-audit-skill` (MIT License) — see [`THIRD_PARTY_NOTICES.md`](../../../THIRD_PARTY_NOTICES.md) for the license text and the full list of affected files.
+
 **These are typical patterns of the category, not an exhaustive list.** If you discover an exploitable vulnerability that passes the methodology (input source → transformations → sink + concrete exploit path), reporting is **mandatory**, even if it does not fall under any of the items below. The checklist is a search priority pointer, not a filter.
 
 ## Recommended sink_kinds
@@ -34,6 +36,9 @@
 - User-configurable webhook URL without a whitelist → SSRF to internal services
 - OAuth callback URL not validated against registered redirects
 - Image/PDF generators (wkhtmltopdf, Puppeteer) that accept a user URL — SSRF + potentially RCE via the browser
+- Notification/alert destination URL (e.g. a user-configurable "send a copy to this URL" or integration-callback field, distinct from a signed payment webhook) is fetched by a background dispatcher without the same host/scheme allowlist applied to interactive HTTP-client calls — the notification code path is often a separate module from the main HTTP client and gets the SSRF hardening applied inconsistently.
+- The notification/webhook URL is validated once when the user saves it, but the dispatcher re-fetches and re-resolves the URL on every send — same TOCTOU/DNS-rebinding window as "SSRF via HTTP Client" above, except the attacker-controlled trigger is an async job rather than a synchronous request.
+- Redirect-following is enabled by default on the notification HTTP client — a validated external URL can 302-redirect the dispatcher into an internal address at send time.
 
 ## Open redirects
 

@@ -50,7 +50,7 @@ Parse flags from `$ARGUMENTS`:
 
 **Important about defaults:**
 - **Exploratory wave W∞ is enabled by default.** Without it, cross-layer vulnerabilities (OAuth state, tenancy chains, authenticator integrity) are missed. Quick scanner — `--quick`.
-- **Balanced model profile is on by default.** W1/W2/W6 — opus (auth/disclosure, injection/data-access, fintech: require reasoning about trust boundaries / chains). W3 (output-render+frontend-js), W4 (serialization+crypto), W5 (ssrf-fileops), W∞ (exploratory) — sonnet: mechanical data flow, sonnet handles it. Source of truth — `bin/plan_waves.py:WaveSpec.balanced_model`. Force opus everywhere — `--all-opus`.
+- **Balanced model profile is on by default.** W1/W2/W6 — opus (auth/disclosure, injection/data-access/business-logic, fintech: require reasoning about trust boundaries / chains). W3 (output-render+frontend-js), W4 (serialization+crypto), W5 (ssrf-fileops), W∞ (exploratory) — sonnet: mechanical data flow, sonnet handles it. Source of truth — `bin/plan_waves.py:WaveSpec.balanced_model`. Force opus everywhere — `--all-opus`.
 
 ## STEPS
 
@@ -447,7 +447,7 @@ Before launching workers, show the user a plan summary:
 ```
 Launching <N> waves (mode: <balanced|all-opus>):
   W1 (opus, <M> files): auth+disclosure
-  W2 (opus, <M> files): injection+data-access
+  W2 (opus, <M> files): injection+data-access+business-logic
   W3 (sonnet, <M> files): output-render+frontend-js
   W4 (sonnet, <M> files): serialization+crypto
   W5 (sonnet, <M> files): ssrf-fileops

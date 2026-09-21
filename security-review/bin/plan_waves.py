@@ -232,7 +232,12 @@ WAVES: tuple[WaveSpec, ...] = (
     ),
     WaveSpec(
         wave_id="W2",
-        themes=("injection", "data-access"),
+        # "business-logic" rides W2 (trigger="always") rather than W6
+        # (trigger="has_fintech", which never plans on a non-fintech
+        # project) — see checklists/core/business-logic.md and
+        # test_business_logic_checklist_present_in_w2_without_fintech in
+        # tests/test_plan_waves.py.
+        themes=("injection", "data-access", "business-logic"),
         relevant_section_paths=(
             "attack_surface",
             "data_access",
