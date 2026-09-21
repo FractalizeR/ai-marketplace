@@ -1,3 +1,5 @@
+<!-- wave_format: 2 -->
+
 # Vulnerability 1: [sql_injection]: `src/Repo.php:42`
 
 * **Severity**: Critical
@@ -44,4 +46,62 @@
 * **Exploitation scenario**: n/a
 * **Impact**: unclear
 * **Recommendation**: review
+* **Discovered via**: checklist:other.md
+
+# Needs validation 1: `src/Repo.php:42`
+
+* **sink_kind**: dql_concat
+* **root_cause_family**: injection
+* **enclosing_symbol**: App\Crm\Repo::findByName
+* **sink_snippet**: |
+    $dql = 'SELECT u FROM User u WHERE u.name = ' . $name;
+* **claimed_root_cause**: Unparameterized DQL concatenation of `$name`.
+* **trace**: user input -> $request->query->get('name') -> Repo::findByName -> raw DQL string.
+* **blockers**:
+    - could not confirm whether the front controller passes this parameter unsanitized in prod
+* **validation_plan_local**: run `bin/console doctrine:query:dql` with a crafted `name` locally.
+* **validation_plan_deployment**: replay the request against staging with a quoted payload.
+* **Discovered via**: checklist:injection.md
+
+# Hardening 1: `src/Token.php:33`
+
+* **sink_kind**: other:secret-plaintext-storage
+* **root_cause_family**: crypto
+* **enclosing_symbol**: Token
+* **sink_snippet**: |
+    different snippet here
+* **text**: Consider field-level encryption even though no direct exposure path was found in this slice.
+* **Discovered via**: checklist:crypto.md
+
+# Needs validation 2: `src/Misc.php:10`
+
+* **sink_kind**: other:some-weird-pattern
+* **root_cause_family**: business_logic
+* **enclosing_symbol**: Misc::speculate
+* **sink_snippet**: |
+    $x = rand();
+* **claimed_root_cause**: weak randomness feeding a token, but the call site is not confirmed to be security-sensitive.
+* **trace**: Misc::speculate -> rand() -> caller unknown outside this file.
+* **blockers**:
+    - caller of Misc::speculate not in scope of this wave
+* **validation_plan_local**: grep callers of Misc::speculate across the repo.
+* **Discovered via**: checklist:other.md
+
+# Hardening 2: `src/Unrelated.php:99`
+
+* **enclosing_symbol**: Unrelated::noop
+* **sink_snippet**: |
+    // no-op, nothing to see here
+* **text**: No rate limiting on this internal admin-only endpoint; add one anyway as defense in depth.
+* **Discovered via**: checklist:other.md
+
+# Needs validation 3: `src/AlsoUnrelated.php:5`
+
+* **enclosing_symbol**: unknown
+* **sink_snippet**:
+* **claimed_root_cause**: could not extract a snippet -- location reported from a log line, not a static sink.
+* **trace**: reported via runtime log correlation, no static call site identified.
+* **blockers**:
+    - no static sink_snippet available to anchor this finding
+* **validation_plan_deployment**: search production logs for the reported symbol.
 * **Discovered via**: checklist:other.md

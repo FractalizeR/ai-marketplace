@@ -1,3 +1,5 @@
+<!-- wave_format: 2 -->
+
 # Vulnerability 1: [sql_injection]: `src/Repo.php:42`
 
 * **Severity**: Medium

@@ -9,6 +9,7 @@ emitted only when at least one counter is non-zero.
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -19,9 +20,18 @@ from dedupe.models import (  # noqa: E402
     FLAG_MERGED_DESPITE_HASH_MISMATCH,
     FLAG_PARSE_FAILED,
     Finding,
+    HardeningNote,
     MergedFinding,
+    NeedsValidation,
 )
-from dedupe.renderer import render_summary  # noqa: E402
+from dedupe.pipeline import attach_side_records  # noqa: E402
+from dedupe.pipeline import dedupe as df_dedupe  # noqa: E402
+from dedupe.renderer import (  # noqa: E402
+    render_finding,
+    render_index_report,
+    render_summary,
+    write_split_report,
+)
 
 
 def _mk_finding(
@@ -264,6 +274,216 @@ class ChecklistCoverageBlockTests(unittest.TestCase):
         # Absolute path should NOT appear; relative form must.
         self.assertNotIn(str(cl.resolve()), summary)
         self.assertIn("`checklists/core/injection.md`", summary)
+
+
+class VerdictBucketRenderingTests(unittest.TestCase):
+    """`## Needs validation` / `## Hardening notes` + attached annotations
+    (P2.3 -- rendering only; `attach_side_records` itself is P2.2, imported
+    here unmodified to drive realistic MergedFinding/NeedsValidation/
+    HardeningNote wiring for the renderer under test)."""
+
+    def _nv(self, sink_snippet="code", **kwargs) -> NeedsValidation:
+        defaults = dict(
+            sink_file="src/A.php", sink_line=10,
+            claimed_root_cause="claimed cause",
+            trace="trace text",
+            blockers=["some blocker"],
+            validation_plan_local="local plan",
+            raw_body=(
+                "* **claimed_root_cause**: claimed cause\n"
+                "* **trace**: trace text\n"
+                "* **blockers**:\n    - some blocker\n"
+                "* **validation_plan_local**: local plan\n"
+            ),
+            source_file="W1.md", slice_id="W1",
+        )
+        defaults.update(kwargs)
+        return NeedsValidation(sink_snippet=sink_snippet, **defaults)
+
+    def _hn(self, sink_snippet="code", **kwargs) -> HardeningNote:
+        defaults = dict(
+            sink_file="src/A.php", sink_line=10,
+            text="hardening text",
+            raw_body="* **text**: hardening text\n",
+            source_file="W1.md", slice_id="W1",
+        )
+        defaults.update(kwargs)
+        return HardeningNote(sink_snippet=sink_snippet, **defaults)
+
+    # -- attached annotations (rendered inside render_finding) ----
+
+    def test_matched_needs_validation_renders_attached_in_finding(self):
+        mf = _mk_merged(sink_snippet="code")
+        nv = self._nv(sink_snippet="code")
+        result = attach_side_records([mf], [nv], [])
+        self.assertEqual(len(result.matched), 1)
+        self.assertEqual(result.unmatched_needs_validation, [])
+        body = render_finding(1, mf)
+        self.assertIn("**Needs validation (attached):**", body)
+        self.assertIn("claimed cause", body)
+        self.assertIn("some blocker", body)
+        self.assertIn("local plan", body)
+        self.assertNotIn("### Needs validation", body)
+
+    def test_matched_hardening_renders_attached_in_finding(self):
+        mf = _mk_merged(sink_snippet="code")
+        hn = self._hn(sink_snippet="code")
+        result = attach_side_records([mf], [], [hn])
+        self.assertEqual(len(result.matched), 1)
+        self.assertEqual(result.unmatched_hardening, [])
+        body = render_finding(1, mf)
+        self.assertIn("**Hardening notes (attached):**", body)
+        self.assertIn("hardening text", body)
+
+    def test_attached_annotation_survives_in_manual_review(self):
+        """Trap #2: a finding that stays in manual_review (never
+        auto-promoted) must still carry its attached bucket annotation --
+        `attach_side_records` must be called with the UNION of main + manual
+        for this to work, since it only indexes what it is given."""
+        f_manual = Finding(
+            title_line="h", sink_file="src/Misc.php", sink_line=10,
+            severity="Medium", confidence=6,
+            sink_kind="other:weird", root_cause_family="business_logic",
+            enclosing_symbol="Misc::speculate",
+            sink_snippet="$x = rand();",
+            raw_body="body",
+        )
+        merged, manual = df_dedupe([f_manual])
+        self.assertEqual(merged, [])
+        self.assertEqual(len(manual), 1)
+        nv = self._nv(sink_snippet="$x = rand();", sink_file="src/Misc.php", sink_line=10)
+        result = attach_side_records(merged + manual, [nv], [])
+        self.assertEqual(len(result.matched), 1)
+        body = render_finding(1, manual[0])
+        self.assertIn("**Needs validation (attached):**", body)
+        self.assertIn("claimed cause", body)
+
+    # -- standalone sections (index REPORT.md only) ----
+
+    def test_unmatched_needs_validation_gets_own_section(self):
+        """Standalone sections render in `render_index_report` (the index
+        REPORT.md), AFTER the findings table -- NOT inside `render_summary`
+        (which only carries the counts line; see
+        `test_no_bucket_kwargs_omits_both_sections` and
+        `test_executive_summary_counts_line`)."""
+        mf = _mk_merged(sink_snippet="code")
+        nv = self._nv(sink_snippet="totally different snippet")
+        result = attach_side_records([mf], [nv], [])
+        self.assertEqual(result.matched, [])
+        self.assertEqual(len(result.unmatched_needs_validation), 1)
+        index = render_index_report(
+            [mf], [], "REPORT",
+            unmatched_needs_validation=result.unmatched_needs_validation,
+        )
+        self.assertIn("## Needs validation", index)
+        self.assertIn("### Needs validation 1:", index)
+        self.assertIn("claimed cause", index)
+        # Placement: after the findings-by-category table.
+        self.assertLess(
+            index.index("## Findings by category"), index.index("## Needs validation"),
+        )
+        # Must not leak into the per-finding body of an unrelated finding.
+        finding_body = render_finding(1, mf)
+        self.assertNotIn("Needs validation", finding_body)
+
+    def test_unmatched_hardening_gets_own_section(self):
+        mf = _mk_merged(sink_snippet="code")
+        hn = self._hn(sink_snippet="totally different snippet")
+        result = attach_side_records([mf], [], [hn])
+        self.assertEqual(len(result.unmatched_hardening), 1)
+        index = render_index_report(
+            [mf], [], "REPORT",
+            unmatched_hardening=result.unmatched_hardening,
+        )
+        self.assertIn("## Hardening notes", index)
+        self.assertIn("### Hardening 1:", index)
+        self.assertIn("hardening text", index)
+
+    def test_nohash00_needs_validation_not_lost(self):
+        """A record with an empty `sink_snippet` hashes to the `nohash00`
+        sentinel and can never match (`attach_side_records`) -- it must
+        still render in the standalone section, not silently vanish."""
+        nv = self._nv(sink_snippet="")
+        self.assertEqual(nv.sink_hash, "nohash00")
+        result = attach_side_records([], [nv], [])
+        self.assertEqual(result.matched, [])
+        self.assertEqual(len(result.unmatched_needs_validation), 1)
+        index = render_index_report(
+            [], [], "REPORT",
+            unmatched_needs_validation=result.unmatched_needs_validation,
+        )
+        self.assertIn("## Needs validation", index)
+        self.assertIn("nohash00", index)
+        self.assertIn("claimed cause", index)
+
+    def test_nohash00_hardening_not_lost(self):
+        hn = self._hn(sink_snippet="")
+        self.assertEqual(hn.sink_hash, "nohash00")
+        result = attach_side_records([], [], [hn])
+        self.assertEqual(len(result.unmatched_hardening), 1)
+        index = render_index_report(
+            [], [], "REPORT",
+            unmatched_hardening=result.unmatched_hardening,
+        )
+        self.assertIn("## Hardening notes", index)
+        self.assertIn("nohash00", index)
+        self.assertIn("hardening text", index)
+
+    # -- back-compat: old call sites (no bucket kwargs) unaffected ----
+
+    def test_no_bucket_kwargs_omits_both_sections(self):
+        mf = _mk_merged(sink_snippet="code")
+        summary = render_summary([mf], [])
+        index = render_index_report([mf], [], "REPORT")
+        for text in (summary, index):
+            self.assertNotIn("## Needs validation", text)
+            self.assertNotIn("## Hardening notes", text)
+        self.assertNotIn("Needs validation:", summary)
+        self.assertNotIn("Hardening notes:", summary)
+
+    def test_executive_summary_counts_line(self):
+        mf = _mk_merged(sink_snippet="code")
+        nv_matched = self._nv(sink_snippet="code")
+        nv_standalone = self._nv(sink_snippet="other")
+        result = attach_side_records([mf], [nv_matched, nv_standalone], [])
+        summary = render_summary(
+            [mf], [],
+            unmatched_needs_validation=result.unmatched_needs_validation,
+        )
+        self.assertIn("Needs validation: 2 (1 attached to findings, 1 standalone)", summary)
+
+    # -- split report: buckets only in the index, never per-family ----
+
+    def test_split_report_sections_only_in_index_not_family_detail(self):
+        f = Finding(
+            title_line="h", sink_file="src/A.php", sink_line=10,
+            severity="High", confidence=9,
+            sink_kind="dql_concat", root_cause_family="injection",
+            enclosing_symbol="Repo::find",
+            sink_snippet="code",
+            raw_body="body",
+        )
+        merged, manual = df_dedupe([f])
+        nv_standalone = self._nv(sink_snippet="unmatched snippet")
+        hn_matched = self._hn(sink_snippet="code")
+        result = attach_side_records(merged + manual, [nv_standalone], [hn_matched])
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "REPORT.md"
+            details = Path(td) / "REPORT"
+            write_split_report(
+                merged, manual, out, details,
+                unmatched_needs_validation=result.unmatched_needs_validation,
+                unmatched_hardening=result.unmatched_hardening,
+            )
+            index_text = out.read_text(encoding="utf-8")
+            self.assertIn("## Needs validation", index_text)
+            family_text = (details / "injection.md").read_text(encoding="utf-8")
+            self.assertNotIn("## Needs validation", family_text)
+            self.assertNotIn("## Hardening notes", family_text)
+            # The MATCHED hardening record still shows up inline, attached
+            # to its finding, in the family detail file.
+            self.assertIn("**Hardening notes (attached):**", family_text)
+            self.assertIn("hardening text", family_text)
 
 
 if __name__ == "__main__":

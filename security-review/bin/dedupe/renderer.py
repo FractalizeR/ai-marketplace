@@ -17,7 +17,9 @@ from .models import (
     FLAG_PARSE_FAILED,
     FLAG_REFUTE_CLAIMED,
     SEVERITY_RANK,
+    HardeningNote,
     MergedFinding,
+    NeedsValidation,
 )
 from .reflow import reflow_markdown
 
@@ -138,8 +140,183 @@ def render_finding(idx: int, mf: MergedFinding) -> str:
             f"> Refute claim: {mf.refute_rationale} "
             f"(confidence {mf.refute_confidence})"
         )
+    # Verdict-bucket annotations (Stage 2 / P2.3) -- records `attach_side_records`
+    # matched to THIS finding by sink_hash. Rendered here (not as a separate
+    # report row) so `render_finding`'s two callers -- family detail AND
+    # `manual_review.md` -- both surface them for free; a finding that lands in
+    # manual_review (didn't auto-promote) still carries its attached notes.
+    if mf.needs_validation:
+        out.append("")
+        out.append("**Needs validation (attached):**")
+        for nv in mf.needs_validation:
+            out.append("")
+            out.append(_render_attached_needs_validation(nv))
+    if mf.hardening:
+        out.append("")
+        out.append("**Hardening notes (attached):**")
+        for hn in mf.hardening:
+            out.append("")
+            out.append(_render_attached_hardening(hn))
     out.append("")
     return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------
+# Verdict buckets (Stage 2 / P2.3): needs_validation / hardening rendering.
+#
+# Two rendering forms per bucket type:
+#   - "attached" (`_render_attached_*`) -- compact, appended inside
+#     `render_finding` right after the confirmed finding it was matched to
+#     (`attach_side_records`, by sink_hash). Not a competing report row.
+#   - "standalone" (`render_*_entry` + `_render_*_section`) -- the full
+#     record, for a bucket entry `attach_side_records` could NOT match to any
+#     confirmed finding (including every `nohash00` record -- an empty
+#     `sink_snippet` never participates in matching, by construction, so it
+#     is always standalone; see `pipeline.attach_side_records`). These render
+#     ONLY in the index REPORT.md (`render_index_report`/`render_report`, at
+#     the END, after the findings), never split per family: `_group_by_family`
+#     reads `root_cause_family` off `MergedFinding.primary`, which a bare
+#     NeedsValidation/HardeningNote never becomes.
+#
+# Neither type carries severity/confidence (Stage 2 decision) -- no ranking,
+# no table. `condition_keys`/other prompt-violation content is not
+# re-validated here.
+#
+# The two forms build their body differently, deliberately:
+#   - standalone (`render_*_entry`) replays `raw_body` verbatim, like
+#     `render_finding` does for a `Finding` -- only `sink_hash` is
+#     corrected/appended, so a worker-authored `other:*` sink_kind stays
+#     visible as authored even after `_normalize_known_other_kinds`
+#     canonicalizes the parsed field (same asymmetry as `render_finding`
+#     never rewriting `sink_kind`/`root_cause_family` inside `raw_body`).
+#   - attached (`_render_attached_*`) is assembled from the PARSED fields as
+#     `* **field**: value` lines (the same shape `render_finding` uses for a
+#     Finding's own fields), not a `raw_body` replay and not a blockquote.
+#     Two reasons: (1) reflow.py's long-line wrapper only special-cases the
+#     `* **field**: value` / bullet / numbered-list shapes -- a `>`-prefixed
+#     line falls through to its generic wrap branch and loses the `>` on
+#     continuation lines (a real defect, caught rendering this feature's own
+#     fixtures); (2) `flags` (e.g. `[NV_INCOMPLETE]`) must stay visible on
+#     an attached record too, same as it does on the standalone form's
+#     title -- silently dropping a prompt-violation flag once a record
+#     attaches would be its own version of trap #1/#2 (losing information
+#     silently on the attach path).
+# ---------------------------------------------------------------------------
+
+
+def _render_attached_needs_validation(nv: NeedsValidation) -> str:
+    """Compact annotation form for a needs_validation record matched by
+    sink_hash to a confirmed finding. See the module note above for why this
+    is a field-line block, not a `raw_body` replay or a blockquote."""
+    lines = [
+        f"* **claimed_root_cause**: {nv.claimed_root_cause}"
+        if nv.claimed_root_cause
+        else "* **claimed_root_cause**: (none given)"
+    ]
+    if nv.trace:
+        lines.append(f"* **trace**: {nv.trace}")
+    if nv.blockers:
+        lines.append(f"* **blockers**: {'; '.join(nv.blockers)}")
+    if nv.validation_plan_local:
+        lines.append(f"* **validation_plan_local**: {nv.validation_plan_local}")
+    if nv.validation_plan_deployment:
+        lines.append(f"* **validation_plan_deployment**: {nv.validation_plan_deployment}")
+    if nv.condition_keys:
+        lines.append(f"* **condition_keys**: {', '.join(nv.condition_keys)}")
+    if nv.flags:
+        lines.append(f"* **flags**: {' '.join(nv.flags)}")
+    src = nv.source_file + (f" ({nv.slice_id})" if nv.slice_id else "")
+    lines.append(f"* **sink_hash**: `{nv.sink_hash}`")
+    lines.append(f"* **source**: {src}")
+    return "\n".join(lines)
+
+
+def _render_attached_hardening(hn: HardeningNote) -> str:
+    """Compact annotation form for a hardening record matched by sink_hash
+    to a confirmed finding. See the module note above for why this is a
+    field-line block, not a `raw_body` replay or a blockquote."""
+    lines = [f"* **text**: {hn.text}" if hn.text else "* **text**: (none given)"]
+    if hn.condition_keys:
+        lines.append(f"* **condition_keys**: {', '.join(hn.condition_keys)}")
+    if hn.flags:
+        lines.append(f"* **flags**: {' '.join(hn.flags)}")
+    src = hn.source_file + (f" ({hn.slice_id})" if hn.slice_id else "")
+    lines.append(f"* **sink_hash**: `{hn.sink_hash}`")
+    lines.append(f"* **source**: {src}")
+    return "\n".join(lines)
+
+
+def render_needs_validation_entry(idx: int, nv: NeedsValidation) -> str:
+    """Render one standalone `## Needs validation` lead by replaying its
+    `raw_body` (same convention as `render_finding` for a `Finding`). Includes
+    `nohash00` records (empty `sink_snippet`) -- they are a sentinel, not a
+    real hash, so `attach_side_records` never matches them; they must not be
+    silently dropped here."""
+    flag_suffix = f" {' '.join(nv.flags)}" if nv.flags else ""
+    loc = f"{nv.sink_file}:{nv.sink_line}" if nv.sink_file else "(no location)"
+    title = f"### Needs validation {idx}: `{loc}`{flag_suffix}"
+    body = (nv.raw_body or "").strip()
+    if "**sink_hash**" not in body:
+        body = _append_field(body, "sink_hash", nv.sink_hash)
+    else:
+        body = _replace_field(body, "sink_hash", nv.sink_hash)
+    return "\n".join([title, "", body, ""])
+
+
+def render_hardening_entry(idx: int, hn: HardeningNote) -> str:
+    """Render one standalone `## Hardening notes` entry. See
+    `render_needs_validation_entry` for the `nohash00` handling rationale --
+    same construction applies here."""
+    flag_suffix = f" {' '.join(hn.flags)}" if hn.flags else ""
+    loc = f"{hn.sink_file}:{hn.sink_line}" if hn.sink_file else "(no location)"
+    title = f"### Hardening {idx}: `{loc}`{flag_suffix}"
+    body = (hn.raw_body or "").strip()
+    if "**sink_hash**" not in body:
+        body = _append_field(body, "sink_hash", hn.sink_hash)
+    else:
+        body = _replace_field(body, "sink_hash", hn.sink_hash)
+    return "\n".join([title, "", body, ""])
+
+
+def _render_needs_validation_section(unmatched: list[NeedsValidation]) -> list[str]:
+    """`## Needs validation` -- unmatched leads only. Index REPORT.md only
+    (never per-family, see module note above). Sorted by
+    (source_file, sink_file, sink_line) so ordering is stable across runs
+    regardless of the wave-glob/parse order the caller collected them in --
+    required for the run-2-vs-run-3 byte-identity idempotency contract.
+    """
+    if not unmatched:
+        return []
+    lines = [
+        "## Needs validation",
+        "",
+        "Leads where the trace was followed but a decisive fact lives outside "
+        "the repository (deployment config, infrastructure, a secret store, "
+        "...). No severity, so no ranking table -- read each one.",
+        "",
+    ]
+    ordered = sorted(unmatched, key=lambda nv: (nv.source_file, nv.sink_file, nv.sink_line))
+    for idx, nv in enumerate(ordered, start=1):
+        lines.append(render_needs_validation_entry(idx, nv))
+    return lines
+
+
+def _render_hardening_section(unmatched: list[HardeningNote]) -> list[str]:
+    """`## Hardening notes` -- unmatched notes only. Same placement and
+    ordering rules as `_render_needs_validation_section`."""
+    if not unmatched:
+        return []
+    lines = [
+        "## Hardening notes",
+        "",
+        "Observations with no affected principal or resource -- "
+        "defense-in-depth suggestions, not vulnerabilities.",
+        "",
+    ]
+    ordered = sorted(unmatched, key=lambda hn: (hn.source_file, hn.sink_file, hn.sink_line))
+    for idx, hn in enumerate(ordered, start=1):
+        lines.append(render_hardening_entry(idx, hn))
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +544,8 @@ def render_summary(
     plugin_root: Path | None = None,
     coverage_gaps: list[str] | None = None,
     incomplete: bool = False,
+    unmatched_needs_validation: list[NeedsValidation] | None = None,
+    unmatched_hardening: list[HardeningNote] | None = None,
 ) -> str:
     total_counted = len(merged) + len(manual)
     by_sev: dict[str, int] = {}
@@ -402,6 +581,31 @@ def render_summary(
     ])
     for sev in ("Critical", "High", "Medium"):
         lines.append(f"- {sev}: {by_sev.get(sev, 0)}")
+
+    # Verdict-bucket stat (Stage 2 / P2.3): counts records attached to a
+    # confirmed finding (both `merged` and `manual` -- a bucket record can
+    # attach to a manual_review finding too) plus standalone (unmatched)
+    # records. Shown only when the total is non-zero -- back-compat: callers
+    # that don't pass `unmatched_needs_validation`/`unmatched_hardening`
+    # (pre-Stage-2 call sites, e.g. existing tests) get an unchanged,
+    # noise-free summary.
+    nv_attached = sum(len(m.needs_validation) for m in merged) + sum(
+        len(m.needs_validation) for m in manual
+    )
+    hardening_attached = sum(len(m.hardening) for m in merged) + sum(
+        len(m.hardening) for m in manual
+    )
+    nv_standalone = len(unmatched_needs_validation or [])
+    hardening_standalone = len(unmatched_hardening or [])
+    if nv_attached or nv_standalone or hardening_attached or hardening_standalone:
+        lines.append(
+            f"- Needs validation: {nv_attached + nv_standalone} "
+            f"({nv_attached} attached to findings, {nv_standalone} standalone)"
+        )
+        lines.append(
+            f"- Hardening notes: {hardening_attached + hardening_standalone} "
+            f"({hardening_attached} attached to findings, {hardening_standalone} standalone)"
+        )
 
     # Dedup-quality stat: aggregate counts of heuristic flags across both
     # merged and manual collections. Surfaced only when at least one is
@@ -485,8 +689,16 @@ def render_report(
     plugin_root: Path | None = None,
     coverage_gaps: list[str] | None = None,
     incomplete: bool = False,
+    unmatched_needs_validation: list[NeedsValidation] | None = None,
+    unmatched_hardening: list[HardeningNote] | None = None,
 ) -> str:
-    """Legacy single-file report (all findings inline)."""
+    """Legacy single-file report (all findings inline).
+
+    Standalone `## Needs validation` / `## Hardening notes` sections render
+    at the END, after all findings (main + manual) -- so a run with many
+    unmatched bucket records doesn't push the findings themselves below the
+    fold, same placement rationale as `render_index_report`.
+    """
     out = [render_summary(
         merged, manual,
         diff=diff,
@@ -496,6 +708,8 @@ def render_report(
         plugin_root=plugin_root,
         coverage_gaps=coverage_gaps,
         incomplete=incomplete,
+        unmatched_needs_validation=unmatched_needs_validation,
+        unmatched_hardening=unmatched_hardening,
     )]
     out.append("## Findings")
     out.append("")
@@ -512,6 +726,8 @@ def render_report(
         out.append("")
         for idx, mf in enumerate(manual, start=1):
             out.append(render_finding(idx, mf))
+    out.extend(_render_needs_validation_section(unmatched_needs_validation or []))
+    out.extend(_render_hardening_section(unmatched_hardening or []))
     return "\n".join(out)
 
 
@@ -550,8 +766,21 @@ def render_index_report(
     plugin_root: Path | None = None,
     coverage_gaps: list[str] | None = None,
     incomplete: bool = False,
+    unmatched_needs_validation: list[NeedsValidation] | None = None,
+    unmatched_hardening: list[HardeningNote] | None = None,
 ) -> str:
-    """Executive summary + index table linking to per-family detail files."""
+    """Executive summary + index table linking to per-family detail files.
+
+    `## Needs validation` / `## Hardening notes` (standalone records) render
+    at the END of this file, AFTER the findings-by-category table and the
+    manual-review link -- and ONLY here, never in a per-family detail file
+    (deliberately not inside the Executive Summary block that
+    `render_summary` builds: a run with many unmatched bucket records would
+    otherwise push the findings table below the fold). Records attached to
+    a specific finding render inline via `render_finding` instead, in
+    whichever file that finding lands in (family detail or
+    `manual_review.md`).
+    """
     out = [
         render_summary(
             merged,
@@ -564,6 +793,8 @@ def render_index_report(
             plugin_root=plugin_root,
             coverage_gaps=coverage_gaps,
             incomplete=incomplete,
+            unmatched_needs_validation=unmatched_needs_validation,
+            unmatched_hardening=unmatched_hardening,
         )
     ]
     out.append("## Findings by category")
@@ -604,6 +835,8 @@ def render_index_report(
             out.append(f"See [`{details_dirname}/manual_review.md`]({details_dirname}/manual_review.md).")
             out.append("")
 
+    out.extend(_render_needs_validation_section(unmatched_needs_validation or []))
+    out.extend(_render_hardening_section(unmatched_hardening or []))
     return "\n".join(out)
 
 
@@ -667,6 +900,8 @@ def write_split_report(
     plugin_root: Path | None = None,
     coverage_gaps: list[str] | None = None,
     incomplete: bool = False,
+    unmatched_needs_validation: list[NeedsValidation] | None = None,
+    unmatched_hardening: list[HardeningNote] | None = None,
 ) -> list[Path]:
     """Write index + per-family detail files. Returns list of written paths."""
     details_dir.mkdir(parents=True, exist_ok=True)
@@ -684,6 +919,8 @@ def write_split_report(
             plugin_root=plugin_root,
             coverage_gaps=coverage_gaps,
             incomplete=incomplete,
+            unmatched_needs_validation=unmatched_needs_validation,
+            unmatched_hardening=unmatched_hardening,
         ),
     )
     written.append(output_path)

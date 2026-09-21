@@ -24,6 +24,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from dedupe.parser import parse_wave  # noqa: E402
+from dedupe.pipeline import attach_side_records  # noqa: E402
+from dedupe.pipeline import dedupe as _dedupe  # noqa: E402
+from dedupe.renderer import write_split_report  # noqa: E402
+
 THIS_DIR = Path(__file__).resolve().parent
 BIN_DIR = THIS_DIR.parent
 RECON = BIN_DIR / "recon_inventory.py"
@@ -31,6 +38,7 @@ PLAN_WAVES = BIN_DIR / "plan_waves.py"
 DEDUPE = BIN_DIR / "dedupe_findings.py"
 
 FIX_SYMFONY_MINIMAL = THIS_DIR / "fixtures" / "symfony_minimal"
+FIX_E2E = THIS_DIR / "fixtures" / "e2e"
 
 
 def _run(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
@@ -191,6 +199,97 @@ class FullPipelineOnSymfonyMinimal(unittest.TestCase):
         manual = self.details / "manual_review.md"
         self.assertFalse(manual.is_file(),
                          msg="seeded clean finding leaked into manual_review")
+
+
+class VerdictBucketsEndToEndTests(unittest.TestCase):
+    """P2.3 end-to-end: parse -> dedupe -> attach_side_records -> render, on
+    the `fixtures/e2e/SECURITY_REVIEW_RESULTS_W{1,2}.md` wave-format-2
+    fixtures (shared with `test_dedupe_findings.EndToEndFixtureTests`, which
+    exercises the pre-Stage-2 `parse_findings_file` path on the SAME files
+    and is unaffected -- it only ever sees `.findings`, never the bucket
+    blocks appended here).
+
+    Deliberately does NOT go through the `dedupe_findings.py` CLI subprocess
+    (unlike `FullPipelineOnSymfonyMinimal` above): wiring `parse_wave` +
+    `attach_side_records` into that CLI's `main()` is P2.4's job, not P2.3's
+    (`bin/dedupe_findings.py` is outside this package's file set). This
+    class drives the same three package-level calls P2.4 will wire into the
+    CLI, so the renderer contract is proven end-to-end today.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        td = Path(cls.tmp.name)
+
+        w1 = parse_wave(FIX_E2E / "SECURITY_REVIEW_RESULTS_W1.md")
+        w2 = parse_wave(FIX_E2E / "SECURITY_REVIEW_RESULTS_W2.md")
+        all_findings = w1.findings + w2.findings
+        nv = w1.needs_validation + w2.needs_validation
+        hn = w1.hardening + w2.hardening
+
+        cls.merged, cls.manual = _dedupe(all_findings)
+        # Union of main + manual: a bucket record must be able to attach to
+        # a manual_review finding too (trap #2 -- a finding that never
+        # auto-promoted still needs its annotation rendered).
+        cls.side = attach_side_records(cls.merged + cls.manual, nv, hn)
+
+        cls.report = td / "REPORT.md"
+        cls.details = td / "REPORT"
+        write_split_report(
+            cls.merged, cls.manual, cls.report, cls.details,
+            unmatched_needs_validation=cls.side.unmatched_needs_validation,
+            unmatched_hardening=cls.side.unmatched_hardening,
+        )
+        cls.index_text = cls.report.read_text(encoding="utf-8")
+        cls.injection_text = (cls.details / "injection.md").read_text(encoding="utf-8")
+        cls.crypto_text = (cls.details / "crypto.md").read_text(encoding="utf-8")
+        cls.manual_text = (cls.details / "manual_review.md").read_text(encoding="utf-8")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_baseline_dedup_counts_unaffected_by_bucket_blocks(self):
+        self.assertEqual(len(self.merged), 2)
+        self.assertEqual(len(self.manual), 2)
+
+    def test_matched_needs_validation_attached_to_repo_finding(self):
+        self.assertIn("**Needs validation (attached):**", self.injection_text)
+        self.assertIn("Unparameterized DQL concatenation", self.injection_text)
+        self.assertIn("809bd41e", self.injection_text)
+
+    def test_matched_hardening_attached_to_token_finding(self):
+        self.assertIn("**Hardening notes (attached):**", self.crypto_text)
+        self.assertIn("Consider field-level encryption", self.crypto_text)
+
+    def test_matched_needs_validation_attached_to_manual_review_finding(self):
+        """Trap #2 regression: Misc.php never auto-promotes (confidence 6,
+        custom sink) and stays in manual_review.md -- its attached
+        needs_validation record must render there, not vanish."""
+        self.assertIn("**Needs validation (attached):**", self.manual_text)
+        self.assertIn("weak randomness", self.manual_text)
+
+    def test_index_has_standalone_sections(self):
+        self.assertIn("## Needs validation", self.index_text)
+        self.assertIn("## Hardening notes", self.index_text)
+
+    def test_nohash00_needs_validation_rendered_standalone(self):
+        """Trap #1 regression: AlsoUnrelated.php:5 has an empty
+        sink_snippet -> `nohash00` sentinel -> can never match -> must still
+        appear in the standalone section."""
+        self.assertIn("src/AlsoUnrelated.php:5", self.index_text)
+        self.assertIn("nohash00", self.index_text)
+
+    def test_unmatched_hardening_rendered_standalone(self):
+        self.assertIn("src/Unrelated.php:99", self.index_text)
+        self.assertIn("No rate limiting", self.index_text)
+
+    def test_standalone_sections_absent_from_family_detail_files(self):
+        self.assertNotIn("## Needs validation", self.injection_text)
+        self.assertNotIn("## Hardening notes", self.injection_text)
+        self.assertNotIn("## Needs validation", self.crypto_text)
+        self.assertNotIn("## Hardening notes", self.crypto_text)
 
 
 if __name__ == "__main__":
