@@ -433,5 +433,185 @@ class CliRefuteIntegrationTests(unittest.TestCase):
             self.assertIn("finding_not_found", invalid_text)
 
 
+class CrossRunResolutionMemoryTests(unittest.TestCase):
+    """End-to-end (Stage 2 / P2.5): a `rejected` refute verdict persists
+    across runs via `.findings_state.json`, survives as a `Previously
+    rejected` annotation WITHOUT suppressing the finding, drops
+    automatically when the cited evidence changes, and does not disturb the
+    run-2-vs-run-3 REPORT.md / findings.json idempotency contract.
+    """
+
+    def _mk_project(self, td_path: Path):
+        from tests.test_dedupe_findings import _mk_finding_md  # type: ignore
+
+        review_root = td_path / "review"
+        waves = review_root / "waves"
+        waves.mkdir(parents=True)
+        snippet = "$ok = $request->get('token');\nreturn $ok;"
+        wave_md = _mk_finding_md(
+            n=1,
+            sink_file="src/Auth/Controller.php",
+            sink_line=42,
+            sink_kind="csrf_missing",
+            root_cause_family="authz",
+            enclosing_symbol="Controller::callback",
+            sink_snippet=snippet,
+            severity="High",
+            confidence=9,
+        )
+        (waves / "W1.md").write_text(wave_md, encoding="utf-8")
+
+        project_root = td_path / "project"
+        guard = project_root / "src" / "Auth" / "Guard.php"
+        guard.parent.mkdir(parents=True)
+        guard.write_text(
+            "<?php\nfunction checkCsrf() { return hash_equals($a, $b); }\n"
+            "function unrelated() { return 1; }\n",
+            encoding="utf-8",
+        )
+        return review_root, waves, project_root
+
+    def _run(self, cli, *, review_root, waves, project_root, refute_path=None):
+        import subprocess
+        output = review_root / "REPORT.md"
+        details = review_root / "REPORT"
+        args = [
+            "python3", cli,
+            "--input-glob", str(waves / "*.md"),
+            "--output", str(output),
+            "--details-dir", str(details),
+            "--project-root", str(project_root),
+        ]
+        if refute_path is not None:
+            args += ["--refute", str(refute_path)]
+        result = subprocess.run(args, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # The finding is `authz` family -> its full body (and any
+        # `render_finding`-level annotation) lives in REPORT/authz.md, not
+        # the index file (which only carries a table row).
+        detail_text = (details / "authz.md").read_text(encoding="utf-8")
+        return (
+            output.read_text(encoding="utf-8") + "\n" + detail_text,
+            (review_root / "findings.json").read_bytes(),
+        )
+
+    def _write_refute_md(self, review_root, waves, project_root):
+        findings = df.parse_findings_file(waves / "W1.md")
+        merged, _ = df.dedupe(findings)
+        primary = merged[0].primary
+        finding_key = (
+            f"{primary.sink_hash}:{primary.sink_file}:"
+            f"{primary.sink_line}:{primary.sink_kind}"
+        )
+        refute_md = textwrap.dedent(f"""\
+            refute_records:
+              - finding_key: {finding_key}
+                refute_file: src/Auth/Guard.php
+                refute_line: 2
+                rationale: hash_equals csrf check present
+                confidence: 9
+            """)
+        refute_path = review_root / "refute.md"
+        refute_path.write_text(refute_md, encoding="utf-8")
+        return refute_path
+
+    def test_mark_persists_without_refute_and_does_not_suppress_finding(self):
+        cli = str(Path(__file__).resolve().parent.parent / "dedupe_findings.py")
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            review_root, waves, project_root = self._mk_project(td_path)
+            refute_path = self._write_refute_md(review_root, waves, project_root)
+
+            # Run 0 (setup): --refute claims the finding; persists the resolution.
+            report0, _ = self._run(
+                cli, review_root=review_root, waves=waves,
+                project_root=project_root, refute_path=refute_path,
+            )
+            self.assertIn("REFUTE_CLAIMED", report0)
+
+            # Run 1: NO --refute. The mark must survive from state, and the
+            # finding must still be fully present (DoD 6: not a filter).
+            report1, _ = self._run(
+                cli, review_root=review_root, waves=waves, project_root=project_root,
+            )
+            self.assertIn("Previously rejected", report1)
+            self.assertIn("src/Auth/Guard.php:2", report1)
+            self.assertIn("`src/Auth/Controller.php:42`", report1)
+            self.assertNotIn("[REFUTE_CLAIMED]", report1)
+
+    def test_idempotent_across_repeated_runs_without_refute(self):
+        """DoD 7: runs 2 and 3 (both post-setup, both without --refute) must
+        produce byte-identical REPORT.md; findings.json must be identical
+        across all three (1, 2, 3) -- none of these three vary --refute."""
+        cli = str(Path(__file__).resolve().parent.parent / "dedupe_findings.py")
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            review_root, waves, project_root = self._mk_project(td_path)
+            refute_path = self._write_refute_md(review_root, waves, project_root)
+            self._run(
+                cli, review_root=review_root, waves=waves,
+                project_root=project_root, refute_path=refute_path,
+            )
+
+            report1, findings1 = self._run(
+                cli, review_root=review_root, waves=waves, project_root=project_root,
+            )
+            report2, findings2 = self._run(
+                cli, review_root=review_root, waves=waves, project_root=project_root,
+            )
+            report3, findings3 = self._run(
+                cli, review_root=review_root, waves=waves, project_root=project_root,
+            )
+
+        self.assertEqual(report2, report3)
+        self.assertEqual(findings1, findings2)
+        self.assertEqual(findings2, findings3)
+
+    def test_key_scenario_evidence_removed_drops_mark_on_next_run(self):
+        """The scenario DoD #5 names explicitly: the protection is removed at
+        refute_file:refute_line while the sink itself is untouched (the wave
+        file / finding never changes) -> the mark must be gone on the very
+        next run, with no fresh --refute pass."""
+        cli = str(Path(__file__).resolve().parent.parent / "dedupe_findings.py")
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            review_root, waves, project_root = self._mk_project(td_path)
+            refute_path = self._write_refute_md(review_root, waves, project_root)
+            self._run(
+                cli, review_root=review_root, waves=waves,
+                project_root=project_root, refute_path=refute_path,
+            )
+            report_before, _ = self._run(
+                cli, review_root=review_root, waves=waves, project_root=project_root,
+            )
+            self.assertIn("Previously rejected", report_before)
+
+            # Control: an UNRELATED edit elsewhere in the same file must not
+            # drop the mark.
+            guard = project_root / "src" / "Auth" / "Guard.php"
+            guard.write_text(
+                "<?php\nfunction checkCsrf() { return hash_equals($a, $b); }\n"
+                "function unrelated() { return 2; }\n",
+                encoding="utf-8",
+            )
+            report_control, _ = self._run(
+                cli, review_root=review_root, waves=waves, project_root=project_root,
+            )
+            self.assertIn("Previously rejected", report_control)
+
+            # The regression: edit ONLY the cited line (protection removed).
+            guard.write_text(
+                "<?php\nfunction checkCsrf() { return true; /* FIXME removed check */ }\n"
+                "function unrelated() { return 2; }\n",
+                encoding="utf-8",
+            )
+            report_after, _ = self._run(
+                cli, review_root=review_root, waves=waves, project_root=project_root,
+            )
+        self.assertNotIn("Previously rejected", report_after)
+        # Not suppressed -- the finding is still there, just unmarked again.
+        self.assertIn("`src/Auth/Controller.php:42`", report_after)
+
+
 if __name__ == "__main__":
     unittest.main()

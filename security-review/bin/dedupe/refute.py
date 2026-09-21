@@ -32,7 +32,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .models import FLAG_REFUTE_CLAIMED, MergedFinding
+from .models import FLAG_REFUTE_CLAIMED, MergedFinding, _sink_hash_from_snippet
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +262,46 @@ def validate_refute_evidence(
     if any(_is_code_line(ln) for ln in window):
         return True, None
     return False, "no_code_token_in_window"
+
+
+# ---------------------------------------------------------------------------
+# Evidence-content hash (Stage 2 / P2.5): the cross-run invalidation key for
+# a remembered refute verdict.
+#
+# Deliberately a hash of the CONTENT at refute_file:refute_line, not of the
+# location itself — a location-only key never changes when the cited
+# protection is removed, so it can't catch the regression it exists to
+# catch (see `dedupe.state` module docstring). Reuses the exact same
+# normalize-then-sha256 the pipeline already uses for `sink_hash`
+# (`models._sink_hash_from_snippet`) rather than a second hash formula.
+#
+# The window is the single cited line, not the ±5-line window
+# `validate_refute_evidence` uses for its liberal "is there SOME code here"
+# check: recall-first makes an over-eager DROP of the mark safe (worst case,
+# an already-refuted finding is shown again — no information is lost) while
+# an over-eager KEEP is exactly the regression this mechanism must catch, so
+# the narrower window is the conservative choice.
+# ---------------------------------------------------------------------------
+
+
+def compute_evidence_hash(refute_file: str, refute_line: int, project_root: Path) -> str:
+    """Hash of the normalized single line of code at
+    `project_root/refute_file:refute_line`.
+
+    Returns the shared "no usable content" sentinel (`_sink_hash_from_snippet("")`,
+    i.e. `nohash00`) when the file is unreadable or the line is out of range —
+    this never accidentally matches a real evidence_hash, so a moved/deleted
+    file always drops the mark rather than silently keeping it.
+    """
+    target = project_root / refute_file
+    try:
+        lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return _sink_hash_from_snippet("")
+    idx = refute_line - 1
+    if idx < 0 or idx >= len(lines):
+        return _sink_hash_from_snippet("")
+    return _sink_hash_from_snippet(lines[idx])
 
 
 def _split_finding_key(finding_key: str) -> tuple[str, str, int, str] | None:

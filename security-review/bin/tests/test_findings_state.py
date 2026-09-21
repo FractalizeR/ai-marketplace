@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -12,13 +13,20 @@ THIS_DIR = Path(__file__).resolve().parent
 BIN_DIR = THIS_DIR.parent
 sys.path.insert(0, str(BIN_DIR))
 
-from dedupe.models import Finding, MergedFinding  # noqa: E402
+from dedupe.models import FLAG_REFUTE_CLAIMED, Finding, MergedFinding  # noqa: E402
+from dedupe.refute import compute_evidence_hash  # noqa: E402
 from dedupe.state import (  # noqa: E402
     FindingSnapshot,
+    Resolution,
     STATE_FILENAME,
     STATE_SCHEMA_VERSION,
+    VerdictsInError,
+    active_rejections,
     compute_diff,
+    load_resolutions,
     load_state,
+    load_verdicts_in,
+    resolutions_from_refuted_findings,
     save_state,
     snapshots_from,
 )
@@ -166,6 +174,449 @@ class DiffSemantics(unittest.TestCase):
 
         recurring_only = compute_diff(prev, prev)
         self.assertFalse(recurring_only.has_changes)
+
+
+class SchemaMigrationTests(unittest.TestCase):
+    """Stage 2 / P2.5: schema 1 -> 2 is a MIGRATION, not a reset — a state
+    file written by the pre-Stage-2 pipeline must still be read, with
+    `verdict`/`condition_keys` backfilled, not silently dropped (which would
+    make every finding look New on the first post-upgrade run)."""
+
+    def _write_schema1_state(self, review_root: Path, sink_hash: str) -> None:
+        review_root.mkdir(parents=True, exist_ok=True)
+        (review_root / STATE_FILENAME).write_text(json.dumps({
+            "schema_version": 1,
+            "findings": [
+                {
+                    "sink_hash": sink_hash, "sink_file": "src/A.php", "sink_line": 10,
+                    "sink_kind": "idor_lookup", "severity": "High", "title": "Test A",
+                },
+            ],
+        }), encoding="utf-8")
+
+    def test_schema1_state_loads_with_migrated_defaults(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            self._write_schema1_state(review_root, "abcd1234")
+            loaded = load_state(review_root)
+        self.assertIsNotNone(loaded)
+        self.assertEqual(len(loaded), 1)
+        self.assertEqual(loaded[0].verdict, "confirmed")
+        self.assertEqual(loaded[0].condition_keys, ())
+
+    def test_schema1_state_not_all_new_on_diff(self):
+        """The concrete regression this migration exists to prevent: a
+        schema-1 state file must not make every current finding look `new`."""
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            self._write_schema1_state(review_root, "abcd1234")
+            previous = load_state(review_root)
+            current = [FindingSnapshot("abcd1234", "src/A.php", 10, "idor_lookup", "High", "Test A")]
+            diff = compute_diff(previous, current)
+        self.assertEqual(diff.new, [])
+        self.assertEqual(len(diff.recurring), 1)
+
+    def test_schema1_state_has_no_resolutions(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            self._write_schema1_state(review_root, "abcd1234")
+            self.assertEqual(load_resolutions(review_root), {})
+
+    def test_unreadable_future_schema_version_still_returns_none(self):
+        """Broadening acceptance to {1, 2} must not silently accept an
+        unknown future version too."""
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            (review_root / STATE_FILENAME).write_text(
+                json.dumps({"schema_version": 99, "findings": []})
+            )
+            self.assertIsNone(load_state(review_root))
+            self.assertEqual(load_resolutions(review_root), {})
+
+
+class ResolutionsAccumulateTests(unittest.TestCase):
+    """`save_state`'s resolutions merge is read-modify-write, not a full
+    overwrite — the journal accumulates across runs."""
+
+    def test_resolutions_persist_across_separate_save_calls(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            save_state([], review_root, resolutions={
+                "hash1": Resolution(verdict="rejected", source="refute"),
+            })
+            save_state([], review_root, resolutions={
+                "hash2": Resolution(verdict="rejected", source="refute"),
+            })
+            loaded = load_resolutions(review_root)
+        self.assertEqual(set(loaded), {"hash1", "hash2"})
+
+    def test_same_hash_overwritten_by_latest_call(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            save_state([], review_root, resolutions={
+                "hash1": Resolution(verdict="rejected", source="refute"),
+            })
+            save_state([], review_root, resolutions={
+                "hash1": Resolution(verdict="reaffirmed", source="triage"),
+            })
+            loaded = load_resolutions(review_root)
+        self.assertEqual(loaded["hash1"].verdict, "reaffirmed")
+        self.assertEqual(loaded["hash1"].source, "triage")
+
+    def test_run_seq_advances_only_on_calls_that_supply_resolutions(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            save_state([], review_root, resolutions={
+                "hash1": Resolution(verdict="rejected", source="refute"),
+            })
+            first_seq = load_resolutions(review_root)["hash1"].run_seq
+            # A plain run with no fresh resolutions must not touch hash1's run_seq.
+            save_state([], review_root, resolutions={})
+            self.assertEqual(load_resolutions(review_root)["hash1"].run_seq, first_seq)
+            # A run that DOES supply a (possibly unrelated) resolution bumps
+            # the counter for what it touches.
+            save_state([], review_root, resolutions={
+                "hash2": Resolution(verdict="rejected", source="refute"),
+            })
+            reloaded = load_resolutions(review_root)
+            self.assertEqual(reloaded["hash1"].run_seq, first_seq)
+            self.assertGreater(reloaded["hash2"].run_seq, first_seq)
+
+    def test_run_seq_never_appears_in_findings_serialization(self):
+        """run_seq is an audit trail INSIDE state.json only — Resolution's
+        own to_dict is the boundary that matters here; findings.json/REPORT.md
+        never construct a Resolution from state at all (see
+        renderer._render_resolution_note, which never reads run_seq)."""
+        res = Resolution(verdict="rejected", source="refute", run_seq=7)
+        self.assertIn("run_seq", res.to_dict())  # present in state.json (by design)
+        # But the rendered note must not mention it — covered in test_renderer.py.
+
+
+class ResolutionsFromRefutedFindingsTests(unittest.TestCase):
+    def _mk_merged(self, sink_snippet="if (true) { deny(); }", **overrides) -> MergedFinding:
+        f = Finding(
+            title_line="h", sink_file="src/A.php", sink_line=10,
+            sink_kind="csrf_missing", root_cause_family="authz",
+            enclosing_symbol="A::m", sink_snippet=sink_snippet,
+            severity="High", confidence=9,
+        )
+        mf = MergedFinding(primary=f)
+        for k, v in overrides.items():
+            setattr(mf, k, v)
+        return mf
+
+    def test_builds_resolution_for_refute_claimed_finding(self):
+        with tempfile.TemporaryDirectory() as td:
+            project_root = Path(td)
+            guard = project_root / "src" / "Guard.php"
+            guard.parent.mkdir(parents=True)
+            guard.write_text("<?php\nfunction check() {\n    deny_unless(hasRole('admin'));\n}\n")
+            mf = self._mk_merged(
+                flags=[FLAG_REFUTE_CLAIMED],
+                refute_file="src/Guard.php", refute_line=3,
+                refute_rationale="role check", refute_confidence=9,
+            )
+            out = resolutions_from_refuted_findings([mf], project_root)
+            self.assertIn(mf.primary.sink_hash, out)
+            res = out[mf.primary.sink_hash]
+            self.assertEqual(res.verdict, "rejected")
+            self.assertEqual(res.source, "refute")
+            self.assertEqual(res.refute_file, "src/Guard.php")
+            self.assertEqual(res.refute_line, 3)
+            self.assertEqual(
+                res.evidence_hash,
+                compute_evidence_hash("src/Guard.php", 3, project_root),
+            )
+
+    def test_skips_finding_without_refute_claimed_flag(self):
+        with tempfile.TemporaryDirectory() as td:
+            mf = self._mk_merged()  # no flags
+            out = resolutions_from_refuted_findings([mf], Path(td))
+        self.assertEqual(out, {})
+
+    def test_skips_nohash00_finding(self):
+        with tempfile.TemporaryDirectory() as td:
+            mf = self._mk_merged(
+                sink_snippet="",  # -> nohash00
+                flags=[FLAG_REFUTE_CLAIMED],
+                refute_file="src/Guard.php", refute_line=1,
+            )
+            self.assertEqual(mf.primary.sink_hash, "nohash00")
+            out = resolutions_from_refuted_findings([mf], Path(td))
+        self.assertEqual(out, {})
+
+
+class ActiveRejectionsTests(unittest.TestCase):
+    """`active_rejections` is the freshness gate: a rejected mark with code
+    evidence only stays active while that evidence is unchanged."""
+
+    def _mk_project(self, td: Path, guard_lines: list[str]) -> Path:
+        project_root = td / "project"
+        guard = project_root / "src" / "Guard.php"
+        guard.parent.mkdir(parents=True)
+        guard.write_text("\n".join(guard_lines), encoding="utf-8")
+        return project_root
+
+    def test_rejected_with_unchanged_evidence_stays_active(self):
+        with tempfile.TemporaryDirectory() as td:
+            project_root = self._mk_project(Path(td), [
+                "<?php", "function check() {", "    deny_unless(hasRole('admin'));", "}",
+            ])
+            evidence_hash = compute_evidence_hash("src/Guard.php", 3, project_root)
+            resolutions = {"h1": Resolution(
+                verdict="rejected", evidence_hash=evidence_hash,
+                refute_file="src/Guard.php", refute_line=3, source="refute",
+            )}
+            active = active_rejections(resolutions, project_root)
+        self.assertIn("h1", active)
+
+    def test_key_scenario_protection_removed_drops_the_mark(self):
+        """The scenario DoD #5 names by name: the protection at
+        refute_file:refute_line is removed (sink untouched) -> the mark must
+        be dropped on the NEXT run, without re-running --refute."""
+        with tempfile.TemporaryDirectory() as td:
+            project_root = self._mk_project(Path(td), [
+                "<?php", "function check() {", "    deny_unless(hasRole('admin'));", "}",
+            ])
+            evidence_hash = compute_evidence_hash("src/Guard.php", 3, project_root)
+            resolutions = {"h1": Resolution(
+                verdict="rejected", evidence_hash=evidence_hash,
+                refute_file="src/Guard.php", refute_line=3, source="refute",
+            )}
+            # Protection removed; only line 3 changes, nothing else moves.
+            (project_root / "src" / "Guard.php").write_text(
+                "\n".join(["<?php", "function check() {", "    // no check anymore", "}"]),
+                encoding="utf-8",
+            )
+            active = active_rejections(resolutions, project_root)
+        self.assertNotIn("h1", active)
+
+    def test_unrelated_edit_elsewhere_keeps_the_mark(self):
+        """Control for the scenario above: touching code OUTSIDE the cited
+        line must not invalidate the mark."""
+        with tempfile.TemporaryDirectory() as td:
+            project_root = self._mk_project(Path(td), [
+                "<?php", "function check() {", "    deny_unless(hasRole('admin'));", "}",
+                "function unrelated() { return 1; }",
+            ])
+            evidence_hash = compute_evidence_hash("src/Guard.php", 3, project_root)
+            resolutions = {"h1": Resolution(
+                verdict="rejected", evidence_hash=evidence_hash,
+                refute_file="src/Guard.php", refute_line=3, source="refute",
+            )}
+            (project_root / "src" / "Guard.php").write_text(
+                "\n".join([
+                    "<?php", "function check() {", "    deny_unless(hasRole('admin'));", "}",
+                    "function unrelated() { return 2; }",  # changed, but not line 3
+                ]),
+                encoding="utf-8",
+            )
+            active = active_rejections(resolutions, project_root)
+        self.assertIn("h1", active)
+
+    def test_regression_guard_path_based_hash_would_miss_the_removal(self):
+        """Empirical demonstration that `evidence_hash` MUST be content-based:
+        a hash of the (refute_file, refute_line) location tuple never
+        changes when the code at that location changes, so it would fail to
+        catch exactly the regression `active_rejections` exists to catch."""
+        with tempfile.TemporaryDirectory() as td:
+            project_root = self._mk_project(Path(td), [
+                "<?php", "function check() {", "    deny_unless(hasRole('admin'));", "}",
+            ])
+            path_based_hash = hashlib.sha256(b"src/Guard.php:3").hexdigest()[:8]
+            resolutions = {"h1": Resolution(
+                verdict="rejected", evidence_hash=path_based_hash,
+                refute_file="src/Guard.php", refute_line=3, source="refute",
+            )}
+            (project_root / "src" / "Guard.php").write_text(
+                "\n".join(["<?php", "function check() {", "    // no check anymore", "}"]),
+                encoding="utf-8",
+            )
+            # A path-based hash is unchanged (path:line didn't move) -> if
+            # `active_rejections` compared against IT, "h1" would incorrectly
+            # stay active. We assert the path-based hash itself is stable
+            # (proving it CANNOT have caught the regression), which is why
+            # `compute_evidence_hash` must never be defined this way.
+            still_matches_path_hash = path_based_hash == hashlib.sha256(b"src/Guard.php:3").hexdigest()[:8]
+            self.assertTrue(still_matches_path_hash)
+            active = active_rejections(resolutions, project_root)
+        # With the REAL (content-based) compute_evidence_hash, the mark drops
+        # even though a path-based hash would not have caught it.
+        self.assertNotIn("h1", active)
+
+    def test_reaffirmed_never_rendered_as_active(self):
+        resolutions = {"h1": Resolution(verdict="reaffirmed", source="triage")}
+        active = active_rejections(resolutions, Path("/nonexistent"))
+        self.assertEqual(active, {})
+
+    def test_rejected_without_refute_file_has_no_evidence_to_go_stale(self):
+        """External triage with no code citation: never auto-invalidated."""
+        resolutions = {"h1": Resolution(verdict="rejected", source="triage")}
+        active = active_rejections(resolutions, Path("/nonexistent"))
+        self.assertIn("h1", active)
+
+    def test_missing_evidence_file_drops_the_mark(self):
+        resolutions = {"h1": Resolution(
+            verdict="rejected", evidence_hash="deadbeef",
+            refute_file="src/Gone.php", refute_line=1, source="refute",
+        )}
+        active = active_rejections(resolutions, Path("/nonexistent"))
+        self.assertEqual(active, {})
+
+
+class LoadVerdictsInTests(unittest.TestCase):
+    """`--verdicts-in` fail-closed import (Stage 2 / P2.5). Every violation
+    must refuse the WHOLE import, never apply a partial result."""
+
+    def _write(self, td: Path, payload: dict) -> Path:
+        p = td / "verdicts.json"
+        p.write_text(json.dumps(payload), encoding="utf-8")
+        return p
+
+    def _valid_payload(self, sha: str) -> dict:
+        return {
+            "schema_version": 1,
+            "findings_json_sha256": sha,
+            "verdicts": [
+                {"sink_hash": "abcd1234", "verdict": "rejected", "source": "triage-bot"},
+            ],
+        }
+
+    def test_valid_import_builds_resolution(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write(Path(td), self._valid_payload("deadbeef"))
+            out = load_verdicts_in(
+                path, valid_sink_hashes={"abcd1234"},
+                findings_json_sha256="deadbeef", project_root=Path(td),
+            )
+        self.assertEqual(set(out), {"abcd1234"})
+        self.assertEqual(out["abcd1234"].verdict, "rejected")
+        self.assertEqual(out["abcd1234"].source, "triage-bot")
+        self.assertEqual(out["abcd1234"].evidence_hash, "")
+
+    def test_hash_mismatch_refuses_whole_import(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self._write(Path(td), self._valid_payload("stale-hash"))
+            with self.assertRaises(VerdictsInError):
+                load_verdicts_in(
+                    path, valid_sink_hashes={"abcd1234"},
+                    findings_json_sha256="deadbeef", project_root=Path(td),
+                )
+
+    def test_unknown_top_level_field_refuses_import(self):
+        with tempfile.TemporaryDirectory() as td:
+            payload = self._valid_payload("deadbeef")
+            payload["extra_field"] = "nope"
+            path = self._write(Path(td), payload)
+            with self.assertRaises(VerdictsInError) as ctx:
+                load_verdicts_in(
+                    path, valid_sink_hashes={"abcd1234"},
+                    findings_json_sha256="deadbeef", project_root=Path(td),
+                )
+            self.assertIn("extra_field", str(ctx.exception))
+
+    def test_unknown_entry_field_refuses_import(self):
+        with tempfile.TemporaryDirectory() as td:
+            payload = self._valid_payload("deadbeef")
+            payload["verdicts"][0]["unexpected"] = "x"
+            path = self._write(Path(td), payload)
+            with self.assertRaises(VerdictsInError) as ctx:
+                load_verdicts_in(
+                    path, valid_sink_hashes={"abcd1234"},
+                    findings_json_sha256="deadbeef", project_root=Path(td),
+                )
+            self.assertIn("unexpected", str(ctx.exception))
+
+    def test_unknown_sink_hash_refuses_whole_import_and_is_enumerated(self):
+        with tempfile.TemporaryDirectory() as td:
+            payload = self._valid_payload("deadbeef")
+            payload["verdicts"].append(
+                {"sink_hash": "ffffffff", "verdict": "rejected", "source": "triage-bot"}
+            )
+            path = self._write(Path(td), payload)
+            with self.assertRaises(VerdictsInError) as ctx:
+                load_verdicts_in(
+                    path, valid_sink_hashes={"abcd1234"},  # ffffffff is NOT in here
+                    findings_json_sha256="deadbeef", project_root=Path(td),
+                )
+            self.assertIn("ffffffff", str(ctx.exception))
+
+    def test_duplicate_sink_hash_refuses_import(self):
+        with tempfile.TemporaryDirectory() as td:
+            payload = self._valid_payload("deadbeef")
+            payload["verdicts"].append(
+                {"sink_hash": "abcd1234", "verdict": "reaffirmed", "source": "triage-bot"}
+            )
+            path = self._write(Path(td), payload)
+            with self.assertRaises(VerdictsInError) as ctx:
+                load_verdicts_in(
+                    path, valid_sink_hashes={"abcd1234"},
+                    findings_json_sha256="deadbeef", project_root=Path(td),
+                )
+            self.assertIn("abcd1234", str(ctx.exception))
+
+    def test_bad_verdict_value_refuses_import(self):
+        with tempfile.TemporaryDirectory() as td:
+            payload = self._valid_payload("deadbeef")
+            payload["verdicts"][0]["verdict"] = "maybe"
+            path = self._write(Path(td), payload)
+            with self.assertRaises(VerdictsInError):
+                load_verdicts_in(
+                    path, valid_sink_hashes={"abcd1234"},
+                    findings_json_sha256="deadbeef", project_root=Path(td),
+                )
+
+    def test_unknown_condition_key_refuses_import(self):
+        with tempfile.TemporaryDirectory() as td:
+            payload = self._valid_payload("deadbeef")
+            payload["verdicts"][0]["condition_keys"] = ["not_a_real_key"]
+            path = self._write(Path(td), payload)
+            with self.assertRaises(VerdictsInError):
+                load_verdicts_in(
+                    path, valid_sink_hashes={"abcd1234"},
+                    findings_json_sha256="deadbeef", project_root=Path(td),
+                )
+
+    def test_refute_file_without_refute_line_refuses_import(self):
+        with tempfile.TemporaryDirectory() as td:
+            payload = self._valid_payload("deadbeef")
+            payload["verdicts"][0]["refute_file"] = "src/X.php"
+            path = self._write(Path(td), payload)
+            with self.assertRaises(VerdictsInError):
+                load_verdicts_in(
+                    path, valid_sink_hashes={"abcd1234"},
+                    findings_json_sha256="deadbeef", project_root=Path(td),
+                )
+
+    def test_missing_required_field_refuses_import(self):
+        with tempfile.TemporaryDirectory() as td:
+            payload = self._valid_payload("deadbeef")
+            del payload["verdicts"][0]["source"]
+            path = self._write(Path(td), payload)
+            with self.assertRaises(VerdictsInError):
+                load_verdicts_in(
+                    path, valid_sink_hashes={"abcd1234"},
+                    findings_json_sha256="deadbeef", project_root=Path(td),
+                )
+
+    def test_refute_file_and_line_compute_evidence_hash(self):
+        with tempfile.TemporaryDirectory() as td:
+            project_root = Path(td)
+            guard = project_root / "src" / "Guard.php"
+            guard.parent.mkdir(parents=True)
+            guard.write_text("<?php\ndeny_unless(true);\n")
+            payload = self._valid_payload("deadbeef")
+            payload["verdicts"][0]["refute_file"] = "src/Guard.php"
+            payload["verdicts"][0]["refute_line"] = 2
+            path = self._write(project_root, payload)
+            out = load_verdicts_in(
+                path, valid_sink_hashes={"abcd1234"},
+                findings_json_sha256="deadbeef", project_root=project_root,
+            )
+            self.assertEqual(
+                out["abcd1234"].evidence_hash,
+                compute_evidence_hash("src/Guard.php", 2, project_root),
+            )
 
 
 if __name__ == "__main__":

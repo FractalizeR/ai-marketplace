@@ -19,6 +19,7 @@ from dedupe.models import (  # noqa: E402
     FLAG_CROSS_SINK_MERGE,
     FLAG_MERGED_DESPITE_HASH_MISMATCH,
     FLAG_PARSE_FAILED,
+    FLAG_REFUTE_CLAIMED,
     Finding,
     HardeningNote,
     MergedFinding,
@@ -32,6 +33,7 @@ from dedupe.renderer import (  # noqa: E402
     render_summary,
     write_split_report,
 )
+from dedupe.state import Resolution  # noqa: E402
 
 
 def _mk_finding(
@@ -484,6 +486,103 @@ class VerdictBucketRenderingTests(unittest.TestCase):
             # to its finding, in the family detail file.
             self.assertIn("**Hardening notes (attached):**", family_text)
             self.assertIn("hardening text", family_text)
+
+
+class ResolutionAnnotationTests(unittest.TestCase):
+    """Stage 2 / P2.5: `resolutions` (`sink_hash -> state.Resolution`) marks
+    a finding as previously rejected WITHOUT suppressing it — the finding
+    must still render in full; only a note is appended."""
+
+    def _mk_mf(self, sink_snippet="code", **flags_and_fields) -> MergedFinding:
+        f = _mk_finding(sink_snippet=sink_snippet)
+        mf = MergedFinding(primary=f)
+        for k, v in flags_and_fields.items():
+            setattr(mf, k, v)
+        return mf
+
+    def test_rejected_resolution_renders_note_without_removing_finding(self):
+        mf = self._mk_mf()
+        resolutions = {mf.primary.sink_hash: Resolution(
+            verdict="rejected", refute_file="src/Guard.php", refute_line=3, source="refute",
+        )}
+        body = render_finding(1, mf, resolutions=resolutions)
+        # DoD 6: the finding itself is NOT suppressed -- title/body still present.
+        self.assertIn(f"`{mf.primary.sink_file}:{mf.primary.sink_line}`", body)
+        self.assertIn("Previously rejected", body)
+        self.assertIn("src/Guard.php:3", body)
+
+    def test_rejected_resolution_present_in_full_split_report(self):
+        """Red-if-turned-into-a-filter guard: the finding must still appear
+        BOTH in the index table AND in its per-family detail body -- a
+        resolutions map must never remove a row/file entry, only annotate it."""
+        f = Finding(
+            title_line="h", sink_file="src/A.php", sink_line=10,
+            severity="High", confidence=9,
+            sink_kind="dql_concat", root_cause_family="injection",
+            enclosing_symbol="Repo::find", sink_snippet="code", raw_body="body",
+        )
+        merged, manual = df_dedupe([f])
+        resolutions = {merged[0].primary.sink_hash: Resolution(verdict="rejected", source="triage")}
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "REPORT.md"
+            details = Path(td) / "REPORT"
+            write_split_report(merged, manual, out, details, resolutions=resolutions)
+            index_text = out.read_text(encoding="utf-8")
+            family_text = (details / "injection.md").read_text(encoding="utf-8")
+        self.assertIn("`src/A.php:10`", index_text)
+        self.assertIn("`src/A.php:10`", family_text)
+        self.assertIn("Previously rejected", family_text)
+
+    def test_no_evidence_location_falls_back_to_source_only_note(self):
+        mf = self._mk_mf()
+        resolutions = {mf.primary.sink_hash: Resolution(verdict="rejected", source="triage-bot")}
+        body = render_finding(1, mf, resolutions=resolutions)
+        self.assertIn("Previously rejected (source: `triage-bot`)", body)
+
+    def test_reaffirmed_resolution_renders_no_note(self):
+        mf = self._mk_mf()
+        resolutions = {mf.primary.sink_hash: Resolution(verdict="reaffirmed", source="triage")}
+        body = render_finding(1, mf, resolutions=resolutions)
+        self.assertNotIn("Previously rejected", body)
+
+    def test_no_matching_resolution_renders_no_note(self):
+        mf = self._mk_mf()
+        body = render_finding(1, mf, resolutions={"someotherhash": Resolution(verdict="rejected")})
+        self.assertNotIn("Previously rejected", body)
+
+    def test_resolutions_none_is_back_compat_no_note(self):
+        mf = self._mk_mf()
+        body = render_finding(1, mf)
+        self.assertNotIn("Previously rejected", body)
+
+    def test_fresh_refute_claim_this_run_takes_priority_over_historical_note(self):
+        """A finding refuted THIS run already carries the live blockquote --
+        the historical note would be redundant, not wrong, but must not
+        double up."""
+        mf = self._mk_mf(
+            flags=[FLAG_REFUTE_CLAIMED],
+            refute_rationale="fresh evidence this run",
+            refute_confidence=9,
+            refute_file="src/Fresh.php",
+            refute_line=1,
+        )
+        resolutions = {mf.primary.sink_hash: Resolution(
+            verdict="rejected", refute_file="src/Old.php", refute_line=99, source="refute",
+        )}
+        body = render_finding(1, mf, resolutions=resolutions)
+        self.assertIn("Refute claim: fresh evidence this run", body)
+        self.assertNotIn("src/Old.php", body)
+        self.assertEqual(body.count("Previously rejected"), 0)
+
+    def test_run_seq_never_leaks_into_rendered_output(self):
+        mf = self._mk_mf()
+        resolutions = {mf.primary.sink_hash: Resolution(
+            verdict="rejected", refute_file="src/Guard.php", refute_line=3,
+            source="refute", run_seq=42,
+        )}
+        body = render_finding(1, mf, resolutions=resolutions)
+        self.assertNotIn("42", body)
+        self.assertNotIn("run_seq", body)
 
 
 if __name__ == "__main__":

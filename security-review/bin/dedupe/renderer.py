@@ -82,8 +82,33 @@ def _title_category(mf: MergedFinding) -> str:
 # ---------------------------------------------------------------------------
 
 
-def render_finding(idx: int, mf: MergedFinding) -> str:
-    """Render finding by replaying the primary's raw_body."""
+def _render_resolution_note(resolution) -> str:
+    """Cross-run resolution mark (Stage 2 / P2.5) -- annotates, never
+    suppresses: the finding still renders in full above this line. Duck-typed
+    on `state.Resolution` (`.refute_file`/`.refute_line`/`.source`), the same
+    pattern already used for `diff`/`cost`, to avoid a renderer -> state
+    import. `run_seq` is intentionally never read here -- it must not reach
+    REPORT.md (see `dedupe.state` module docstring)."""
+    refute_file = getattr(resolution, "refute_file", "")
+    refute_line = getattr(resolution, "refute_line", 0)
+    if refute_file:
+        return f"> Previously rejected; evidence at `{refute_file}:{refute_line}`"
+    source = getattr(resolution, "source", "")
+    if source:
+        return f"> Previously rejected (source: `{source}`)"
+    return "> Previously rejected"
+
+
+def render_finding(idx: int, mf: MergedFinding, *, resolutions: dict | None = None) -> str:
+    """Render finding by replaying the primary's raw_body.
+
+    `resolutions` (Stage 2 / P2.5) is an optional `sink_hash -> Resolution`
+    map of REMEMBERED, still-valid rejections from prior runs (already
+    filtered by `state.active_rejections` -- this function does not
+    re-validate evidence). It never removes the finding from the report; it
+    only appends a note, mutually exclusive with the live `[REFUTE_CLAIMED]`
+    blockquote below (a finding refuted THIS run already carries that
+    inline, so the historical note would be redundant)."""
     f = mf.primary
     # `[REFUTE_CLAIMED]` is rendered with the refute_file:refute_line tail to
     # make the audit trail visible inline (operator sees where the rationale
@@ -140,6 +165,11 @@ def render_finding(idx: int, mf: MergedFinding) -> str:
             f"> Refute claim: {mf.refute_rationale} "
             f"(confidence {mf.refute_confidence})"
         )
+    elif resolutions:
+        resolution = resolutions.get(f.sink_hash)
+        if resolution is not None and getattr(resolution, "verdict", None) == "rejected":
+            out.append("")
+            out.append(_render_resolution_note(resolution))
     # Verdict-bucket annotations (Stage 2 / P2.3) -- records `attach_side_records`
     # matched to THIS finding by sink_hash. Rendered here (not as a separate
     # report row) so `render_finding`'s two callers -- family detail AND
@@ -691,6 +721,7 @@ def render_report(
     incomplete: bool = False,
     unmatched_needs_validation: list[NeedsValidation] | None = None,
     unmatched_hardening: list[HardeningNote] | None = None,
+    resolutions: dict | None = None,
 ) -> str:
     """Legacy single-file report (all findings inline).
 
@@ -714,7 +745,7 @@ def render_report(
     out.append("## Findings")
     out.append("")
     for idx, mf in enumerate(merged, start=1):
-        out.append(render_finding(idx, mf))
+        out.append(render_finding(idx, mf, resolutions=resolutions))
     if manual:
         out.append("## Manual review required")
         out.append("")
@@ -725,7 +756,7 @@ def render_report(
         )
         out.append("")
         for idx, mf in enumerate(manual, start=1):
-            out.append(render_finding(idx, mf))
+            out.append(render_finding(idx, mf, resolutions=resolutions))
     out.extend(_render_needs_validation_section(unmatched_needs_validation or []))
     out.extend(_render_hardening_section(unmatched_hardening or []))
     return "\n".join(out)
@@ -840,7 +871,9 @@ def render_index_report(
     return "\n".join(out)
 
 
-def render_family_detail(family: str, findings: list[MergedFinding]) -> str:
+def render_family_detail(
+    family: str, findings: list[MergedFinding], *, resolutions: dict | None = None
+) -> str:
     """Per-family detail file with full finding bodies."""
     out = [f"# SECURITY_REVIEW_RESULTS — {family}", ""]
     out.append(f"Findings grouped by `root_cause_family={family}`.")
@@ -851,11 +884,11 @@ def render_family_detail(family: str, findings: list[MergedFinding]) -> str:
         key=lambda m: (-SEVERITY_RANK[m.severity], m.primary.sink_file, m.primary.sink_line),
     )
     for idx, mf in enumerate(sorted_findings, start=1):
-        out.append(render_finding(idx, mf))
+        out.append(render_finding(idx, mf, resolutions=resolutions))
     return "\n".join(out)
 
 
-def render_manual_review_file(manual: list[MergedFinding]) -> str:
+def render_manual_review_file(manual: list[MergedFinding], *, resolutions: dict | None = None) -> str:
     out = ["# SECURITY_REVIEW_RESULTS — Manual review", ""]
     out.append(
         "Findings that require manual inspection. Two categories:"
@@ -874,7 +907,7 @@ def render_manual_review_file(manual: list[MergedFinding]) -> str:
     )
     out.append("")
     for idx, mf in enumerate(manual, start=1):
-        out.append(render_finding(idx, mf))
+        out.append(render_finding(idx, mf, resolutions=resolutions))
     return "\n".join(out)
 
 
@@ -902,6 +935,7 @@ def write_split_report(
     incomplete: bool = False,
     unmatched_needs_validation: list[NeedsValidation] | None = None,
     unmatched_hardening: list[HardeningNote] | None = None,
+    resolutions: dict | None = None,
 ) -> list[Path]:
     """Write index + per-family detail files. Returns list of written paths."""
     details_dir.mkdir(parents=True, exist_ok=True)
@@ -929,12 +963,12 @@ def write_split_report(
     for family, group in sorted(groups.items()):
         slug = _family_slug(family)
         detail_path = details_dir / f"{slug}.md"
-        _write_reflowed(detail_path, render_family_detail(family, group))
+        _write_reflowed(detail_path, render_family_detail(family, group, resolutions=resolutions))
         written.append(detail_path)
 
     if manual:
         mr_path = details_dir / "manual_review.md"
-        _write_reflowed(mr_path, render_manual_review_file(manual))
+        _write_reflowed(mr_path, render_manual_review_file(manual, resolutions=resolutions))
         written.append(mr_path)
 
     return written
