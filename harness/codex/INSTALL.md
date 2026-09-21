@@ -102,7 +102,8 @@ override the proposed tiers at a stdin checkpoint.
 Start a Codex session (or `codex exec`) and invoke the orchestrator skill
 (`security-project` or `security-changes`). The skill runs recon → wave planning →
 external-process fan-out (one `codex exec -m <tier>` per slice, ≤6 concurrent) →
-dedupe, writing artifacts under the review root you choose. Recon and each worker run
+dedupe, writing artifacts (`REPORT.md`, `findings.json`, `waves/`, …) under the review
+root you choose. Recon and each worker run
 as independent `codex exec` processes that **read and follow** the bundled
 `$FR_SECURITY_CORE_ROOT/agents/<role>.md` file — Codex has no named agents, so role prose is
 delivered as a file, not a `--agent` handle.

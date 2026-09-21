@@ -13,6 +13,13 @@ Usage:
     # Legacy v2 layout — supported via fallback regex
     dedupe_findings.py --input-glob "SECURITY_REVIEW_RESULTS_*.md" \
                        --output SECURITY_REVIEW_RESULTS.md
+
+Besides REPORT.md (+ per-family detail files), every run also writes
+<review_root>/findings.json — the schema_version-gated public inter-plugin
+contract listing every constituent finding across all three worker verdicts
+(confirmed / needs_validation / hardening); see dedupe/export.py. --verdicts-in
+folds externally-produced verdicts back in, validated against a prior run's
+findings.json by content hash.
 """
 
 from __future__ import annotations

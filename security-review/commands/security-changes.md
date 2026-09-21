@@ -597,7 +597,7 @@ If the orchestrator was launched with `--no-adversarial` — **skip this step** 
 
 #### 12.5.1. Launching the refute wave
 
-Read the `<REVIEW_ROOT>/REPORT.md` index table. Split rows into batches of ≤20 findings (first 20 → batch_index=0, etc.).
+Read the `<REVIEW_ROOT>/REPORT.md` index table (`## Findings by category` — `confirmed` findings only). Split rows into batches of ≤20 findings (first 20 → batch_index=0, etc.). Never draw rows from the `## Needs validation` / `## Hardening notes` sections at the end of the file — those two verdicts are not refuted: refute looks for blocking code in the repo, and `needs_validation` is by definition blocked on a fact outside it, so there is nothing in-repo left to refute.
 
 For each batch — sequential Task call (parallelism is **forbidden** — the refute agent writes to a single file `<REVIEW_ROOT>/refute.md` in Append mode):
 

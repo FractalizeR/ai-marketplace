@@ -14,10 +14,10 @@ All commands are run from the repo root unless stated otherwise.
 
 ### Tests
 
-The plugin's Python pipeline is covered by a stdlib-only `unittest` suite (~1219 tests, no third-party deps, no `pytest.ini`).
+The plugin's Python pipeline is covered by a stdlib-only `unittest` suite (~1372 tests, no third-party deps, no `pytest.ini`).
 
 ```bash
-# Full engine suite (~1219 tests, ~50 seconds)
+# Full engine suite (~1372 tests, ~50 seconds)
 python3 -m unittest discover -s security-review/bin/tests
 
 # Build tooling suite (fast; multi-environment build, see below)
@@ -46,8 +46,8 @@ below is run manually after any substantive change before committing.
 python3 build/build.py --harness=claude   --mode=check   # byte-identity anti-drift (exit 0)
 python3 build/build.py --harness=opencode --mode=check   # OpenCode structural gates
 python3 build/build.py --harness=codex    --mode=check   # Codex structural gates
-python3 -m unittest discover -s build/tests              # build tooling suite (~241, fast)
-python3 -m unittest discover -s security-review/bin/tests # engine suite (~1219, ~50s)
+python3 -m unittest discover -s build/tests              # build tooling suite (~251, fast)
+python3 -m unittest discover -s security-review/bin/tests # engine suite (~1372, ~50s)
 claude plugin validate .                                 # marketplace metadata
 ```
 
@@ -106,7 +106,7 @@ renderer landed in Phase 2B-core (below); the Codex renderer is still a stub
   `build/ADR-0001-artifacts-are-prompts.md` for why prose, not only tokens, is the
   rewrite surface.
 - Tests: `python3 -m unittest discover -s build/tests`. The `.githooks/pre-commit`
-  hook runs `build --mode=check` + the build suite (fast); the ~1219 engine suite
+  hook runs `build --mode=check` + the build suite (fast); the ~1372 engine suite
   stays manual (no CI — see "No CI — validation is local").
 
 ### Multi-environment build (Phase 2B-core: OpenCode derivation)
@@ -335,7 +335,7 @@ Per slash command run, the orchestrator (`commands/*.md` prompt) executes four s
 
 3. **Workers** — the orchestrator launches `Task(subagent_type="security", model=<from plan>, ...)` in batches of ≤6 parallel calls. Each worker reads the slice's `target_files`, applies its checklist chain (see resolver below), and `Write`s findings to `<review_root>/waves/<slice_id>.md`. The model argument is the **balanced profile**: opus for trust-boundary waves (W1/W2/W6), sonnet for mechanical data-flow waves (W3/W4/W5/W∞). `--all-opus` forces opus everywhere (legacy).
 
-4. **Dedupe + optional refute** — `bin/dedupe_findings.py` (package: `bin/dedupe/`) parses all `waves/*.md`, deduplicates by `sink_hash` (computed deterministically from the worker's normalized `sink_snippet`), and writes a split report: `<review_root>/REPORT.md` (executive summary + index) + `<review_root>/REPORT/<root_cause_family>.md` (per-family detail). State for cross-run "New / Recurring / Closed" is kept in `<review_root>/.findings_state.json`. The optional adversarial refute pass calls `security-refute` sequentially (parallelism forbidden — single `refute.md` writer) on batches of ≤20 findings; results are folded back via a second `dedupe_findings.py --refute=<path>` invocation. When recon recorded a `console_gap` (see the `environment` block), `dedupe_findings.py` leads REPORT.md with a `## Coverage Gaps` section so reduced coverage is surfaced, not buried.
+4. **Dedupe + optional refute** — `bin/dedupe_findings.py` (package: `bin/dedupe/`) parses all `waves/*.md` (each worker verdict is `confirmed` / `needs_validation` / `hardening`), deduplicates `confirmed` findings by `sink_hash` (computed deterministically from the worker's normalized `sink_snippet`), and writes a split report: `<review_root>/REPORT.md` (executive summary + index, plus `## Needs validation` / `## Hardening notes` sections for bucket records unmatched to any `confirmed` finding) + `<review_root>/REPORT/<root_cause_family>.md` (per-family detail) + `<review_root>/findings.json` (the public inter-plugin contract, `schema_version`-gated, listing every constituent finding across all three verdicts — see `bin/dedupe/export.py`). State for cross-run "New / Recurring / Closed" plus remembered refute/`--verdicts-in` verdicts is kept in `<review_root>/.findings_state.json`. The optional adversarial refute pass calls `security-refute` sequentially (parallelism forbidden — single `refute.md` writer) on batches of ≤20 `confirmed` findings — `needs_validation` and `hardening` are never refuted, since refute looks for blocking code and `needs_validation` is by definition blocked on a fact outside the repo; results are folded back via a second `dedupe_findings.py --refute=<path>` invocation, or via `--verdicts-in=<path>` for externally-produced verdicts (e.g. a ticket-triage plugin). When recon recorded a `console_gap` (see the `environment` block), `dedupe_findings.py` leads REPORT.md with a `## Coverage Gaps` section so reduced coverage is surfaced, not buried.
 
 ### Five-layer checklist resolver
 
@@ -375,7 +375,7 @@ Adding a new layer file: drop it under the right directory, ensure its anchor ma
 
 - **Russian for human-facing conversation, English for code, prompts, and docs.** All in-tree content (README, CHANGELOG, plugin prompts, checklists, tests) is English — match that style when editing.
 - **stdlib only in Python.** No `requirements.txt`, no `pip install`. Don't introduce third-party deps in `bin/` without an explicit ask.
-- **Idempotency in recon and dedup.** Both `recon_inventory.py` and `dedupe_findings.py` overwrite their outputs on every run. Tests rely on this. Don't add append-only side effects.
+- **Idempotency in recon and dedup.** Both `recon_inventory.py` and `dedupe_findings.py` overwrite every run's outputs (`CONTEXT.md`, `REPORT.md`, `REPORT/*.md`, `findings.json`) wholesale each run. Tests rely on this. Don't add append-only side effects. The one deliberate exception is the verdict journal (`resolutions`) inside `<review_root>/.findings_state.json`: `bin/dedupe/state.save_state` merges it read-modify-write, keyed by `sink_hash`, so a resolution from a past run survives a later run that doesn't touch that hash — see `state.py`'s module docstring.
 - **Worker output is the contract.** Workers communicate solely through `<review_root>/waves/<slice_id>.md`; the orchestrator has a safety-net that extracts findings from a worker's response message if the file is missing, but tests assume the file path. When changing worker output format, update `bin/dedupe/parser.py` and the agent prompt together.
 - **No commits of review artifacts.** `<review_root>/.gitignore` is written with content `*` to ignore everything inside, including itself. The plugin does not modify the project-level `.gitignore`; if it detects that review artifacts are already tracked by git (a stale `git add -f`, or a run predating the local `.gitignore`), it prints a warning with the exact command to fix it — the user applies it, the plugin does not.
 - **Public repo — synthetic examples only.** This repository is public. No example, fixture, test comment, or checklist illustration may describe a real vulnerability in a real system, whether still live or already fixed ("already fixed" is unprovable and impermanent; the repo is forever). Label examples as synthetic and use placeholder identifiers — the convention `agents/security.md` already follows. Likewise, no internal service, queue, host, or symbol names. `scripts/leakcheck.sh` enforces the identifier half; the synthetic-example half is a review obligation.

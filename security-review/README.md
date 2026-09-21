@@ -28,7 +28,7 @@ Artifacts are written to `security-review-<label>/` in the current working direc
 1. **Recon.** A recipe (Symfony / Laravel / generic PHP) collects a structured inventory of the project without an LLM: routes, middleware, controllers, data models, voters, form classes, listeners, messenger handlers, etc. The result is `<review_root>/CONTEXT.md` (schema v2 with frontmatter and closed shape specs).
 2. **Plan waves.** `plan_waves.py` slices the inventory into thematic waves (auth+disclosure, injection+data-access, output-render, serialization+crypto, ssrf+fileops, fintech, exploratory) and assigns each one its own set of checklists and target files.
 3. **Workers.** Parallel workers, 6 per batch, balanced-profile models: opus for analysis of trust boundaries (W1/W2/W6), sonnet for mechanical data-flow (W3/W4/W5/W∞).
-4. **Dedupe.** `dedupe_findings.py` stitches per-wave findings into a split report: `REPORT.md` (executive summary + index) + `REPORT/<root_cause_family>.md` (details).
+4. **Dedupe.** `dedupe_findings.py` stitches per-wave findings into a split report: `REPORT.md` (executive summary + index) + `REPORT/<root_cause_family>.md` (details) + `findings.json` (schema-versioned, machine-readable — every finding across all three worker verdicts). Workers report three verdicts, not just exploitable vulnerabilities: `confirmed` (the classic severity/confidence-gated finding), `needs_validation` (a traced path blocked on a fact outside the repo), and `hardening` (a traced observation with no affected principal or resource) — the latter two render as `## Needs validation` / `## Hardening notes` in `REPORT.md`.
 
 ### ⚠️ Token consumption
 
@@ -131,7 +131,7 @@ What `--project-root` affects:
 - **Workers** receive `project_root` and resolve `target_files` against it (without the flag, they would read relative to cwd and miss files in monorepos).
 - **`/security-changes`** runs `git -C "<PROJECT_ROOT>"` for all git operations.
 
-`--review-root=<out-dir>` is **independent** — it specifies where the review writes its output (`CONTEXT.md`, `waves/`, `REPORT.md`). It does NOT specify what to scan. The orchestrator rejects `--review-root=src` (and other source-tree-looking names) with a clear error, since pointing it at your source tree would clobber `src/.gitignore`.
+`--review-root=<out-dir>` is **independent** — it specifies where the review writes its output (`CONTEXT.md`, `waves/`, `REPORT.md`, `findings.json`). It does NOT specify what to scan. The orchestrator rejects `--review-root=src` (and other source-tree-looking names) with a clear error, since pointing it at your source tree would clobber `src/.gitignore`.
 
 ## Project-specific exclusions
 
@@ -170,6 +170,7 @@ Without `--label`, commands perform self-introspection and pick a label from the
 Current major version is 4.x. Full changelog — in [CHANGELOG.md](CHANGELOG.md).
 
 - `schema_version: 2` for `<review_root>/CONTEXT.md`. Old v1 artifacts (`<project_root>/SECURITY_CONTEXT.md`) are not read — slash commands detect them and emit a warning.
+- `schema_version: 1` for `<review_root>/findings.json`, the public inter-plugin contract. Wave files carry their own `<!-- wave_format: 2 -->` marker; older wave files without it still parse under the legacy rules.
 - Multi-stack monorepos — out of scope. One primary stack per project.
 
 ## Principles

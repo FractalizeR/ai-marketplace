@@ -501,7 +501,7 @@ For **each** Task worker return:
    <short message from worker response or fail reason>
    ```
 4. Print a one-line status to the user:
-   - `✓ <slice_id>: saved <N> findings (Critical: x, High: y, Medium: z)` — found
+   - `✓ <slice_id>: saved <N> findings (Critical: x, High: y, Medium: z; needs_validation: p, hardening: q)` — found
    - `✓ <slice_id>: clean (0 findings)` — checked, clean
    - `⚠ <slice_id>: worker returned no file, recovered from response` — safety net fired
    - `✗ <slice_id>: failed — <reason>` — could not get a meaningful result
@@ -569,7 +569,7 @@ If the orchestrator was launched with `--no-adversarial` — **skip this step** 
 
 #### 11.5.1. Launching the refute wave
 
-Read the `<REVIEW_ROOT>/REPORT.md` index table. Split rows into batches of ≤20 findings (first 20 → batch_index=0, next 20 → batch_index=1, etc.).
+Read the `<REVIEW_ROOT>/REPORT.md` index table (`## Findings by category` — `confirmed` findings only). Split rows into batches of ≤20 findings (first 20 → batch_index=0, next 20 → batch_index=1, etc.). Never draw rows from the `## Needs validation` / `## Hardening notes` sections at the end of the file — those two verdicts are not refuted: refute looks for blocking code in the repo, and `needs_validation` is by definition blocked on a fact outside it, so there is nothing in-repo left to refute.
 
 For each batch — sequential Task call (parallelism is **forbidden** — the refute agent writes to a single file `<REVIEW_ROOT>/refute.md` in Append mode):
 

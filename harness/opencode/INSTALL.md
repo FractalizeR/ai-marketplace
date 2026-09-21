@@ -117,7 +117,8 @@ opencode run --command security-project "--project-root=. --review-root=security
 
 The orchestrator runs recon → wave planning → external-process fan-out (one
 `opencode run --agent security -m <tier>` per slice, ≤6 concurrent) → dedupe,
-writing artifacts under `security-review-opencode/`.
+writing artifacts (`REPORT.md`, `findings.json`, `waves/`, …) under
+`security-review-opencode/`.
 
 ## Permissions & residual risk
 

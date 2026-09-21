@@ -4,6 +4,24 @@ All notable changes to this plugin will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.3.0] — 2026-09-21
+
+### Verdict buckets, `findings.json`, cross-run memory
+
+Workers no longer report only exploitable vulnerabilities. Each wave file now carries three verdicts — `confirmed` (the existing severity/confidence-gated finding), `needs_validation` (a traced path blocked on a fact outside the repo, e.g. "is this endpoint actually internet-facing"), and `hardening` (a traced observation with no affected principal or resource). Neither bucket carries severity or confidence; recall-first philosophy is unchanged. A `<!-- wave_format: 2 -->` marker as the first non-empty line of a wave file signals the new format; older wave files without it still parse under the legacy rules.
+
+#### Added
+
+- **`needs_validation` / `hardening` verdicts** in the worker contract (`agents/security.md`) and the wave-file parser (`bin/dedupe/parser.py`). Bucket records that share a `sink_hash` with a `confirmed` finding render as an annotation on it; unmatched records render in their own `## Needs validation` / `## Hardening notes` sections, index-`REPORT.md`-only.
+- **`<review_root>/findings.json`** — a `schema_version`-gated public inter-plugin contract (`bin/dedupe/export.py`) listing every constituent finding across all three verdicts, including findings absorbed into a `MergedFinding.merged_from` group. No field varies run-to-run for unchanged inputs.
+- **Cross-run verdict memory.** `<review_root>/.findings_state.json` moves to schema 2: alongside the existing New/Recurring/Closed snapshot, it now persists a `sink_hash → Resolution` map (adversarial-refute and `--verdicts-in` verdicts) as a read-modify-write merge, so a previously rejected finding is annotated "Previously rejected" instead of re-litigated on every run (a `reaffirmed` resolution cancels a prior rejection for the same `sink_hash` and renders nothing). The mark is invalidated by re-hashing the cited evidence location's normalized content, not its path — if the referenced protection code changes, the mark silently drops.
+- **`dedupe_findings.py --verdicts-in=<path>`** — folds externally-produced verdicts (e.g. from a ticket-triage plugin) into remembered resolutions. Fail-closed: validated by content hash against the review root's pre-existing `findings.json`; any schema violation, unknown field, unknown `sink_hash`, duplicate, or stale hash aborts the whole run before any output is written. Requires cross-run state (incompatible with `--no-state`).
+- Adversarial refute only ever considers `confirmed` findings — `needs_validation` and `hardening` are excluded from the refute slice the orchestrators build, since refute looks for blocking code in the repo and `needs_validation` is, by definition, blocked on a fact outside it.
+
+#### Fixed
+
+- **`bin/dedupe/parser.py` snippet truncation on `# TODO`.** `_extract_snippet_block` stopped a block scalar early on any line matching `^#+\s`, so a `sink_snippet` containing a `# TODO` PHP comment at column 0 was silently truncated — and `sink_hash`, computed from the truncated snippet, diverged from the same finding reported without the comment. Fixed; regression-tested.
+
 ## [4.2.0] — 2026-07-03
 
 ### Multi-environment support
