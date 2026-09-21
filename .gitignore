@@ -10,3 +10,6 @@ __pycache__/
 
 # Multi-environment build output (regenerable from authoritative Claude prose).
 /dist/
+
+# Real internal-identifier patterns for scripts/leakcheck.sh (see .leakcheck.example).
+/.leakcheck.local

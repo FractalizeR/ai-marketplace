@@ -1,0 +1,21 @@
+# leakcheck local pattern file — form only, no real identifiers here.
+#
+# This repository is public (see CLAUDE.md "Public repo — synthetic
+# examples only"). scripts/leakcheck.sh greps the tracked tree for internal
+# identifiers so they don't leak into a commit. Its pattern list must NOT be
+# committed — a denylist of real internal names in a public repo would be
+# the leak it exists to prevent — so it lives in .leakcheck.local instead,
+# which is gitignored.
+#
+# To enable the check locally:
+#   1. cp .leakcheck.example .leakcheck.local
+#   2. Replace the examples below with your own real internal identifiers:
+#      internal service/host/queue names, codenames, internal domains, etc.
+#
+# Format: one extended-regex pattern per line, matched case-insensitively.
+# Blank lines and lines starting with # are ignored.
+#
+# Examples below are synthetic placeholders — delete them and use your own:
+# acme-internal-billing-svc
+# widget-queue
+# [a-z0-9-]+\.acme-corp\.internal

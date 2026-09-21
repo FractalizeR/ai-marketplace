@@ -32,3 +32,8 @@ echo "Running build test suite..."
 python3 -m unittest discover -s build/tests
 
 echo "Build gate passed."
+
+echo "Running internal-identifier leak check..."
+scripts/leakcheck.sh --staged
+
+echo "Leak check passed."

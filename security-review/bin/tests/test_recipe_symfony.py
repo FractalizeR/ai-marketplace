@@ -1092,7 +1092,7 @@ class TripleReviewRegressions(unittest.TestCase):
         # method-level #[AsEventListener] (no class-level attribute, no
         # EventSubscriberInterface) used to classify as None, so recon under-
         # counted listeners and the recon sanity-check aborted the whole audit
-        # (creditcore: RequestIdListener / Vich upload listeners).
+        # (seen live: a request-id listener and Vich upload listeners).
         from recon.recipes.symfony import _classify_kind
         AsEL = "Symfony\\Component\\EventDispatcher\\Attribute\\AsEventListener"
         # The `class` kind output carries no full `methods`; the extractor

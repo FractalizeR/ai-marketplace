@@ -243,7 +243,7 @@ class ClassMetadata(unittest.TestCase):
         # handler method, not the class. The `class` kind drops full `methods`,
         # so the extractor surfaces method-level attribute FQNs as the flat
         # `method_attributes` set — otherwise the recipe under-counts listeners
-        # and the recon sanity-check aborts the audit. (creditcore regression)
+        # and the recon sanity-check aborts the audit. (regression from a live audit)
         with tempfile.TemporaryDirectory() as td:
             f = Path(td) / "RequestIdListener.php"
             f.write_text(textwrap.dedent("""\

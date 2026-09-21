@@ -32,13 +32,14 @@ install-launchers: ## Install the `frsr` launcher into BINDIR (default ~/.local/
 		*) echo "WARNING: $(BINDIR) is not on PATH — add it to your shell rc" ;; esac
 	@echo "Try: frsr project --harness opencode --dry-run"
 
-check: ## Full local validation gate (3-harness anti-drift + build + engine + plugin validate)
+check: ## Full local validation gate (3-harness anti-drift + build + engine + plugin validate + leak check)
 	python3 build/build.py --harness=claude   --mode=check
 	python3 build/build.py --harness=opencode --mode=check
 	python3 build/build.py --harness=codex    --mode=check
 	python3 -m unittest discover -s build/tests
 	python3 -m unittest discover -s security-review/bin/tests
 	claude plugin validate .
+	scripts/leakcheck.sh --all
 
 test-build: ## Run the build-tooling test suite (fast)
 	python3 -m unittest discover -s build/tests
