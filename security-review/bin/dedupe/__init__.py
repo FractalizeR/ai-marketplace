@@ -9,6 +9,7 @@ _group_by_family) are accessible via direct submodule imports
 """
 
 from .models import (
+    CONDITION_KEYS,
     FLAG_CONFIDENCE_DISAGREEMENT,
     FLAG_CONFLICTING_SEVERITY,
     FLAG_CROSS_SINK_MERGE,
@@ -17,18 +18,24 @@ from .models import (
     FLAG_MERGED_DESPITE_HASH_MISMATCH,
     FLAG_MERGED_WITHOUT_SYMBOL,
     FLAG_NO_FILE,
+    FLAG_NV_INCOMPLETE,
     FLAG_PARSE_FAILED,
     FLAG_REFUTE_CLAIMED,
+    FLAG_VERDICT_HAS_SEVERITY,
     KNOWN_ROOT_CAUSE_FAMILIES,
     KNOWN_SINK_KINDS,
     SEVERITY_BY_RANK,
     SEVERITY_RANK,
     SINK_KIND_TO_FAMILY,
     Finding,
+    HardeningNote,
     MergedFinding,
+    NeedsValidation,
+    ParsedWave,
+    SideRecords,
 )
-from .parser import parse_findings_file
-from .pipeline import dedupe
+from .parser import WaveFormatError, parse_findings_file, parse_wave
+from .pipeline import attach_side_records, dedupe
 from .refute import (
     RefuteInvalid,
     RefuteRecord,
@@ -51,6 +58,11 @@ __all__ = [
     # Models & constants
     "Finding",
     "MergedFinding",
+    "NeedsValidation",
+    "HardeningNote",
+    "ParsedWave",
+    "SideRecords",
+    "CONDITION_KEYS",
     "SEVERITY_RANK",
     "SEVERITY_BY_RANK",
     "SINK_KIND_TO_FAMILY",
@@ -66,10 +78,15 @@ __all__ = [
     "FLAG_CONFLICTING_SEVERITY",
     "FLAG_CONFIDENCE_DISAGREEMENT",
     "FLAG_REFUTE_CLAIMED",
+    "FLAG_VERDICT_HAS_SEVERITY",
+    "FLAG_NV_INCOMPLETE",
     # Parser
     "parse_findings_file",
+    "parse_wave",
+    "WaveFormatError",
     # Pipeline
     "dedupe",
+    "attach_side_records",
     # Refute
     "RefuteRecord",
     "RefuteInvalid",

@@ -22,7 +22,10 @@ from .models import (
     FLAG_PARSE_FAILED,
     SEVERITY_RANK,
     Finding,
+    HardeningNote,
     MergedFinding,
+    NeedsValidation,
+    SideRecords,
 )
 
 
@@ -57,12 +60,19 @@ KNOWN_OTHER_KINDS: dict[str, tuple[str, str]] = {
 }
 
 
-def _normalize_known_other_kinds(findings: list[Finding]) -> None:
+def _normalize_known_other_kinds(findings: list[Finding | NeedsValidation | HardeningNote]) -> None:
     """Rewrite `other:*` kinds with canonical (kind, family) pairs in-place.
 
     Enables custom kinds that recur across projects to drop the CUSTOM_SINK
     flag, merge with regular findings, and land in per-family detail files
     instead of manual_review.md.
+
+    Duck-typed over `sink_kind`/`root_cause_family` only, so `dedupe()`'s
+    pre-pass (Finding) and `attach_side_records`' pre-pass (NeedsValidation /
+    HardeningNote) are the SAME pass, not a copy -- P2.2 decision (03-verdict
+    -buckets.md): a bucket record's `other:*` sink_kind must canonicalize
+    identically to a Finding's, or the two would disagree on the sink_kind
+    half of dedup identity for no reason.
     """
     for f in findings:
         canonical = KNOWN_OTHER_KINDS.get(f.sink_kind)
@@ -412,3 +422,92 @@ def dedupe(findings: list[Finding]) -> tuple[list[MergedFinding], list[MergedFin
         ),
     )
     return main_findings, manual_review
+
+
+# ---------------------------------------------------------------------------
+# Verdict-bucket attachment (Stage 2 / P2.2).
+#
+# `dedupe()` above is NOT touched and NOT called from here. E6 probe
+# (memory/cloudflare-borrow-plan/E6-pipeline-probe.md) showed empirically
+# that `dedupe()` reads twelve members off a record, including `severity`,
+# `confidence` and `raw_body` -- none of which `NeedsValidation` /
+# `HardeningNote` have, by construction (Stage-2 decision: buckets carry no
+# severity). So bucket records never enter `dedupe()`'s merge; they attach
+# to its *output* as an annotation instead.
+# ---------------------------------------------------------------------------
+
+
+def attach_side_records(
+    merged: list[MergedFinding],
+    needs_validation: list[NeedsValidation],
+    hardening: list[HardeningNote],
+) -> SideRecords:
+    """Bind `needs_validation` / `hardening` bucket records to the confirmed
+    findings `dedupe()` already merged, by `sink_hash`.
+
+    A record whose `sink_hash` equals the `sink_hash` of the MergedFinding's
+    `primary` OR any of its `merged_from` (Pass 2/3 of `dedupe()` can absorb
+    findings with a different sink_hash than the winner -- `merged_from` is
+    still the same real sink, just a losing snippet variant) becomes an
+    ANNOTATION on that MergedFinding (appended to its own `.needs_validation`
+    / `.hardening` list) rather than a competing report entry -- e.g.
+    `confirmed` in W1 + `needs_validation` in W3 on the same sink collapses to
+    one finding with a note, not two report rows, even when W3's snippet
+    happened to lose the Pass-2/3 primary-selection coin toss. There is no
+    ranking by verdict: this function never reads `severity`/`confidence`/
+    `raw_body`/`is_custom_sink`/`is_unknown_symbol` off a bucket record
+    (asserted by `AttachSideRecordsSpyTests` in `test_dedupe_findings.py` --
+    the E6 probe's isolation finding, now a regression test); the
+    `merged_from` traversal below reads only `Finding.sink_hash`, never a
+    bucket record's. `MergedFinding` itself has no `sink_hash` of its own
+    (E6 probe: `AttributeError`) -- that's why this indexes over its
+    `Finding` members instead.
+
+    A `nohash00` sink_hash (empty snippet) never participates in matching on
+    either side -- it is a sentinel, not a real hash, so treating it as one
+    would let two unrelated empty-snippet records from different files
+    "collide" in matches. If two distinct MergedFindings happen to share one
+    real sink_hash (identical snippet, different file/symbol -- 32-bit
+    truncated hash, so possible though rare), a record attaches to whichever
+    MergedFinding was indexed first; this is a documented simplification, not
+    exercised by production data so far.
+
+    Records not matched are returned unattached, for the report's own
+    standalone `## Needs validation` / `## Hardening notes` sections (P2.3).
+
+    `other:*` sink_kind canonicalization (`_normalize_known_other_kinds`)
+    runs over both bucket lists in place, the same pre-pass `dedupe()` runs
+    over `findings` -- so a bucket record's `sink_kind` is canonical before
+    it is ever rendered, same as a Finding's.
+    """
+    _normalize_known_other_kinds(needs_validation)
+    _normalize_known_other_kinds(hardening)
+
+    by_hash: dict[str, MergedFinding] = {}
+    for mf in merged:
+        for f in [mf.primary] + mf.merged_from:
+            h = f.sink_hash
+            if h != "nohash00":
+                by_hash.setdefault(h, mf)
+
+    result = SideRecords()
+
+    for nv in needs_validation:
+        h = nv.sink_hash
+        target = by_hash.get(h) if h != "nohash00" else None
+        if target is not None:
+            target.needs_validation.append(nv)
+            result.matched.append((h, target))
+        else:
+            result.unmatched_needs_validation.append(nv)
+
+    for hn in hardening:
+        h = hn.sink_hash
+        target = by_hash.get(h) if h != "nohash00" else None
+        if target is not None:
+            target.hardening.append(hn)
+            result.matched.append((h, target))
+        else:
+            result.unmatched_hardening.append(hn)
+
+    return result

@@ -279,6 +279,12 @@ class MergedFinding:
     refute_confidence: int = 0
     refute_file: str = ""
     refute_line: int = 0
+    # Verdict-bucket annotations (Stage 2 / P2.2), filled by
+    # `pipeline.attach_side_records` after `dedupe()` has already run.
+    # Optional with a mutable-safe default so the two `MergedFinding(primary=f)`
+    # call sites in pipeline.py (and any future one) keep working unchanged.
+    needs_validation: list[NeedsValidation] = field(default_factory=list)
+    hardening: list[HardeningNote] = field(default_factory=list)
 
     @property
     def severity(self) -> str:
@@ -380,3 +386,21 @@ class ParsedWave:
     findings: list[Finding] = field(default_factory=list)
     needs_validation: list[NeedsValidation] = field(default_factory=list)
     hardening: list[HardeningNote] = field(default_factory=list)
+
+
+@dataclass
+class SideRecords:
+    """Return type of `pipeline.attach_side_records` (P2.2).
+
+    A matched needs_validation/hardening record is attached IN PLACE to its
+    MergedFinding (`MergedFinding.needs_validation` / `.hardening`) -- that
+    is the annotation itself, not something a caller reads back from here.
+    `matched` is a diagnostic (sink_hash, target) index for tests/tooling,
+    not required by the renderer. Records with no matching sink_hash are
+    collected in the `unmatched_*` lists for their own standalone report
+    sections (P2.3): `## Needs validation` / `## Hardening notes`.
+    """
+
+    matched: list[tuple[str, MergedFinding]] = field(default_factory=list)
+    unmatched_needs_validation: list[NeedsValidation] = field(default_factory=list)
+    unmatched_hardening: list[HardeningNote] = field(default_factory=list)

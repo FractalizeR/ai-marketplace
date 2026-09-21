@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import dedupe as df  # noqa: E402
 import dedupe_findings as dff  # noqa: E402
+from dedupe import pipeline  # noqa: E402
 from dedupe.parser import _parse_finding_block  # noqa: E402
 from dedupe.pipeline import _normalize_symbol  # noqa: E402
 from dedupe.renderer import _family_slug, _group_by_family  # noqa: E402
@@ -1164,6 +1165,256 @@ class DedupeTests(unittest.TestCase):
         merged, manual = df.dedupe([f1, f2])
         self.assertEqual(len(merged), 1)
         self.assertCountEqual(merged[0].slice_ids, ["W2_UserRepo", "W2_ProductRepo"])
+
+
+class AttachSideRecordsTests(unittest.TestCase):
+    """P2.2: `attach_side_records` binds NeedsValidation/HardeningNote bucket
+    records (P2.1) to the MergedFindings `dedupe()` already produced, by
+    sink_hash -- without ever calling or altering `dedupe()` itself (see the
+    E6 probe: `memory/cloudflare-borrow-plan/E6-pipeline-probe.md`)."""
+
+    def _confirmed(self, snippet="$q = $em->createQuery($s);", **kw):
+        base = dict(
+            title_line="h", sink_file="src/Repo.php", sink_line=42,
+            sink_kind="dql_concat", root_cause_family="injection",
+            enclosing_symbol="Repo::find", sink_snippet=snippet,
+            severity="High", confidence=9,
+        )
+        base.update(kw)
+        return df.Finding(**base)
+
+    def test_matching_sink_hash_attaches_as_annotation_not_new_row(self):
+        """The plan's pinned case: `confirmed` in one wave, `needs_validation`
+        for the SAME sink in another -- must become a note on the finding,
+        not a second report entry."""
+        snippet = "$q = $em->createQuery($s);"
+        merged, manual = df.dedupe([self._confirmed(snippet, slice_id="W1")])
+        nv = df.NeedsValidation(
+            sink_file="src/Repo.php", sink_line=42, sink_kind="dql_concat",
+            root_cause_family="injection", enclosing_symbol="Repo::find",
+            sink_snippet=snippet, slice_id="W3",
+        )
+
+        result = pipeline.attach_side_records(merged, [nv], [])
+
+        self.assertEqual(len(merged), 1, "attach_side_records must not add/remove report rows")
+        self.assertEqual(merged[0].needs_validation, [nv])
+        self.assertEqual(result.unmatched_needs_validation, [])
+        self.assertEqual(result.matched, [(nv.sink_hash, merged[0])])
+
+    def test_matching_hardening_attaches_to_finding(self):
+        snippet = "$q = $em->createQuery($s);"
+        merged, manual = df.dedupe([self._confirmed(snippet)])
+        hn = df.HardeningNote(
+            sink_file="src/Repo.php", sink_line=42, sink_kind="dql_concat",
+            root_cause_family="injection", enclosing_symbol="Repo::find",
+            sink_snippet=snippet, text="Consider parameter binding anyway.",
+        )
+
+        result = pipeline.attach_side_records(merged, [], [hn])
+
+        self.assertEqual(merged[0].hardening, [hn])
+        self.assertEqual(result.unmatched_hardening, [])
+
+    def test_matches_a_losing_snippet_absorbed_into_merged_from(self):
+        """[MERGED_DESPITE_HASH_MISMATCH] (Pass 2) can absorb a finding with
+        a DIFFERENT sink_hash than the winning `primary` into `merged_from`.
+        A bucket record whose sink_hash matches the LOSER's snippet must
+        still attach -- it's the same real sink, just not the primary's
+        exact wording."""
+        f_low = self._confirmed("$q = $em->createQuery($a);", confidence=8, raw_body="short")
+        f_high = self._confirmed(
+            "$q = $em->createQuery($b);",  # different snippet -> different hash
+            confidence=10, raw_body="much longer body wins as primary",
+        )
+        merged, manual = df.dedupe([f_low, f_high])
+        self.assertEqual(len(merged), 1)
+        self.assertIn(df.FLAG_MERGED_DESPITE_HASH_MISMATCH, merged[0].flags)
+        self.assertEqual(merged[0].primary.sink_snippet, "$q = $em->createQuery($b);")
+        self.assertEqual(len(merged[0].merged_from), 1)
+        loser_hash = merged[0].merged_from[0].sink_hash
+        self.assertNotEqual(loser_hash, merged[0].primary.sink_hash)
+
+        nv = df.NeedsValidation(
+            sink_file="src/Repo.php", sink_line=42, sink_kind="dql_concat",
+            root_cause_family="injection", enclosing_symbol="Repo::find",
+            sink_snippet="$q = $em->createQuery($a);",  # matches the LOSER
+        )
+        self.assertEqual(nv.sink_hash, loser_hash)
+
+        result = pipeline.attach_side_records(merged, [nv], [])
+
+        self.assertEqual(merged[0].needs_validation, [nv])
+        self.assertEqual(result.unmatched_needs_validation, [])
+
+    def test_same_file_different_snippet_does_not_match(self):
+        """Regression pin: matching is by `sink_hash` (content), not
+        `sink_file`/`sink_line` -- a NeedsValidation at the SAME location but
+        a genuinely different sink_snippet must NOT attach to the finding."""
+        merged, manual = df.dedupe([self._confirmed("$q = $em->createQuery($s);")])
+        nv = df.NeedsValidation(
+            sink_file="src/Repo.php", sink_line=42, sink_kind="dql_concat",
+            root_cause_family="injection", enclosing_symbol="Repo::find",
+            sink_snippet="$q = $em->createQuery($totally_different_var);",
+        )
+        self.assertNotEqual(nv.sink_hash, merged[0].primary.sink_hash)
+
+        result = pipeline.attach_side_records(merged, [nv], [])
+
+        self.assertEqual(merged[0].needs_validation, [])
+        self.assertEqual(result.unmatched_needs_validation, [nv])
+
+    def test_non_matching_sink_hash_goes_to_unmatched(self):
+        merged, manual = df.dedupe([self._confirmed()])
+        nv = df.NeedsValidation(
+            sink_file="src/Other.php", sink_line=7, sink_kind="command_exec",
+            root_cause_family="injection", enclosing_symbol="Other::run",
+            sink_snippet="exec($cmd);",
+        )
+        hn = df.HardeningNote(
+            sink_file="src/Other.php", sink_line=8, sink_kind="weak_hash",
+            root_cause_family="crypto", enclosing_symbol="Other::hash",
+            sink_snippet="md5($x);",
+        )
+
+        result = pipeline.attach_side_records(merged, [nv], [hn])
+
+        self.assertEqual(merged[0].needs_validation, [])
+        self.assertEqual(merged[0].hardening, [])
+        self.assertEqual(result.unmatched_needs_validation, [nv])
+        self.assertEqual(result.unmatched_hardening, [hn])
+
+    def test_empty_snippet_nohash_never_matches(self):
+        """`nohash00` is a sentinel for an empty snippet, not a real hash --
+        two unrelated empty-snippet records must not spuriously 'match'."""
+        merged, manual = df.dedupe([self._confirmed(snippet="")])
+        self.assertEqual(merged[0].primary.sink_hash, "nohash00")
+        nv = df.NeedsValidation(
+            sink_file="src/Elsewhere.php", sink_line=1, sink_snippet="",
+        )
+        self.assertEqual(nv.sink_hash, "nohash00")
+
+        result = pipeline.attach_side_records(merged, [nv], [])
+
+        self.assertEqual(merged[0].needs_validation, [])
+        self.assertEqual(result.unmatched_needs_validation, [nv])
+
+    def test_other_kind_bucket_record_normalized_by_same_pre_pass(self):
+        """A bucket record's `other:*` sink_kind must canonicalize exactly
+        like a Finding's (same `_normalize_known_other_kinds` pre-pass),
+        or it would carry a different sink_kind than the finding it
+        annotates for no reason."""
+        nv = df.NeedsValidation(
+            sink_file="admin/UserCrud.php", sink_line=10,
+            sink_kind="other:tokens_visible_in_ui", root_cause_family="other:tokens_visible_in_ui",
+            sink_snippet="TextField::new('accessToken')",
+        )
+        pipeline.attach_side_records([], [nv], [])
+        self.assertEqual(nv.sink_kind, "sensitive_field_unmasked")
+        self.assertEqual(nv.root_cause_family, "disclosure")
+
+    def test_dedupe_signature_and_behavior_unchanged(self):
+        """Guard against P2.2 accidentally routing bucket records through
+        `dedupe()` -- its signature and return shape must stay exactly what
+        `bin/dedupe_findings.py` and `test_refute.py` call today."""
+        merged, manual = df.dedupe([self._confirmed()])
+        self.assertIsInstance(merged, list)
+        self.assertIsInstance(manual, list)
+        self.assertTrue(all(isinstance(m, df.MergedFinding) for m in merged))
+
+
+class AttachSideRecordsSpyTests(unittest.TestCase):
+    """Accept test for the P2.2 architectural constraint (E6 probe,
+    `memory/cloudflare-borrow-plan/E6-pipeline-probe.md`): a bucket record has
+    no `severity`/`confidence` by construction, so `attach_side_records` must
+    never read them off one. `NeedsValidation`/`HardeningNote` genuinely lack
+    these fields today, so a stray real access would already crash with
+    `AttributeError` -- but that is not durable proof against a future
+    refactor (e.g. routing bucket records through a shared Finding-like
+    helper). This test uses a donor-backed Spy, exactly like E6's own
+    `probe_pipeline.py`, so a stray access resolves silently instead of
+    crashing, and the assertion -- not luck -- is what catches it."""
+
+    def _spy_and_log(self, **field_overrides):
+        touched: set[str] = set()
+
+        class Donor:
+            def __init__(self):
+                self.sink_file = "src/Repo.php"
+                self.sink_line = 42
+                self.sink_kind = "dql_concat"
+                self.enclosing_symbol = "Repo::find"
+                self.sink_snippet = "$q = $em->createQuery($s);"
+                self.root_cause_family = "injection"
+                self.sink_hash = df.Finding(
+                    title_line="h", sink_snippet=self.sink_snippet,
+                ).sink_hash
+                # Fields a real NeedsValidation/HardeningNote does NOT have.
+                # If attach_side_records ever asks for these, this donor
+                # answers silently instead of raising -- the test must catch
+                # it via `touched`, not via an incidental crash.
+                self.severity = "High"
+                self.confidence = 9
+                self.raw_body = "* **Severity**: High\n"
+                self.is_custom_sink = False
+                self.is_unknown_symbol = False
+                for k, v in field_overrides.items():
+                    setattr(self, k, v)
+
+        class Spy:
+            def __init__(self, donor):
+                object.__setattr__(self, "_donor", donor)
+
+            def __getattr__(self, name):
+                touched.add(name)
+                return getattr(object.__getattribute__(self, "_donor"), name)
+
+            def __setattr__(self, name, value):
+                touched.add(f"{name}:WRITE")
+                setattr(object.__getattribute__(self, "_donor"), name, value)
+
+        return Spy(Donor()), touched
+
+    def test_never_reads_severity_confidence_or_raw_body_off_bucket_records(self):
+        merged, manual = df.dedupe([
+            df.Finding(
+                title_line="h", sink_file="src/Repo.php", sink_line=42,
+                sink_kind="dql_concat", root_cause_family="injection",
+                enclosing_symbol="Repo::find",
+                sink_snippet="$q = $em->createQuery($s);",
+            )
+        ])
+
+        nv_spy, nv_touched = self._spy_and_log()
+        hn_spy, hn_touched = self._spy_and_log()
+
+        pipeline.attach_side_records(merged, [nv_spy], [hn_spy])
+
+        for touched in (nv_touched, hn_touched):
+            self.assertNotIn("severity", touched)
+            self.assertNotIn("confidence", touched)
+            self.assertNotIn("raw_body", touched)
+            self.assertNotIn("is_custom_sink", touched)
+            self.assertNotIn("is_unknown_symbol", touched)
+
+    def test_other_kind_normalization_spy_reads_and_writes_are_location_only(self):
+        """E6 probe calls out `_normalize_known_other_kinds`'s in-place
+        mutation as the one branch that actually WRITES to a record (the
+        reason the new types are mutable, not frozen). On a bucket record it
+        must read/write only sink_kind/root_cause_family -- never touch
+        severity/confidence, and never write anything beyond that pair."""
+        nv_spy, touched = self._spy_and_log(
+            sink_kind="other:tokens_visible_in_ui",
+            root_cause_family="other:tokens_visible_in_ui",
+        )
+
+        pipeline.attach_side_records([], [nv_spy], [])
+
+        self.assertNotIn("severity", touched)
+        self.assertNotIn("confidence", touched)
+        self.assertNotIn("raw_body", touched)
+        writes = {t for t in touched if t.endswith(":WRITE")}
+        self.assertEqual(writes, {"sink_kind:WRITE", "root_cause_family:WRITE"})
 
 
 class EndToEndTests(unittest.TestCase):
