@@ -66,6 +66,75 @@ def _write_findings(content: str, filename: str) -> Path:
     return path
 
 
+WAVE_FORMAT_MARKER = "<!-- wave_format: 2 -->\n"
+
+
+def _mk_needs_validation_md(
+    n: int,
+    sink_file: str,
+    sink_line: int,
+    sink_kind: str,
+    root_cause_family: str,
+    enclosing_symbol: str,
+    sink_snippet: str,
+    *,
+    claimed_root_cause: str = "IP spoofing via X-Forwarded-For",
+    trace: str = "request -> RateLimiter::getClientKey -> $request->getClientIp()",
+    blockers: str = "actual `trusted_proxies` value in the prod proxy config",
+    validation_plan_local: str = "",
+    validation_plan_deployment: str = "check reverse proxy config for trusted_proxies",
+    condition_keys: str = "deployment_control_not_in_source",
+) -> str:
+    snippet_block = "\n".join("    " + ln for ln in sink_snippet.splitlines())
+    lines = [
+        f"# Needs validation {n}: [{sink_kind}]: `{sink_file}:{sink_line}`",
+        "",
+        f"* **sink_kind**: {sink_kind}",
+        f"* **root_cause_family**: {root_cause_family}",
+        f"* **enclosing_symbol**: {enclosing_symbol}",
+        "* **sink_snippet**: |",
+        snippet_block,
+        f"* **claimed_root_cause**: {claimed_root_cause}",
+        f"* **trace**: {trace}",
+        f"* **blockers**: {blockers}",
+    ]
+    if validation_plan_local:
+        lines.append(f"* **validation_plan_local**: {validation_plan_local}")
+    if validation_plan_deployment:
+        lines.append(f"* **validation_plan_deployment**: {validation_plan_deployment}")
+    if condition_keys:
+        lines.append(f"* **condition_keys**: {condition_keys}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _mk_hardening_md(
+    n: int,
+    sink_file: str,
+    sink_line: int,
+    sink_kind: str,
+    root_cause_family: str,
+    enclosing_symbol: str,
+    sink_snippet: str,
+    *,
+    text: str = "no rate limiting on this endpoint, but no principal/resource is affected",
+    condition_keys: str = "admin_only",
+) -> str:
+    snippet_block = "\n".join("    " + ln for ln in sink_snippet.splitlines())
+    return (
+        f"# Hardening {n}: [{sink_kind}]: `{sink_file}:{sink_line}`\n"
+        f"\n"
+        f"* **sink_kind**: {sink_kind}\n"
+        f"* **root_cause_family**: {root_cause_family}\n"
+        f"* **enclosing_symbol**: {enclosing_symbol}\n"
+        f"* **sink_snippet**: |\n"
+        f"{snippet_block}\n"
+        f"* **text**: {text}\n"
+        f"* **condition_keys**: {condition_keys}\n"
+        f"\n"
+    )
+
+
 class ParserTests(unittest.TestCase):
     def test_parses_single_finding(self):
         md = _mk_finding_md(
@@ -161,20 +230,71 @@ class ParserTests(unittest.TestCase):
                             f"snippet must produce stable hash, got nohash00 with snippet={f.sink_snippet!r}")
 
     def test_markdown_heading_in_snippet_still_breaks(self):
-        """Control: a real markdown heading (`#` + space) inside the snippet
-        breaks extraction -- this is intentional, otherwise one block would
-        consume its neighbor."""
+        """Control: a real markdown heading can only ever appear at column 0
+        (a genuine `# Vulnerability N` / `# Needs validation N` / `# Hardening
+        N` block header is never indented). A column-0 line inside a snippet's
+        YAML block scalar still stops extraction -- via the indent-drop rule
+        (`block_indent == 0` / `ind < block_indent`), not via matching `#` --
+        otherwise one block would consume its neighbor."""
         from dedupe.parser import _extract_snippet_block
         lines = [
             "* **sink_snippet**: |",
             "    valid line",
-            "    # H1 inside snippet",
+            "# Vulnerability 2: next finding header",
             "    after heading",
         ]
         snippet, _ = _extract_snippet_block(lines, 0, "|")
         self.assertIn("valid line", snippet)
         self.assertNotIn("after heading", snippet,
-                         "real `# H1` heading must stop snippet extraction")
+                         "a column-0 line must stop extraction regardless of its text")
+
+    def test_todo_comment_in_snippet_not_truncated(self):
+        """Regression: `_extract_snippet_block` used to stop on ANY indented
+        line starting with `#`+space (`re.match(r"^#+\\s", stripped)`),
+        including a `# TODO` PHP comment inside the snippet -- silently
+        truncating sink_snippet, which desyncs sink_hash from the finding's
+        real (untruncated) content. A real markdown heading can only appear
+        at column 0 (see the control test above), so there is no ambiguity
+        lost by not special-casing `#` at the indented level.
+
+        `# TODO` is placed on the MIDDLE line, not the first: a first-line
+        break would still leave a (wrong) hash rather than surfacing the
+        truncation as a content mismatch."""
+        from dedupe.parser import _extract_snippet_block
+        lines = [
+            "* **sink_snippet**: |",
+            "    $dql = 'SELECT u FROM u WHERE id = ' . $id;",
+            "    # TODO: parametrize this before the next release",
+            "    $result = $conn->query($dql);",
+            "* **Description**: test",
+        ]
+        snippet, _ = _extract_snippet_block(lines, 0, "|")
+        self.assertIn("# TODO", snippet)
+        self.assertIn(
+            "$result = $conn->query($dql);", snippet,
+            "line after the '# TODO' comment must survive -- the snippet "
+            "must not truncate at the comment",
+        )
+
+    def test_todo_comment_does_not_corrupt_sink_hash(self):
+        """End-to-end version of the regression above, through the full
+        finding parse + hash pipeline (not just the extraction helper)."""
+        snippet = (
+            "$dql = 'SELECT u FROM u WHERE id = ' . $id;\n"
+            "# TODO: parametrize this before the next release\n"
+            "$result = $conn->query($dql);"
+        )
+        md = _mk_finding_md(
+            1, "src/Repo.php", 42, "dql_concat", "injection", "Repo::find", snippet,
+        )
+        p = _write_findings(md, "SECURITY_REVIEW_RESULTS_W2.md")
+        findings = df.parse_findings_file(p)
+        self.assertEqual(len(findings), 1)
+        f = findings[0]
+        self.assertIn("# TODO", f.sink_snippet)
+        self.assertIn("$result = $conn->query($dql);", f.sink_snippet)
+        expected_hash = hashlib.sha256(f.sink_snippet.encode("utf-8")).hexdigest()[:8]
+        self.assertEqual(f.sink_hash, expected_hash)
 
     def test_parser_unknown_sink_kind(self):
         """Regression: a typo `weakrandom` (instead of `weak_random`) does not
@@ -233,6 +353,418 @@ class ParserTests(unittest.TestCase):
         findings = df.parse_findings_file(p)
         self.assertIn("#[Route(", findings[0].sink_snippet)
         self.assertIn("handleAccessCode", findings[0].sink_snippet)
+
+
+class WaveFormatMarkerTests(unittest.TestCase):
+    """`<!-- wave_format: 2 -->` must be the first non-empty line to be
+    recognized. Stage 2 — verdict buckets."""
+
+    def test_no_marker_uses_legacy_rules(self):
+        from dedupe.parser import _detect_wave_format
+        md = _mk_finding_md(
+            1, "src/A.php", 10, "dql_concat", "injection", "A::m", "line1",
+        )
+        self.assertIsNone(_detect_wave_format(md))
+
+    def test_marker_on_first_line_detected(self):
+        from dedupe.parser import _detect_wave_format
+        md = WAVE_FORMAT_MARKER + _mk_finding_md(
+            1, "src/A.php", 10, "dql_concat", "injection", "A::m", "line1",
+        )
+        self.assertEqual(_detect_wave_format(md), 2)
+
+    def test_marker_not_first_line_not_recognized(self):
+        """The marker must be the FIRST non-empty line, not merely present
+        somewhere in the file. A marker placed after the first finding header
+        is treated as absent -- legacy rules apply -- and its literal text
+        ends up inside that finding's raw_body (residual risk, no protection
+        claimed; see the plan's own case table)."""
+        from dedupe.parser import _detect_wave_format
+        md = _mk_finding_md(
+            1, "src/A.php", 10, "dql_concat", "injection", "A::m", "line1",
+        ) + WAVE_FORMAT_MARKER
+        self.assertIsNone(_detect_wave_format(md))
+        p = _write_findings(md, "SECURITY_REVIEW_RESULTS_W1.md")
+        findings = df.parse_findings_file(p)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("wave_format", findings[0].raw_body,
+                       "misplaced marker leaks into raw_body -- documented residual risk")
+
+    def test_future_version_is_noisy_refusal(self):
+        from dedupe.parser import WaveFormatError, parse_wave
+        md = "<!-- wave_format: 99 -->\n" + _mk_finding_md(
+            1, "src/A.php", 10, "dql_concat", "injection", "A::m", "line1",
+        )
+        p = _write_findings(md, "SECURITY_REVIEW_RESULTS_W1.md")
+        with self.assertRaises(WaveFormatError):
+            parse_wave(p)
+
+    def test_blank_lines_before_marker_skipped(self):
+        from dedupe.parser import _detect_wave_format
+        md = "\n\n" + WAVE_FORMAT_MARKER + _mk_finding_md(
+            1, "src/A.php", 10, "dql_concat", "injection", "A::m", "line1",
+        )
+        self.assertEqual(_detect_wave_format(md), 2)
+
+    def test_marker_never_leaks_into_first_block_raw_body(self):
+        from dedupe.parser import parse_wave
+        md = WAVE_FORMAT_MARKER + _mk_finding_md(
+            1, "src/A.php", 10, "dql_concat", "injection", "A::m", "line1",
+        )
+        p = _write_findings(md, "SECURITY_REVIEW_RESULTS_W1.md")
+        wave = parse_wave(p)
+        self.assertEqual(len(wave.findings), 1)
+        self.assertNotIn("wave_format", wave.findings[0].raw_body)
+
+
+class VerdictSplitterTests(unittest.TestCase):
+    """Regression: the legacy splitter (`FINDING_HEADER_RE` alone) lets a
+    trailing `needs_validation`/`hardening` block bleed into the preceding
+    Vulnerability block's body, and the field loop's last-field-wins
+    behavior lets it silently overwrite that finding's `sink_kind` /
+    `sink_snippet` -- corrupting its sink_hash and desyncing dedupe.
+    `wave_format: 2` fixes this via a single closed-keyword splitter."""
+
+    def test_trailing_nv_block_does_not_steal_finding_fields(self):
+        md = (
+            WAVE_FORMAT_MARKER
+            + _mk_finding_md(
+                1, "src/Repo.php", 42, "dql_concat", "injection", "Repo::find",
+                "$dql = 'SELECT u FROM u ' . $sort;",
+            )
+            + _mk_needs_validation_md(
+                1, "src/RateLimiter.php", 10, "missing_authz", "authz", "RateLimiter::check",
+                "$ip = $request->getClientIp();",
+            )
+        )
+        p = _write_findings(md, "SECURITY_REVIEW_RESULTS_W2.md")
+        from dedupe.parser import parse_wave
+        wave = parse_wave(p)
+        self.assertEqual(len(wave.findings), 1)
+        self.assertEqual(len(wave.needs_validation), 1)
+        finding = wave.findings[0]
+        self.assertEqual(finding.sink_kind, "dql_concat",
+                          "the NV block's sink_kind must not overwrite the finding's")
+        self.assertIn("SELECT u FROM u", finding.sink_snippet)
+        self.assertEqual(
+            finding.sink_hash,
+            hashlib.sha256(finding.sink_snippet.encode("utf-8")).hexdigest()[:8],
+        )
+        nv = wave.needs_validation[0]
+        self.assertEqual(nv.sink_kind, "missing_authz")
+        self.assertIn("getClientIp", nv.sink_snippet)
+
+    def test_hardening_block_after_finding_also_isolated(self):
+        md = (
+            WAVE_FORMAT_MARKER
+            + _mk_finding_md(
+                1, "src/Repo.php", 42, "dql_concat", "injection", "Repo::find",
+                "$dql = 'SELECT u FROM u ' . $sort;",
+            )
+            + _mk_hardening_md(
+                1, "src/Admin.php", 5, "csrf_missing", "authz", "Admin::update",
+                "$this->save($request->all());",
+            )
+        )
+        p = _write_findings(md, "SECURITY_REVIEW_RESULTS_W1.md")
+        from dedupe.parser import parse_wave
+        wave = parse_wave(p)
+        self.assertEqual(len(wave.findings), 1)
+        self.assertEqual(len(wave.hardening), 1)
+        self.assertEqual(wave.findings[0].sink_kind, "dql_concat")
+        self.assertEqual(wave.hardening[0].sink_kind, "csrf_missing")
+
+
+class LegacyNvContaminationTests(unittest.TestCase):
+    """Explicit documented expectation (not a bug this package fixes): a
+    `# Needs validation N` block in a wave file WITHOUT the wave_format
+    marker is invisible to the legacy splitter (`FINDING_HEADER_RE` only
+    matches `# Vulnerability`). Its body -- including sink_kind/sink_snippet
+    fields, but never Severity/Confidence, since needs_validation never had
+    those -- is swallowed into the preceding Vulnerability block via
+    last-field-wins, and the resulting Finding silently keeps the class
+    defaults `severity="Medium"`, `confidence=8`, with sink_kind/sink_snippet
+    taken from the NV block, not the real finding. Backward compatibility
+    means preserving this contamination, not fixing it -- only wave_format=2
+    files get the closed splitter."""
+
+    def test_unmarked_nv_block_contaminates_preceding_finding_as_medium_8(self):
+        # No marker. A single `# Vulnerability` header (legacy splitter's only
+        # boundary), followed by NV-shaped field content with no Severity/
+        # Confidence field anywhere in the swallowed body -- neither block
+        # ever sets severity/confidence, so `Finding`'s class defaults win.
+        md = (
+            "# Vulnerability 1: [missing_authz]: `src/RateLimiter.php:10`\n"
+            "\n"
+            "* **sink_kind**: missing_authz\n"
+            "* **root_cause_family**: authz\n"
+            "* **enclosing_symbol**: RateLimiter::check\n"
+            "* **sink_snippet**: |\n"
+            "    $ip = $request->getClientIp();\n"
+            "\n"
+            "# Needs validation 1: [missing_authz]: `src/RateLimiter.php:10`\n"
+            "\n"
+            "* **claimed_root_cause**: trusted-proxy spoofing\n"
+            "* **trace**: Controller -> RateLimiter::check -> getClientIp\n"
+            "* **blockers**: real trusted_proxies value in prod\n"
+        )
+        p = _write_findings(md, "SECURITY_REVIEW_RESULTS_W2.md")
+        findings = df.parse_findings_file(p)
+        self.assertEqual(len(findings), 1,
+                          "no marker -> legacy splitter sees only one # Vulnerability header; "
+                          "'# Needs validation 1' is not a recognized boundary")
+        f = findings[0]
+        self.assertEqual(f.sink_kind, "missing_authz")
+        self.assertIn("getClientIp", f.sink_snippet)
+        # Neither block ever emits Severity/Confidence -> class defaults.
+        self.assertEqual(f.severity, "Medium")
+        self.assertEqual(f.confidence, 8)
+        # The NV header text and its own fields end up inert inside raw_body
+        # (harmless: `claimed_root_cause`/`trace`/`blockers` match no Finding
+        # field key) -- but still visible, which is exactly the "silent"
+        # contamination the marker exists to prevent.
+        self.assertIn("Needs validation", f.raw_body)
+        self.assertIn("trusted-proxy spoofing", f.raw_body)
+
+
+class NeedsValidationParsingTests(unittest.TestCase):
+    """Parsing `# Needs validation N` blocks into `NeedsValidation` objects."""
+
+    def _parse_single_nv(self, md: str):
+        from dedupe.parser import parse_wave
+        p = _write_findings(WAVE_FORMAT_MARKER + md, "SECURITY_REVIEW_RESULTS_W3.md")
+        wave = parse_wave(p)
+        self.assertEqual(len(wave.needs_validation), 1)
+        return wave.needs_validation[0]
+
+    def test_full_field_set_parsed(self):
+        md = _mk_needs_validation_md(
+            1, "src/RateLimiter.php", 10, "missing_authz", "authz",
+            "RateLimiter::check", "$ip = $request->getClientIp();",
+            claimed_root_cause="trusted-proxy spoofing",
+            trace="Controller::index -> RateLimiter::check -> getClientIp",
+            blockers="real `trusted_proxies` value in prod",
+            validation_plan_deployment="inspect proxy config",
+            condition_keys="deployment_control_not_in_source, admin_only",
+        )
+        nv = self._parse_single_nv(md)
+        self.assertEqual(nv.sink_file, "src/RateLimiter.php")
+        self.assertEqual(nv.sink_line, 10)
+        self.assertEqual(nv.sink_kind, "missing_authz")
+        self.assertEqual(nv.root_cause_family, "authz")
+        self.assertEqual(nv.enclosing_symbol, "RateLimiter::check")
+        self.assertIn("getClientIp", nv.sink_snippet)
+        self.assertEqual(nv.claimed_root_cause, "trusted-proxy spoofing")
+        self.assertIn("RateLimiter::check", nv.trace)
+        self.assertEqual(nv.blockers, ["real `trusted_proxies` value in prod"])
+        self.assertIsNone(nv.validation_plan_local)
+        self.assertEqual(nv.validation_plan_deployment, "inspect proxy config")
+        self.assertEqual(
+            nv.condition_keys,
+            ["deployment_control_not_in_source", "admin_only"],
+        )
+        self.assertEqual(nv.flags, [])
+        self.assertEqual(
+            nv.sink_hash,
+            hashlib.sha256(nv.sink_snippet.encode("utf-8")).hexdigest()[:8],
+        )
+
+    def test_has_no_severity_or_confidence_attribute(self):
+        """NeedsValidation must not carry severity/confidence -- structural
+        check, not just 'field is absent from output'."""
+        from dedupe.models import NeedsValidation
+        field_names = {f.name for f in __import__("dataclasses").fields(NeedsValidation)}
+        self.assertNotIn("severity", field_names)
+        self.assertNotIn("confidence", field_names)
+
+    def test_worker_supplied_severity_dropped_and_flagged(self):
+        md = _mk_needs_validation_md(
+            1, "src/RateLimiter.php", 10, "missing_authz", "authz",
+            "RateLimiter::check", "$ip = $request->getClientIp();",
+        )
+        # Splice in a Severity field the worker should not have emitted.
+        md = md.replace(
+            "* **claimed_root_cause**:",
+            "* **Severity**: High\n* **claimed_root_cause**:",
+        )
+        nv = self._parse_single_nv(md)
+        self.assertIn(df.models.FLAG_VERDICT_HAS_SEVERITY, nv.flags)
+        self.assertFalse(hasattr(nv, "severity"))
+
+    def test_missing_blockers_flagged_incomplete(self):
+        md = _mk_needs_validation_md(
+            1, "src/RateLimiter.php", 10, "missing_authz", "authz",
+            "RateLimiter::check", "$ip = $request->getClientIp();",
+            blockers="",
+        )
+        nv = self._parse_single_nv(md)
+        self.assertEqual(nv.blockers, [])
+        self.assertIn(df.models.FLAG_NV_INCOMPLETE, nv.flags)
+
+    def test_missing_both_validation_plans_flagged_incomplete(self):
+        md = _mk_needs_validation_md(
+            1, "src/RateLimiter.php", 10, "missing_authz", "authz",
+            "RateLimiter::check", "$ip = $request->getClientIp();",
+            validation_plan_local="", validation_plan_deployment="",
+        )
+        nv = self._parse_single_nv(md)
+        self.assertIsNone(nv.validation_plan_local)
+        self.assertIsNone(nv.validation_plan_deployment)
+        self.assertIn(df.models.FLAG_NV_INCOMPLETE, nv.flags)
+
+    def test_multiline_blockers_parsed_as_list(self):
+        md = (
+            "# Needs validation 1: [missing_authz]: `src/RateLimiter.php:10`\n"
+            "\n"
+            "* **sink_kind**: missing_authz\n"
+            "* **root_cause_family**: authz\n"
+            "* **enclosing_symbol**: RateLimiter::check\n"
+            "* **sink_snippet**: |\n"
+            "    $ip = $request->getClientIp();\n"
+            "* **claimed_root_cause**: trusted-proxy spoofing\n"
+            "* **trace**: Controller -> RateLimiter\n"
+            "* **blockers**: |\n"
+            "    - real trusted_proxies value in prod, not the dev default\n"
+            "    - confirmation the reverse proxy rewrites X-Forwarded-For\n"
+            "* **validation_plan_deployment**: inspect proxy config\n"
+        )
+        nv = self._parse_single_nv(md)
+        self.assertEqual(len(nv.blockers), 2)
+        self.assertIn("not the dev default", nv.blockers[0])
+        self.assertIn("X-Forwarded-For", nv.blockers[1])
+
+
+class HardeningParsingTests(unittest.TestCase):
+    """Parsing `# Hardening N` blocks into `HardeningNote` objects."""
+
+    def _parse_single_hardening(self, md: str):
+        from dedupe.parser import parse_wave
+        p = _write_findings(WAVE_FORMAT_MARKER + md, "SECURITY_REVIEW_RESULTS_W1.md")
+        wave = parse_wave(p)
+        self.assertEqual(len(wave.hardening), 1)
+        return wave.hardening[0]
+
+    def test_full_field_set_parsed(self):
+        md = _mk_hardening_md(
+            1, "src/Admin.php", 5, "csrf_missing", "authz", "Admin::update",
+            "$this->save($request->all());",
+            text="super-admin-only config write, single-tenant, no lower-privilege observer",
+            condition_keys="admin_only",
+        )
+        hn = self._parse_single_hardening(md)
+        self.assertEqual(hn.sink_file, "src/Admin.php")
+        self.assertEqual(hn.sink_line, 5)
+        self.assertEqual(hn.sink_kind, "csrf_missing")
+        self.assertEqual(hn.root_cause_family, "authz")
+        self.assertEqual(hn.enclosing_symbol, "Admin::update")
+        self.assertIn("save($request", hn.sink_snippet)
+        self.assertIn("single-tenant", hn.text)
+        self.assertEqual(hn.condition_keys, ["admin_only"])
+        self.assertEqual(hn.flags, [])
+        self.assertEqual(
+            hn.sink_hash,
+            hashlib.sha256(hn.sink_snippet.encode("utf-8")).hexdigest()[:8],
+        )
+
+    def test_has_no_severity_or_confidence_attribute(self):
+        from dedupe.models import HardeningNote
+        field_names = {f.name for f in __import__("dataclasses").fields(HardeningNote)}
+        self.assertNotIn("severity", field_names)
+        self.assertNotIn("confidence", field_names)
+
+    def test_worker_supplied_confidence_dropped_and_flagged(self):
+        md = _mk_hardening_md(
+            1, "src/Admin.php", 5, "csrf_missing", "authz", "Admin::update",
+            "$this->save($request->all());",
+        )
+        md = md.replace(
+            "* **text**:",
+            "* **Confidence**: 8/10\n* **text**:",
+        )
+        hn = self._parse_single_hardening(md)
+        self.assertIn(df.models.FLAG_VERDICT_HAS_SEVERITY, hn.flags)
+
+
+class ParseWaveMutabilityTests(unittest.TestCase):
+    """E6 probe contract: NeedsValidation/HardeningNote are mutable (not
+    frozen) and mutate cleanly like Finding, with no list-field __hash__ trap."""
+
+    def test_needs_validation_and_hardening_are_not_frozen(self):
+        from dedupe.models import HardeningNote, NeedsValidation
+        self.assertFalse(NeedsValidation.__dataclass_params__.frozen)
+        self.assertFalse(HardeningNote.__dataclass_params__.frozen)
+
+    def test_needs_validation_mutation_in_place_works(self):
+        from dedupe.models import NeedsValidation
+        nv = NeedsValidation(sink_kind="other:custom_thing", root_cause_family="other:custom_thing")
+        nv.sink_kind = "missing_authz"  # mirrors pipeline._normalize_known_other_kinds
+        nv.root_cause_family = "authz"
+        self.assertEqual(nv.sink_kind, "missing_authz")
+
+    def test_condition_keys_list_field_does_not_break_construction(self):
+        from dedupe.models import HardeningNote, NeedsValidation
+        nv = NeedsValidation(condition_keys=["admin_only", "needs_separate_primitive"])
+        hn = HardeningNote(condition_keys=["admin_only"])
+        self.assertEqual(len(nv.condition_keys), 2)
+        self.assertEqual(len(hn.condition_keys), 1)
+
+
+class ParseWaveApiTests(unittest.TestCase):
+    """`parse_wave` / `parse_findings_file` contract (parse_findings_file's
+    signature must stay `(path) -> list[Finding]` -- callers outside this
+    package depend on it: bin/dedupe_findings.py, bin/tests/test_refute.py)."""
+
+    def test_parse_findings_file_signature_unchanged_returns_only_findings(self):
+        """`parse_findings_file` on a wave_format=2 file returns ONLY the
+        confirmed findings -- NV/Hardening are invisible through this API,
+        by design (it's the pre-Stage-2 contract, preserved verbatim)."""
+        md = (
+            WAVE_FORMAT_MARKER
+            + _mk_finding_md(
+                1, "src/Repo.php", 42, "dql_concat", "injection", "Repo::find", "line1",
+            )
+            + _mk_needs_validation_md(
+                1, "src/RL.php", 10, "missing_authz", "authz", "RL::check", "line2",
+            )
+            + _mk_hardening_md(
+                1, "src/Admin.php", 5, "csrf_missing", "authz", "Admin::update", "line3",
+            )
+        )
+        p = _write_findings(md, "SECURITY_REVIEW_RESULTS_W1.md")
+        findings = df.parse_findings_file(p)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].sink_kind, "dql_concat")
+
+    def test_parse_wave_returns_all_three_buckets(self):
+        from dedupe.parser import parse_wave
+        md = (
+            WAVE_FORMAT_MARKER
+            + _mk_finding_md(
+                1, "src/Repo.php", 42, "dql_concat", "injection", "Repo::find", "line1",
+            )
+            + _mk_needs_validation_md(
+                1, "src/RL.php", 10, "missing_authz", "authz", "RL::check", "line2",
+            )
+            + _mk_hardening_md(
+                1, "src/Admin.php", 5, "csrf_missing", "authz", "Admin::update", "line3",
+            )
+        )
+        p = _write_findings(md, "SECURITY_REVIEW_RESULTS_W1.md")
+        wave = parse_wave(p)
+        self.assertEqual(len(wave.findings), 1)
+        self.assertEqual(len(wave.needs_validation), 1)
+        self.assertEqual(len(wave.hardening), 1)
+
+    def test_parse_wave_no_marker_returns_empty_buckets_for_nv_hardening(self):
+        from dedupe.parser import parse_wave
+        md = _mk_finding_md(
+            1, "src/Repo.php", 42, "dql_concat", "injection", "Repo::find", "line1",
+        )
+        p = _write_findings(md, "SECURITY_REVIEW_RESULTS_W1.md")
+        wave = parse_wave(p)
+        self.assertEqual(len(wave.findings), 1)
+        self.assertEqual(wave.needs_validation, [])
+        self.assertEqual(wave.hardening, [])
 
 
 class SliceIdDerivationTests(unittest.TestCase):

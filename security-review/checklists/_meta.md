@@ -86,6 +86,25 @@ For native SQL concatenations (without an ORM wrapper, via PDO/mysqli/pg_*/curso
 
 `injection`, `xss`, `authz`, `disclosure`, `crypto`, `deserialization`, `ssrf`, `webhook`, `business_logic`, `clickjacking`. All names are **generic** (stack-neutral); no `doctrine`/`twig`/`voter`/`eloquent` in the semantics. A custom name via `other:<name>` (excluded from auto-dedupe).
 
+### Closed enum `condition_keys`
+
+`condition_keys` enum values:
+`internal_network_only`, `admin_only`, `needs_trusted_integration_compromise`, `needs_separate_primitive`, `deployment_control_not_in_source`, `requires_victim_interaction`, `requires_attacker_owned_account`.
+
+Available on `Finding` and on the two verdict buckets (`needs_validation`, `hardening` — see "Verdict buckets" below): the concrete precondition(s) gating exploitability. Custom name via `other:<name>` (same escape-hatch convention as `sink_kind`; not enforced by the parser, permissive by design).
+
+### Verdict buckets: `needs_validation` and `hardening`
+
+A worker finding is not only "reportable" or "silently dropped" — three verdicts exist:
+
+| verdict | severity | when |
+| --- | --- | --- |
+| `confirmed` | Medium/High/Critical | as today — the quality gate applies |
+| `needs_validation` | **forbidden** | the code path is traced, but the deciding fact lives outside the repo (proxy config, IdP setting, a real value only known in prod) |
+| `hardening` | **forbidden** | an observation with no affected principal or resource |
+
+`needs_validation` and `hardening` never carry `severity`/`confidence` — this is a hard constraint, not an omission. The confidence gate (≥ 8) applies only to `confirmed`; the severity gate (≥ MEDIUM) separates `confirmed` from `hardening`. `HARD EXCLUSIONS` and `TRUSTED PATTERNS` (see `agents/security.md`) stay hard filters and do **not** move into `hardening` — an excluded/trusted pattern is still not reported at all.
+
 ### Mapping `sink_kind` → `root_cause_family`
 
 | sink_kind | root_cause_family |
@@ -133,7 +152,7 @@ Example:
 - MD5/SHA1 for password hashing → confidence ≥ 9 (no exceptions).
 ```
 
-Floor rules **do not replace** the quality gate (confidence ≥ 8, severity ≥ MEDIUM) — they refine it for specific patterns.
+Floor rules **do not replace** the quality gate — confidence ≥ 8 for `confirmed` findings, severity ≥ MEDIUM separating `confirmed` from `hardening` (see "Verdict buckets" above; `needs_validation`/`hardening` carry no confidence, so floor rules do not apply to them) — they refine it for specific patterns.
 
 Floor rules may live in any layer — wherever they are most specific. If a pattern is mentioned in multiple layers, the more specific layer (per resolution chain) takes precedence.
 

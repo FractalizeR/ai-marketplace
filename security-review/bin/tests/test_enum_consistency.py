@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from dedupe.models import SINK_KIND_TO_FAMILY  # noqa: E402
+from dedupe.models import CONDITION_KEYS, SINK_KIND_TO_FAMILY  # noqa: E402
 
 # Plugin root: tests/ → bin/ → code-review/.
 _PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -288,6 +288,49 @@ class Stage6ConfidenceCaps(unittest.TestCase):
             "core/fintech.md must declare the read-side stale-cache cap "
             "(max confidence 4) for race_condition.",
         )
+
+
+class ConditionKeysEnumConsistency(unittest.TestCase):
+    """Stage 2 — `condition_keys` gets the same three-way sync discipline as
+    `sink_kind`/`root_cause_family`: models.py (authoritative) <->
+    agents/security.md <-> checklists/_meta.md."""
+
+    def test_security_md_lists_all_condition_keys_from_python(self):
+        text = _SECURITY_MD.read_text(encoding="utf-8")
+        keys = _kinds_from_enum_line(text, "Closed enum `condition_keys`")
+        py_keys = set(CONDITION_KEYS)
+        missing = py_keys - keys
+        extra = keys - py_keys
+        self.assertFalse(
+            missing or extra,
+            f"agents/security.md condition_keys enum out of sync.\n"
+            f"  In Python but missing in security.md: {sorted(missing)}\n"
+            f"  In security.md but missing in Python: {sorted(extra)}",
+        )
+
+    def test_meta_md_lists_all_condition_keys_from_python(self):
+        text = _META_MD.read_text(encoding="utf-8")
+        marker_re = re.compile(r"`condition_keys` enum values:\s*\n", re.MULTILINE)
+        m = marker_re.search(text)
+        self.assertIsNotNone(
+            m, "checklists/_meta.md does not contain the condition_keys enum marker line"
+        )
+        rest = text[m.end():]
+        paragraph = rest.split("\n\n", 1)[0]
+        keys = set(_IDENT_RE.findall(paragraph))
+        py_keys = set(CONDITION_KEYS)
+        missing = py_keys - keys
+        extra = keys - py_keys
+        self.assertFalse(
+            missing or extra,
+            f"checklists/_meta.md condition_keys enum out of sync.\n"
+            f"  In Python but missing in _meta.md: {sorted(missing)}\n"
+            f"  In _meta.md but missing in Python: {sorted(extra)}",
+        )
+
+    def test_condition_keys_count(self):
+        """Pins the count so an addition/removal is a deliberate, visible diff."""
+        self.assertEqual(len(CONDITION_KEYS), 7)
 
 
 if __name__ == "__main__":

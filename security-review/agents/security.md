@@ -77,11 +77,25 @@ If a section passed to you is missing from CONTEXT.md (for example, recon_bags.{
 
 A checklist is a **search-priority pointer, NOT a filter**. If you detect an exploitable vulnerability that passes the methodology (input source → transformations → sink + concrete exploit path) — reporting is **mandatory**, even if the category is not named in the checklist.
 
-Quality gates (confidence ≥ 8, severity ≥ MEDIUM) are the only noise filter.
+Quality gates are the only noise filter, but they no longer mean "report or silently drop". There are three verdicts — see "## VERDICT BUCKETS" below. Confidence ≥ 8 gates `confirmed` only (it has no meaning for a bucket with no confidence). Severity ≥ MEDIUM separates `confirmed` from `hardening`. Recall-first still holds: a finding that fails these two gates for `confirmed` moves to a bucket — it is not dropped.
+
+## VERDICT BUCKETS
+
+Every finding gets exactly one of three verdicts. This is a home for observations, not an additional filter — recall-first is unchanged: everything that passes the methodology (source → transformations → sink, or a well-known attack-class precondition chain) ends up in the report, in one of these three sections.
+
+- **`confirmed`** — a sink-based or missing-defense finding as before: `severity` ∈ {Medium, High, Critical}, `confidence` ≥ 8. Format: `# Vulnerability N`.
+- **`needs_validation`** — you traced the code path, but the deciding fact lives **outside the repository**: a proxy/load-balancer config value, an IdP/OAuth-client setting, a real production value, a deployment-time flag. You cannot assign a severity because you cannot confirm the precondition is actually true in the running system. Format: `# Needs validation N`. **`severity`/`confidence` are forbidden on this verdict** — do not emit them.
+- **`hardening`** — a real observation (missing defense, weak pattern, best-practice gap) where **no principal or resource is affected**: nothing to steal, escalate, or corrupt, even in the worst case. This is not "low severity" — Medium already covers low-impact-but-real findings. `hardening` is for the case where impact assessment finds no victim at all. Format: `# Hardening N`. **`severity`/`confidence` are forbidden on this verdict** — do not emit them.
+
+Both bucket types carry `condition_keys` — the concrete precondition(s) that gate the observation, from the closed enum in `checklists/_meta.md` (`internal_network_only`, `admin_only`, `needs_trusted_integration_compromise`, `needs_separate_primitive`, `deployment_control_not_in_source`, `requires_victim_interaction`, `requires_attacker_owned_account`, or `other:<name>`). `Finding` (`confirmed`) also carries `condition_keys` — optional, for a confirmed finding that still has a named precondition worth surfacing.
+
+**Deciding between the three is not a downgrade path — it changes what you assert.** Do not default to `confirmed` "to be safe" if you cannot actually confirm the deciding fact is true; do not default to `hardening` to avoid the confidence bar if there IS a traceable principal/resource. Pick the verdict that matches what you actually established.
 
 ## TRUSTED PATTERNS (NEGATIVE FILTER)
 
 If a finding pattern matches an entry under any loaded `## Trusted patterns (do NOT flag)` section in the checklist chain, **do not report it** — these are safe-by-construction idioms (CSPRNG wrappers, framework auto-escape, ORM parameter binding for scalars, constant-time comparisons). Layer precedence matches `## Confidence floor rules`: the most-specific layer's trusted list wins on conflict (`integrations > addons > stacks > languages > core`).
+
+**This is a hard filter, not a bucket.** A trusted pattern is not reported at all — not as `hardening`, not as `needs_validation`. Moving it into a bucket would recreate exactly the noise this section exists to remove.
 
 ## TOOLS — CONDITIONAL MCP
 
@@ -141,6 +155,20 @@ Each finding must have:
 ### Optional fields
 
 - `cwe`: CWE identifier in `CWE-XXX` format (or several comma-separated, if the vulnerability is covered by several categories — for example, OAuth state flaw: `CWE-352, CWE-1275`). Add when you are confident — this is the standard reference for external systems. Omission is acceptable if the category does not map obviously.
+- `condition_keys`: comma-separated, from the closed enum below. Optional on a `confirmed` finding — use it when a concrete named precondition is worth surfacing even though the finding is otherwise reportable as-is.
+
+### Required fields for `needs_validation` / `hardening`
+
+Both buckets share the same location fields as above (`sink_file:sink_line` in the header, `sink_kind`, `root_cause_family`, `enclosing_symbol`, `sink_snippet`) but **never** `Severity`/`Confidence` — do not emit those fields on these two verdicts.
+
+- `needs_validation` additionally requires: `claimed_root_cause` (what you believe the root cause is, pending confirmation), `trace` (the code path you followed), `blockers` (one or more concrete missing facts — what specifically you cannot confirm from the repo alone; must be non-empty), and at least one of `validation_plan_local` / `validation_plan_deployment` (how to close the gap — a local check vs. something only checkable in the deployment). `condition_keys` from the closed enum below.
+- `hardening` additionally requires: `text` (the observation itself and why no principal/resource is affected). `condition_keys` from the closed enum below.
+
+### Closed enum `condition_keys`
+
+`internal_network_only`, `admin_only`, `needs_trusted_integration_compromise`, `needs_separate_primitive`, `deployment_control_not_in_source`, `requires_victim_interaction`, `requires_attacker_owned_account`.
+
+Custom value via `other:<name>` (same escape-hatch convention as `sink_kind`). See "Verdict buckets" above and `checklists/_meta.md` for the full description of each key.
 
 ### Closed enum `sink_kind`
 
@@ -200,7 +228,15 @@ This gives deterministic content for hashing, resilient to cosmetic differences.
 
 Save the results to the file `<review_root>/waves/<slice_id>.md` (slice_id — from the prompt). **The `<review_root>/waves/` folder is already created by the orchestrator** (together with `<review_root>/` and `.gitignore`); a Write to the absolute file path is enough — Write will create intermediate directories if needed.
 
-Each finding:
+**The very first line of the file, before anything else (no blank line, no preamble) — exactly:**
+
+```
+<!-- wave_format: 2 -->
+```
+
+This is not decorative. The dedupe parser reads it to know your file uses the three-verdict format (`confirmed` / `needs_validation` / `hardening`) below. If it is not the first non-empty line, the file is silently parsed under the old single-type rules, which do not recognize `# Needs validation` / `# Hardening` headers at all — do not put anything before it.
+
+Each `confirmed` finding:
 
 ```markdown
 # Vulnerability N: [CATEGORY]: `sink_file:sink_line`
@@ -222,6 +258,7 @@ Each finding:
 * **enclosing_symbol**: <Class::method or function name or "unknown">
 * **sink_snippet**: |
     <normalized sink text, ±2 lines>
+* **condition_keys**: <comma-separated, optional>
 * **Description**: <detailed description with context>
 * **Data path**: <source: file:line> → <transformations: file:line> → <sink: sink_file:sink_line>  # for sink-based
 * **Attack precondition chain**: <what is missing → which realistic attack scenario opens>  # for missing-defense (instead of "Data path")
@@ -229,6 +266,42 @@ Each finding:
 * **Impact**: <what the attacker can do>
 * **Recommendation**: <concrete solution>
 * **Discovered via**: checklist:<file> | exploratory
+```
+
+Each `needs_validation` finding — **no `Severity`/`Confidence` fields**:
+
+```markdown
+# Needs validation N: [CATEGORY]: `sink_file:sink_line`
+
+* **sink_kind**: <value from enum> | other:<short name>
+* **root_cause_family**: <value from enum> | other:<short name>
+* **enclosing_symbol**: <Class::method or function name or "unknown">
+* **sink_snippet**: |
+    <normalized sink text, ±2 lines>
+* **claimed_root_cause**: <what you believe the root cause is, pending confirmation>
+* **trace**: <the code path you followed>
+* **blockers**: |
+    - <concrete missing fact #1 — not "admin surface", the actual deciding fact>
+    - <concrete missing fact #2, if any>
+* **validation_plan_local**: <how to confirm from the repo/local environment, if possible>
+* **validation_plan_deployment**: <how to confirm only in the actual deployment, if that's where the fact lives>
+* **condition_keys**: <comma-separated, from the closed enum>
+```
+
+`blockers` must be non-empty; at least one of `validation_plan_local` / `validation_plan_deployment` must be non-empty. Omit whichever validation-plan field does not apply — do not leave both empty.
+
+Each `hardening` finding — **no `Severity`/`Confidence` fields**:
+
+```markdown
+# Hardening N: [CATEGORY]: `sink_file:sink_line`
+
+* **sink_kind**: <value from enum> | other:<short name>
+* **root_cause_family**: <value from enum> | other:<short name>
+* **enclosing_symbol**: <Class::method or function name or "unknown">
+* **sink_snippet**: |
+    <normalized sink text, ±2 lines>
+* **text**: <the observation, and specifically why no principal/resource is affected>
+* **condition_keys**: <comma-separated, from the closed enum>
 ```
 
 ## WHAT NOT TO TREAT AS AUTOMATICALLY SAFE
@@ -249,11 +322,13 @@ The "repository-only exploitable" gate does not reduce to "admin-controlled sour
 - **"Code is currently unreachable / dead branch / no caller"** — does not lower severity and does not cancel the finding. The next commit may introduce a caller, the autoloader may pick up the class, dynamic dispatch / event subscriber may activate the branch. Reachability is not grounds for rejecting a finding.
 - **"Already reported in another wave"** — not your concern. Workers run in parallel; you do not see their results. Report independently — dedup is the script's job.
 
-If you decline a finding on one of these grounds — articulate in the slice text why exactly your case is the exception and what specifically closes the risk (concrete code, not "admin surface").
+These are reasons NOT to silently drop a finding — they are not reasons to force it into `confirmed`. If, after this reconsideration, you still cannot assign a severity because the deciding fact is outside the repo (e.g. the actual proxy/IdP/prod config value) — report it as `needs_validation`, with the blocker named concretely (not "admin surface", the actual missing fact and where to check it). If impact assessment genuinely finds no principal or resource affected — report it as `hardening`. Do not use silent omission as the third option.
 
 The same prohibition list applies to the refute agent (`agents/security-refute.md`): reachability / admin-source / validator-presence / defense-in-depth-gap — **not valid grounds for refute**. The refute agent rebuts a finding only when there is concrete blocker code, quoted via `refute_file:refute_line`.
 
 ## HARD EXCLUSIONS / NOISE POLICY
+
+**These are hard filters, not buckets.** Nothing on this list goes into `hardening` or `needs_validation` either — it is not reported at all. Routing hard-excluded noise into a bucket would recreate exactly the noise these exclusions exist to remove.
 
 **Do NOT report** (unambiguous noise or out of security-review scope):
 
@@ -319,9 +394,11 @@ Ask yourself these 5 questions before assigning severity. This is a structured w
 
 ## CONFIDENCE GUIDELINE
 
+Applies to `confirmed` findings only — `needs_validation` and `hardening` carry no confidence (see "## VERDICT BUCKETS").
+
 - **9-10**: precise exploit path determined with verified data flow, or a well-known attack class with a full set of preconditions in code.
 - **8**: clear vulnerability pattern with known exploitation methods; or missing-defense on an endpoint where the defense is standardly required.
-- **Below 8**: do NOT include in the report.
+- **Below 8**: do NOT report as `confirmed`. If the code path is traced but the gap is that you cannot confirm a fact outside the repo — that is `needs_validation`, not a confidence problem. If confidence is low only because you have not finished tracing — keep tracing before reporting; do not report a half-traced guess in any bucket.
 
 ### Rule for flow-level flaws (auth / session / OAuth / crypto-at-rest / missing-defense)
 
@@ -391,7 +468,7 @@ These examples are calibration for severity/confidence evaluation. Use their str
 * **Discovered via**: checklist:checklists/core/auth.md
 ```
 
-### Example 3 — Rejected with rationale (anti-example)
+### Example 3 — `hardening`, not silently dropped (anti-example of the old "rejected" reflex)
 
 **Case:** Symfony admin controller `AdminConfigController::update` writes to `config/runtime/feature_flags.yaml`. Protection: `#[IsGranted('ROLE_SUPER_ADMIN')]` on the class + `denyAccessUnlessGranted('ROLE_SUPER_ADMIN')` at the start of the action. Single-tenant application (no `tenant_id` column in any table, no per-customer isolation). The `feature_flags.yaml` file is read only at application boot and is not exposed in any HTTP responses / logs / exports for lower-privilege roles.
 
@@ -403,17 +480,33 @@ These examples are calibration for severity/confidence evaluation. Use their str
 4. **Scope** — NOT Changed: single-tenant, no cross-tenant impact (no other tenants at all). The file is not read by lower-privilege observers (does not leak into logs/exports/templates with a role below super-admin).
 5. **Impact (C/I/A)** — Integrity:Low (super-admin can already change any feature flags via CLI, DB, or other admin endpoints — this endpoint does not introduce a **new** capability). Confidentiality:None. Availability:None.
 
-**Decision: rejected, grounds:**
+**Decision: `hardening`, not `confirmed`, and NOT dropped:**
 
-All 5 questions output to "PR:Admin + Impact:Low + Scope:Unchanged + no lower-privilege observers + no cross-tenant boundary". Severity by the principle "PR:Admin + Impact High → usually High; Impact Low → Info" — this does not reach even Medium. The quality gate (severity ≥ MEDIUM) is not passed — do not report.
+All 5 questions output to "PR:Admin + Impact:Low + Scope:Unchanged + no lower-privilege observers + no cross-tenant boundary" — there is no principal or resource actually affected by this specific endpoint (the super-admin already has this capability through other paths). That is precisely the `hardening` definition, not grounds for silence. Report:
 
-**What is NOT valid grounds for rejected** (if any one were violated — would have to report):
+```markdown
+# Hardening 3: [admin_config_write]: `src/Controller/AdminConfigController.php:0`
+
+* **sink_kind**: other:admin_config_write
+* **root_cause_family**: authz
+* **enclosing_symbol**: AdminConfigController::update
+* **sink_snippet**: |
+    #[IsGranted('ROLE_SUPER_ADMIN')]
+    class AdminConfigController
+* **text**: Writes config/runtime/feature_flags.yaml behind ROLE_SUPER_ADMIN. No new capability vs. existing CLI/DB/other-admin-endpoint access; single-tenant (no cross-tenant boundary); file not exposed to any lower-privilege observer. Worth a second look only if the app becomes multi-tenant or this role becomes reachable via privilege escalation.
+* **condition_keys**: admin_only
+```
+
+**What would instead promote this to `confirmed`** (if any one were true, the finding is Medium+ as normal, not `hardening`):
 - if the file were read via a non-admin path → secret_in_response / disclosure;
 - if the application became multi-tenant → cross-tenant write through a single super-admin;
-- if `ROLE_SUPER_ADMIN` were reachable through a privilege escalation chain (for example, a voter with `default true` on a parent attribute) → a separate finding about the voter;
-- "admin-controlled source" by itself — NOT grounds for rejected (see the "WHAT NOT TO TREAT AS AUTOMATICALLY SAFE" section). Here rejected is justified by absence of impact, not by admin-source per se.
+- if `ROLE_SUPER_ADMIN` were reachable through a privilege escalation chain (for example, a voter with `default true` on a parent attribute) → a separate finding about the voter.
+
+"Admin-controlled source" by itself is NOT grounds for `hardening` (see "WHAT NOT TO TREAT AS AUTOMATICALLY SAFE") — here `hardening` is justified by absence of impact, not by admin-source per se. An admin-only endpoint with real cross-tenant or privilege-escalation impact is `confirmed`, same as any other finding.
 
 ## QUALITY CRITERIA (all must hold)
+
+For `confirmed`:
 
 - Exploitable vulnerability with a clear attack path (sink-based) or chain of preconditions (missing-defense).
 - For sink-based — traceable data path from input to sink point.
@@ -422,6 +515,8 @@ All 5 questions output to "PR:Admin + Impact:Low + Scope:Unchanged + no lower-pr
 - Concrete location in code (sink_file:sink_line — sink or the point where the defense should be).
 - Confidence ≥ 8 (see the rule for flow-level flaws — do not artificially lower) and Severity ≥ MEDIUM.
 - Severity determined by impact (see "Severity guideline"), not lookup by sink_kind.
+
+For `needs_validation` and `hardening`: the same "real risk, not theoretical" and "concrete location in code" bars apply — a traced code path, not a guess. Neither carries confidence/severity (see "## VERDICT BUCKETS"); `needs_validation` additionally requires a non-empty `blockers` and at least one non-empty validation plan.
 
 ## CRITICAL REQUIREMENT FOR RESULT RETURN
 
@@ -432,11 +527,14 @@ In the response message return **only** a short confirmation of the form:
 ```
 Saved <N> findings to <review_root>/waves/<slice_id>.md
   Critical: <n>, High: <m>, Medium: <k>
+  needs_validation: <p>, hardening: <q>
 ```
+
+The `Critical/High/Medium` counts are `confirmed` only (they have no meaning for the other two verdicts). This is the only thing the orchestrator sees without opening the file — keep all three verdicts' counts accurate.
 
 **Do NOT return** the bodies of findings in the response message — they will be lost; the orchestrator expects them in the file. The dedup script reads files by glob pattern, not from Task responses.
 
-If there are no findings in the slice — still create a file with a header and the line "No findings". An empty file is an explicit "checked, clean"; absence of the file = "slice not covered" (fatal for the orchestrator).
+If there are no findings in the slice — still create a file with the `<!-- wave_format: 2 -->` marker as the first line, then a header and the line "No findings". An empty file is an explicit "checked, clean"; absence of the file = "slice not covered" (fatal for the orchestrator).
 
 Before completion **mandatorily**:
 1. Write to `<review_root>/waves/<slice_id>.md`
@@ -451,7 +549,7 @@ Before completion **mandatorily**:
 4. For each entry point in scope — trace data flow
 5. For `mode=changes` — verify that the exploit path contains a changed node (`touched_by_diff: true` or a file from `target_files`)
 6. For each finding normalize sink_snippet by the rules above (LLM-side, no hashing)
-7. **Write** the result to `<review_root>/waves/<slice_id>.md`
+7. **Write** the result to `<review_root>/waves/<slice_id>.md`, starting with the `<!-- wave_format: 2 -->` marker on the first line
 8. Verify file existence via `ls`
 9. Return a short confirmation (without finding bodies)
-10. Apply quality gates (confidence ≥ 8, severity ≥ MEDIUM) objectively. Do not lower severity and do not abandon a finding due to the presence of defensive controls — evaluate whether they can be bypassed (see "What NOT to treat as automatically safe"). Duplicates are not your concern — dedup handles them.
+10. Apply the quality gate objectively: confidence ≥ 8 and severity ≥ MEDIUM for `confirmed`. Do not lower severity and do not abandon a finding due to the presence of defensive controls — evaluate whether they can be bypassed (see "What NOT to treat as automatically safe"). A finding that fails the `confirmed` gate is not dropped — route it to `needs_validation` (deciding fact outside the repo) or `hardening` (no principal/resource affected); see "## VERDICT BUCKETS". Duplicates are not your concern — dedup handles them.

@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass, field
+from typing import Literal
 
 # ---------------------------------------------------------------------------
 # Snippet normalization for stable sink_hash.
@@ -41,6 +42,19 @@ def _normalize_snippet_for_hash(snippet: str) -> str:
         return snippet
     return _VAR_PLACEHOLDER_RE.sub("$VAR", snippet)
 
+
+def _sink_hash_from_snippet(snippet: str) -> str:
+    """sha256(normalized snippet)[:8] — the single sink-identity computation
+    shared by `Finding`, `NeedsValidation` and `HardeningNote`.
+
+    `sink_hash` is a `@property` on all three, never a stored field: a field
+    would be a second source of truth for identity (E6 probe finding).
+    """
+    if not snippet:
+        return "nohash00"
+    normalized = _normalize_snippet_for_hash(snippet)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:8]
+
 # ---------------------------------------------------------------------------
 # Severity.
 # ---------------------------------------------------------------------------
@@ -62,6 +76,54 @@ FLAG_CROSS_SINK_MERGE = "[CROSS_SINK_MERGE]"
 FLAG_CONFLICTING_SEVERITY = "[CONFLICTING SEVERITY]"
 FLAG_CONFIDENCE_DISAGREEMENT = "[CONFIDENCE DISAGREEMENT]"
 FLAG_REFUTE_CLAIMED = "[REFUTE_CLAIMED]"
+
+# Verdict-bucket parsing flags (Stage 2 / P2.1) — set directly on
+# `NeedsValidation`/`HardeningNote` by the parser, since these types have no
+# `Merged*` wrapper of their own (unlike `Finding` -> `MergedFinding`).
+FLAG_VERDICT_HAS_SEVERITY = "[VERDICT_HAS_SEVERITY]"   # worker put Severity/Confidence on a bucket record; dropped
+FLAG_NV_INCOMPLETE = "[NV_INCOMPLETE]"                  # needs_validation missing blockers and/or a validation plan
+
+
+# ---------------------------------------------------------------------------
+# Wave output format versioning.
+#
+# `<!-- wave_format: N -->` must be the first non-empty line of a worker's
+# wave file. Absent -> legacy (pre-Stage-2) single-type parsing. Present with
+# a version this build does not know -> loud refusal, not a silent partial
+# parse (see `parser.WaveFormatError`).
+# ---------------------------------------------------------------------------
+
+WAVE_FORMAT_VERSION = 2
+
+
+# ---------------------------------------------------------------------------
+# Worker verdict / resolution verdict (Stage 2 — verdict buckets).
+# ---------------------------------------------------------------------------
+
+WORKER_VERDICT = Literal["confirmed", "needs_validation", "hardening"]
+RESOLUTION_VERDICT = Literal["rejected", "reaffirmed"]
+
+
+# ---------------------------------------------------------------------------
+# Closed enum: condition_keys.
+#
+# Same three-way sync discipline as SINK_KIND_TO_FAMILY: this dict/frozenset
+# is mirrored in agents/security.md and checklists/_meta.md.
+# `test_enum_consistency.py` verifies alignment. Escape hatch `other:<name>`,
+# same convention as `sink_kind`.
+# ---------------------------------------------------------------------------
+
+CONDITION_KEYS: frozenset[str] = frozenset(
+    {
+        "internal_network_only",
+        "admin_only",
+        "needs_trusted_integration_compromise",
+        "needs_separate_primitive",
+        "deployment_control_not_in_source",
+        "requires_victim_interaction",
+        "requires_attacker_owned_account",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +224,7 @@ class Finding:
     raw_body: str = ""        # original markdown body for replaying
     source_file: str = ""     # which SECURITY_REVIEW_RESULTS_*.md did this come from
     slice_id: str = ""
+    condition_keys: list[str] = field(default_factory=list)
 
     @property
     def sink_hash(self) -> str:
@@ -171,10 +234,7 @@ class Finding:
         by LLM workers are collapsed before hashing to neutralize the
         non-deterministic numbering across slices.
         """
-        if not self.sink_snippet:
-            return "nohash00"
-        normalized = _normalize_snippet_for_hash(self.sink_snippet)
-        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:8]
+        return _sink_hash_from_snippet(self.sink_snippet)
 
     @property
     def dedup_key(self) -> tuple[str, str, str, str, str]:
@@ -246,3 +306,77 @@ class MergedFinding:
             if s and s not in seen:
                 seen.append(s)
         return seen
+
+
+# ---------------------------------------------------------------------------
+# Verdict buckets (Stage 2): `needs_validation` and `hardening`.
+#
+# Both are mutable (NOT frozen) like `Finding` — see the E6 probe:
+# `pipeline._normalize_known_other_kinds` mutates `sink_kind`/`root_cause_family`
+# in place on `other:*` records, which would raise `FrozenInstanceError` on a
+# frozen dataclass; and `frozen=True` combined with list fields would also
+# break `__hash__` (`TypeError: unhashable type: 'list'`).
+#
+# Neither carries `severity`/`confidence` — that is deliberate, not an
+# oversight: these buckets are explicitly barred from having a severity
+# (Stage 2 decision). `sink_hash` is a `@property`, never a field, for the
+# same reason as `Finding.sink_hash` (single source of truth for identity).
+# Both carry the same six location fields as `Finding.dedup_key` inputs, so
+# `attach_side_records` (P2.2) can index them by `sink_hash` alongside
+# `Finding`/`MergedFinding` without a shared base class.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class NeedsValidation:
+    sink_file: str = ""
+    sink_line: int = 0
+    sink_kind: str = ""
+    enclosing_symbol: str = "unknown"
+    sink_snippet: str = ""
+    root_cause_family: str = ""
+    claimed_root_cause: str = ""
+    trace: str = ""
+    blockers: list[str] = field(default_factory=list)
+    validation_plan_local: str | None = None
+    validation_plan_deployment: str | None = None
+    condition_keys: list[str] = field(default_factory=list)
+    flags: list[str] = field(default_factory=list)
+    raw_body: str = ""
+    source_file: str = ""
+    slice_id: str = ""
+
+    @property
+    def sink_hash(self) -> str:
+        return _sink_hash_from_snippet(self.sink_snippet)
+
+
+@dataclass
+class HardeningNote:
+    sink_file: str = ""
+    sink_line: int = 0
+    sink_kind: str = ""
+    enclosing_symbol: str = "unknown"
+    sink_snippet: str = ""
+    root_cause_family: str = ""
+    text: str = ""
+    condition_keys: list[str] = field(default_factory=list)
+    flags: list[str] = field(default_factory=list)
+    raw_body: str = ""
+    source_file: str = ""
+    slice_id: str = ""
+
+    @property
+    def sink_hash(self) -> str:
+        return _sink_hash_from_snippet(self.sink_snippet)
+
+
+@dataclass
+class ParsedWave:
+    """Return type of `parser.parse_wave` — the three block types a single
+    wave file can now contain, kept apart (never merged into one list) so a
+    caller can treat `confirmed` findings exactly as before Stage 2."""
+
+    findings: list[Finding] = field(default_factory=list)
+    needs_validation: list[NeedsValidation] = field(default_factory=list)
+    hardening: list[HardeningNote] = field(default_factory=list)
