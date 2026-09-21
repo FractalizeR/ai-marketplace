@@ -2,7 +2,7 @@
 # `make` or `make help` lists targets. Codex/OpenCode bundles land in dist/ (gitignored).
 
 .DEFAULT_GOAL := help
-.PHONY: help build-codex build-opencode install-codex install-opencode install-launchers check test-build test-engine
+.PHONY: help build-codex build-opencode install-codex install-opencode install-launchers check test-build test-engine test-triage
 
 REPO := $(CURDIR)
 BINDIR ?= $(HOME)/.local/bin
@@ -32,12 +32,13 @@ install-launchers: ## Install the `frsr` launcher into BINDIR (default ~/.local/
 		*) echo "WARNING: $(BINDIR) is not on PATH — add it to your shell rc" ;; esac
 	@echo "Try: frsr project --harness opencode --dry-run"
 
-check: ## Full local validation gate (3-harness anti-drift + build + engine + plugin validate + leak check)
+check: ## Full local validation gate (3-harness anti-drift + build + engine + triage + plugin validate + leak check)
 	python3 build/build.py --harness=claude   --mode=check
 	python3 build/build.py --harness=opencode --mode=check
 	python3 build/build.py --harness=codex    --mode=check
 	python3 -m unittest discover -s build/tests
 	python3 -m unittest discover -s security-review/bin/tests
+	python3 -m unittest discover -s audit-triage/bin/tests
 	claude plugin validate .
 	scripts/leakcheck.sh --all
 
@@ -46,3 +47,6 @@ test-build: ## Run the build-tooling test suite (fast)
 
 test-engine: ## Run the engine test suite (~1219 tests, ~50s)
 	python3 -m unittest discover -s security-review/bin/tests
+
+test-triage: ## Run the fr-audit-triage bin/ test suite (fast)
+	python3 -m unittest discover -s audit-triage/bin/tests

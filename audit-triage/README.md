@@ -4,7 +4,7 @@ Turns a `fr-security-review` audit's `findings.json` into deduplicated, code-ver
 
 ## Status
 
-**Scaffold + methodology only.** This package ships the plugin manifest, the marketplace entry, the orchestrator command's full methodology, the two worker agent prompts, and the user config schema. The `bin/` Python layer (`parse_findings.py`, `build_index.py`) referenced by `commands/triage-findings.md` is a separate, not-yet-implemented package — until it lands, the command cannot actually run end to end. Treat this plugin as documentation of the intended workflow plus a stable contract surface, not a working tool yet.
+**`bin/` implemented; not yet run live end to end by the orchestrator prompt.** `bin/parse_findings.py` (load/coverage/bundle) and `bin/build_index.py` (INDEX.md + the verdict hand-back) are implemented, stdlib-only, and covered by their own `unittest` suite under `bin/tests/` — including a run against a REAL `findings.json` produced by `fr-security-review`'s own `dedupe_findings.py` CLI, and a real round-trip through that CLI's `--verdicts-in`. What's still open: an actual `/fr-audit-triage:triage-findings` run driven by Claude Code itself (Phases 2/4/6 are LLM judgment work — grouping, verification, adversarial review — that only a live orchestrator run exercises, not a unit test).
 
 ## Claude Code only
 
@@ -36,9 +36,12 @@ security-tickets-<label>/
   <severity>-NN-<slug>.md # tracker-ready units of work
   INDEX.md                # traceability: finding -> unit, per-location verification status, severity history
   .work/
-    verify/<unit>.json    # structured, non-free-text verification metadata per unit
-    verdicts.json          # --verdicts-in payload for fr-security-review, see below
-    TRACKER_DEDUP.md       # only when tracker filing was actually run
+    parsed.json             # Phase 1: parse_findings.py's persisted Record list + findings_json_sha256
+    grouping.json           # Phase 2: {unit_id: [record_id, ...]}, written by the orchestrator
+    bundles/<unit>.md       # Phase 3: parse_findings.py's per-unit bundle (constituent finding bodies)
+    verify/<unit>.json      # structured, non-free-text verification metadata per unit
+    verdicts.json           # --verdicts-in payload for fr-security-review, see below
+    TRACKER_DEDUP.md        # only when tracker filing was actually run
 ```
 
 `security-tickets-*/` and `.work/` describe real vulnerabilities in a real codebase — the command protects them the same way `fr-security-review` protects its own `<review_root>`: a local `.gitignore = *` plus `git ls-files`/`git check-ignore` checks (see `commands/triage-findings.md` Phase 0.3, mirroring `security-review/commands/security-project.md` step 0.5/1).
