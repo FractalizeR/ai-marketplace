@@ -534,53 +534,100 @@ def _grep_files(
 _FLOW_PAIRS_RE = re.compile(r"\{\s*([^}]+?)\s*\}")
 
 
-def _parse_flow_inline_kv(s: str) -> dict[str, str]:
+def _iter_unquoted(s: str):
+    """Yield `(index, char)` for every character of `s` outside a quoted scalar.
+
+    A backslash escapes the next character inside double quotes. Single quotes
+    carry no escape — YAML doubles the quote instead, which closes and reopens
+    in one step and so leaves this scan's parity intact.
+    """
+    quote = ""
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if quote:
+            if quote == '"' and ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+            i += 1
+            continue
+        if ch in "'\"":
+            quote = ch
+            i += 1
+            continue
+        yield i, ch
+        i += 1
+
+
+def _flow_depth_delta(s: str) -> int:
+    """Net `{`/`}` nesting contributed by `s`, ignoring braces inside quotes.
+
+    A counted quoted brace closes a multi-line flow block early, and the rule
+    being accumulated is then dropped entirely rather than mis-parsed.
+    """
+    depth = 0
+    for _, ch in _iter_unquoted(s):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+    return depth
+
+
+def _parse_flow_inline_kv(
+    s: str,
+    anchors: Optional[list[tuple[int, str, str]]] = None,
+    upto_line: int = -1,
+) -> dict[str, str]:
     """Parse `{ key: value, key2: value2 }` flow-style mapping into dict[str,str].
     Values are kept as raw strings (caller normalizes)."""
     inner = s.strip()
     if not (inner.startswith("{") and inner.endswith("}")):
         return {}
     inner = inner[1:-1].strip()
-    out: dict[str, str] = {}
-    # Split on commas not inside brackets and not inside a quoted scalar. The
-    # quote check precedes the bracket branch: a quoted CIDR list such as
-    # '10.0.0.0/8,::1' carries both commas and colons that are literal text,
-    # and splitting it yields a fragment like `::1` whose partition(":") gives
-    # an empty key — which the CONTEXT.md emitter rejects, aborting recon.
+    # Split on commas that are neither inside brackets nor inside a quoted
+    # scalar. A quoted CIDR list such as '10.0.0.0/8,::1' carries commas and
+    # colons that are literal text; splitting it yields a fragment like `::1`
+    # whose partition(":") gives an empty key, which the CONTEXT.md emitter
+    # rejects.
     parts: list[str] = []
     depth = 0
-    quote = ""
-    cur: list[str] = []
-    for ch in inner:
-        if quote:
-            cur.append(ch)
-            if ch == quote:
-                quote = ""
-        elif ch in "'\"":
-            quote = ch
-            cur.append(ch)
-        elif ch in "[{(":
+    last = 0
+    for idx, ch in _iter_unquoted(inner):
+        if ch in "[{(":
             depth += 1
-            cur.append(ch)
         elif ch in "]})":
             depth -= 1
-            cur.append(ch)
         elif ch == "," and depth == 0:
-            parts.append("".join(cur).strip())
-            cur = []
-        else:
-            cur.append(ch)
-    if cur:
-        parts.append("".join(cur).strip())
+            parts.append(inner[last:idx].strip())
+            last = idx + 1
+    tail = inner[last:].strip()
+    if tail:
+        parts.append(tail)
+    out: dict[str, str] = {}
     for p in parts:
         if ":" not in p:
             continue
         k, _, v = p.partition(":")
-        out[k.strip()] = _strip_yaml_quotes(_strip_yaml_anchor(v.strip()))
+        out[k.strip()] = _resolve_yaml_alias(
+            _strip_yaml_quotes(_strip_yaml_anchor(v.strip())), anchors, upto_line
+        )
     return out
 
 
 _YAML_ANCHOR_RE = re.compile(r"^&[A-Za-z0-9_-]+\s+")
+
+_ANCHOR_NAME_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+)
+# An anchor sits at the start of a node value. Requiring that keeps plain text
+# such as `note: R&D internal` from registering `D` as an anchor name.
+_ANCHOR_BOUNDARY_CHARS = frozenset(":,{[-")
+# `|` and `>` open a block scalar whose body is on the following lines; `*`
+# would chain onto another alias. None of the three is a scalar we can carry.
+_NON_SCALAR_STARTS = frozenset("{[|>*&")
 
 
 def _strip_yaml_anchor(s: str) -> str:
@@ -588,9 +635,99 @@ def _strip_yaml_anchor(s: str) -> str:
     return _YAML_ANCHOR_RE.sub("", s, count=1)
 
 
-def _clean_yaml_scalar(raw: str) -> str:
-    """Normalize a block-style scalar: inline comment, anchor, quotes."""
-    return _strip_yaml_quotes(_strip_yaml_anchor(_strip_inline_comment(raw.strip())))
+def _clean_yaml_scalar(
+    raw: str,
+    anchors: Optional[list[tuple[int, str, str]]] = None,
+    upto_line: int = -1,
+) -> str:
+    """Normalize a block-style scalar: inline comment, anchor, quotes, alias."""
+    return _resolve_yaml_alias(
+        _strip_yaml_quotes(_strip_yaml_anchor(_strip_inline_comment(raw.strip()))),
+        anchors,
+        upto_line,
+    )
+
+
+def _collect_yaml_anchors(text: str) -> list[tuple[int, str, str]]:
+    """Every `&name <scalar>` anchor as `(line_index, name, value)`, in order.
+
+    Ordered rather than mapped because YAML binds an alias to the nearest
+    anchor ABOVE it: with the same name defined twice, a map keyed by name
+    would hand the earlier alias the later definition — and for an access rule
+    that can silently widen an address range instead of narrowing it.
+
+    Anchors on a mapping, sequence or block-scalar node carry no scalar to
+    substitute and are left out, so an alias to one stays literal.
+    """
+    anchors: list[tuple[int, str, str]] = []
+    for lineno, raw in enumerate(text.splitlines()):
+        if raw.lstrip().startswith("#"):
+            continue
+        line = _strip_inline_comment(raw)
+        depth = 0
+        prev = ""
+        for i, ch in _iter_unquoted(line):
+            if ch in "{[":
+                depth += 1
+            elif ch in "}]":
+                depth -= 1
+            if ch != "&":
+                if not ch.isspace():
+                    prev = ch
+                continue
+            if prev and prev not in _ANCHOR_BOUNDARY_CHARS:
+                prev = ch
+                continue
+            j = i + 1
+            while j < len(line) and line[j] in _ANCHOR_NAME_CHARS:
+                j += 1
+            name = line[i + 1:j]
+            prev = ch
+            if not name or j >= len(line) or line[j] not in " \t":
+                continue
+            value = _scan_yaml_scalar(line, j, in_flow=depth > 0)
+            if value and value[0] not in _NON_SCALAR_STARTS:
+                anchors.append((lineno, name, _strip_yaml_quotes(value)))
+    return anchors
+
+
+def _scan_yaml_scalar(line: str, start: int, *, in_flow: bool) -> str:
+    """Read one scalar from `line` at `start`.
+
+    Inside a flow collection it ends at the `,`, `}` or `]` that closes it; in
+    block style those are literal text and the scalar runs to end of line —
+    truncating there would hand an alias a narrower value than the anchor.
+    """
+    seg = line[start:]
+    if in_flow:
+        for idx, ch in _iter_unquoted(seg):
+            if ch in ",}]":
+                return seg[:idx].strip()
+    return seg.strip()
+
+
+def _resolve_yaml_alias(
+    value: str,
+    anchors: Optional[list[tuple[int, str, str]]],
+    upto_line: int = -1,
+) -> str:
+    """Substitute a whole-value `*name` alias with its anchor's scalar.
+
+    Only anchors defined at or above `upto_line` are eligible, matching YAML's
+    own rule; a forward reference and an unknown name both stay literal. A
+    wrong value in CONTEXT.md misleads a worker about what a rule allows, while
+    an unresolved `*name` at least reads as unresolved.
+    """
+    if not anchors or not value.startswith("*"):
+        return value
+    name = value[1:]
+    resolved = value
+    for lineno, anchor_name, anchor_value in anchors:
+        if upto_line >= 0 and lineno > upto_line:
+            break
+        if anchor_name == name:
+            resolved = anchor_value
+    return resolved
 
 
 def _strip_yaml_quotes(s: str) -> str:
@@ -1436,6 +1573,9 @@ def _parse_access_control(text: str) -> list[dict[str, str]]:
     if block is None:
         return []
     start_idx, access_indent = block
+    # Anchors are collected from the whole document: an `ips: *internal` rule
+    # routinely aliases an anchor defined in another block (or another rule).
+    anchors = _collect_yaml_anchors(text)
     lines = text.splitlines()
     out: list[dict[str, str]] = []
     cur: dict[str, str] = {}
@@ -1443,7 +1583,8 @@ def _parse_access_control(text: str) -> list[dict[str, str]]:
     # Accumulator for multi-line flow-style blocks (`- {\n...\n}`).
     flow_buf: list[str] = []
     flow_depth = 0  # brace nesting depth (>0 means inside a flow block)
-    for raw in lines[start_idx:]:
+    for offset, raw in enumerate(lines[start_idx:]):
+        lineno = start_idx + offset
         if not raw.strip() or raw.lstrip().startswith("#"):
             continue
         indent = len(raw) - len(raw.lstrip(" "))
@@ -1458,11 +1599,11 @@ def _parse_access_control(text: str) -> list[dict[str, str]]:
         if flow_depth > 0:
             clean = _strip_inline_comment(stripped)
             flow_buf.append(clean)
-            flow_depth += clean.count("{") - clean.count("}")
+            flow_depth += _flow_depth_delta(clean)
             if flow_depth <= 0:
                 # Block closed — join and parse.
                 full = " ".join(flow_buf)
-                parsed = _parse_flow_inline_kv(full)
+                parsed = _parse_flow_inline_kv(full, anchors, lineno)
                 if parsed:
                     out.append(parsed)
                 flow_buf = []
@@ -1474,7 +1615,7 @@ def _parse_access_control(text: str) -> list[dict[str, str]]:
             if cur_active:
                 out.append(cur)
                 cur, cur_active = {}, False
-            parsed = _parse_flow_inline_kv(m.group(1))
+            parsed = _parse_flow_inline_kv(m.group(1), anchors, lineno)
             if parsed:
                 out.append(parsed)
             continue
@@ -1486,10 +1627,10 @@ def _parse_access_control(text: str) -> list[dict[str, str]]:
             tail = _strip_inline_comment(stripped[2:])  # strip leading `- ` + inline comment
             flow_buf = [tail]
             # Count brace depth; `{` opens it, `}` closes it.
-            flow_depth = tail.count("{") - tail.count("}")
+            flow_depth = _flow_depth_delta(tail)
             if flow_depth <= 0:
                 # Edge case: somehow closed on the same line without matching regex.
-                parsed = _parse_flow_inline_kv(" ".join(flow_buf))
+                parsed = _parse_flow_inline_kv(" ".join(flow_buf), anchors, lineno)
                 if parsed:
                     out.append(parsed)
                 flow_buf = []
@@ -1504,11 +1645,11 @@ def _parse_access_control(text: str) -> list[dict[str, str]]:
             kv = stripped[2:]
             if ":" in kv:
                 k, _, v = kv.partition(":")
-                cur[k.strip()] = _clean_yaml_scalar(v)
+                cur[k.strip()] = _clean_yaml_scalar(v, anchors, lineno)
             continue
         if cur_active and ":" in stripped:
             k, _, v = stripped.partition(":")
-            cur[k.strip()] = _clean_yaml_scalar(v)
+            cur[k.strip()] = _clean_yaml_scalar(v, anchors, lineno)
     if cur_active:
         out.append(cur)
     return out

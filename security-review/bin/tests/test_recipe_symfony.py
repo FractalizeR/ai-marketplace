@@ -1387,6 +1387,37 @@ class FlowInlineKvQuotedScalars(unittest.TestCase):
         out = recipe_symfony._parse_flow_inline_kv("{ path: ^/admin, roles: ROLE_ADMIN }")
         self.assertEqual(out, {"path": "^/admin", "roles": "ROLE_ADMIN"})
 
+    def test_escaped_quote_inside_double_quotes_does_not_reopen_the_scalar(self):
+        # Closing on the first `"` flipped the in-string state, so the comma
+        # after it split the value and the next key vanished.
+        out = recipe_symfony._parse_flow_inline_kv(
+            '{ path: "^/a\\"b", roles: ROLE_USER }'
+        )
+        self.assertEqual(out["roles"], "ROLE_USER")
+        self.assertNotIn("", out)
+
+    def test_unclosed_quote_degrades_without_an_empty_key(self):
+        # Malformed input must not reach the CONTEXT.md emitter as an empty
+        # key — that aborts the whole recon rather than one rule.
+        out = recipe_symfony._parse_flow_inline_kv("{ path: '^/a, roles: ROLE_USER }")
+        self.assertNotIn("", out)
+
+    def test_quoted_brace_does_not_close_a_multiline_rule_early(self):
+        # Brace counting was quote-blind, so a `}` inside a quoted value ended
+        # the block mid-rule and the rule disappeared from the inventory.
+        from recon.recipes.symfony import _parse_access_control
+        rules = _parse_access_control(
+            "security:\n"
+            "    access_control:\n"
+            "        - {\n"
+            '            path: "^/api/foo}bar",\n'
+            "            roles: ROLE_USER\n"
+            "          }\n"
+        )
+        self.assertEqual(len(rules), 1)
+        self.assertEqual(rules[0]["path"], "^/api/foo}bar")
+        self.assertEqual(rules[0]["roles"], "ROLE_USER")
+
     def test_block_style_value_drops_the_anchor_too(self):
         # The anchor sits on the value in block style just as often as in flow
         # style; keeping `&name ` would ship the anchor name into CONTEXT.md.
@@ -1400,6 +1431,134 @@ class FlowInlineKvQuotedScalars(unittest.TestCase):
         ac = _parse_access_control(text)
         self.assertEqual(len(ac), 1)
         self.assertEqual(ac[0]["ips"], "127.0.0.0/8,::1,10.0.0.0/8")
+
+
+class YamlAliasResolution(unittest.TestCase):
+    """An `ips: *name` alias used to reach CONTEXT.md as the literal `*name`,
+    so a worker could not tell that a rule restricts the route to internal
+    networks and had no reason to lower the severity it assigned."""
+
+    def _rules(self, text):
+        from recon.recipes.symfony import _parse_access_control
+        return _parse_access_control(text)
+
+    def test_alias_resolves_to_the_anchor_scalar_in_flow_style(self):
+        rules = self._rules(
+            "security:\n"
+            "    access_control:\n"
+            "        - { path: ^/internal, ips: &internal_networks '127.0.0.0/8,::1' }\n"
+            "        - { path: ^/metrics, ips: *internal_networks }\n"
+        )
+        self.assertEqual([r["ips"] for r in rules], ["127.0.0.0/8,::1", "127.0.0.0/8,::1"])
+
+    def test_alias_resolves_in_block_style_too(self):
+        rules = self._rules(
+            "security:\n"
+            "    access_control:\n"
+            "        - { path: ^/internal, ips: &internal_networks '10.0.0.0/8' }\n"
+            "        - path: ^/probe\n"
+            "          ips: *internal_networks\n"
+        )
+        self.assertEqual(rules[1]["ips"], "10.0.0.0/8")
+
+    def test_anchor_defined_outside_access_control_is_visible(self):
+        rules = self._rules(
+            "parameters:\n"
+            "    internal_cidrs: &internal_networks '192.168.0.0/16'\n"
+            "security:\n"
+            "    access_control:\n"
+            "        - { path: ^/metrics, ips: *internal_networks }\n"
+        )
+        self.assertEqual(rules[0]["ips"], "192.168.0.0/16")
+
+    def test_unknown_alias_stays_literal(self):
+        rules = self._rules(
+            "security:\n"
+            "    access_control:\n"
+            "        - { path: ^/metrics, ips: *never_defined }\n"
+        )
+        self.assertEqual(rules[0]["ips"], "*never_defined")
+
+    def test_non_scalar_anchor_is_not_collected(self):
+        # `&name` on a mapping / sequence / block scalar has no scalar to
+        # substitute; resolving it to a fragment or to the block indicator
+        # itself would be worse than leaving the alias visible.
+        from recon.recipes.symfony import _collect_yaml_anchors
+        anchors = _collect_yaml_anchors(
+            "defaults: &shared { roles: ROLE_ADMIN }\n"
+            "list: &items [a, b]\n"
+            "block: &later\n"
+            "    key: value\n"
+            "folded: &note >-\n"
+            "    some text\n"
+            "literal: &body |\n"
+            "    some text\n"
+            "scalar: &cidrs '10.0.0.0/8'\n"
+        )
+        self.assertEqual([(n, v) for _, n, v in anchors], [("cidrs", "10.0.0.0/8")])
+
+    def test_ampersand_inside_a_quoted_scalar_is_not_an_anchor(self):
+        from recon.recipes.symfony import _collect_yaml_anchors
+        self.assertEqual(_collect_yaml_anchors("path: '^/search&sort=asc'\n"), [])
+
+    def test_ampersand_mid_scalar_is_not_an_anchor(self):
+        # `R&D internal` used to register `D` as an anchor named after a word
+        # fragment, which could then shadow a real anchor of the same name.
+        from recon.recipes.symfony import _collect_yaml_anchors
+        self.assertEqual(_collect_yaml_anchors("note: R&D internal\n"), [])
+
+    def test_block_style_anchor_keeps_the_whole_comma_list(self):
+        # Unquoted commas are literal text outside a flow collection. Stopping
+        # at the first one handed the alias a NARROWER range than the anchor —
+        # the direction that makes a worker understate exposure.
+        rules = self._rules(
+            "security:\n"
+            "    access_control:\n"
+            "        - path: ^/internal\n"
+            "          ips: &internal_networks 127.0.0.0/8,10.0.0.0/8\n"
+            "        - { path: ^/metrics, ips: *internal_networks }\n"
+        )
+        self.assertEqual(rules[0]["ips"], "127.0.0.0/8,10.0.0.0/8")
+        self.assertEqual(rules[1]["ips"], "127.0.0.0/8,10.0.0.0/8")
+
+    def test_alias_takes_the_nearest_anchor_above_it(self):
+        # A document-wide map let the LAST definition win, so this alias
+        # resolved to the allow-all range defined below it.
+        rules = self._rules(
+            "security:\n"
+            "    access_control:\n"
+            "        - { path: ^/a, ips: &n '10.0.0.0/8' }\n"
+            "        - { path: ^/b, ips: *n }\n"
+            "        - { path: ^/c, ips: &n '0.0.0.0/0' }\n"
+        )
+        self.assertEqual([r["ips"] for r in rules],
+                         ["10.0.0.0/8", "10.0.0.0/8", "0.0.0.0/0"])
+
+    def test_alias_above_its_anchor_stays_literal(self):
+        rules = self._rules(
+            "security:\n"
+            "    access_control:\n"
+            "        - { path: ^/b, ips: *n }\n"
+            "        - { path: ^/a, ips: &n '10.0.0.0/8' }\n"
+        )
+        self.assertEqual(rules[0]["ips"], "*n")
+
+    def test_alias_resolves_inside_a_multiline_flow_rule(self):
+        rules = self._rules(
+            "security:\n"
+            "    access_control:\n"
+            "        - { path: ^/a, ips: &n '10.0.0.0/8' }\n"
+            "        - {\n"
+            "            path: ^/b,\n"
+            "            ips: *n\n"
+            "          }\n"
+        )
+        self.assertEqual(rules[1]["ips"], "10.0.0.0/8")
+
+    def test_anchor_with_a_trailing_inline_comment(self):
+        from recon.recipes.symfony import _collect_yaml_anchors
+        anchors = _collect_yaml_anchors("    ips: &n '10.0.0.0/8'  # internal only\n")
+        self.assertEqual([(n, v) for _, n, v in anchors], [("n", "10.0.0.0/8")])
 
 
 if __name__ == "__main__":
