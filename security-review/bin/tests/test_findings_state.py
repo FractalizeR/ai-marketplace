@@ -24,6 +24,8 @@ from dedupe.state import (  # noqa: E402
     active_rejections,
     compute_diff,
     load_resolutions,
+    compute_run_id,
+    load_continuation_baseline,
     load_state,
     load_verdicts_in,
     resolutions_from_refuted_findings,
@@ -617,6 +619,220 @@ class LoadVerdictsInTests(unittest.TestCase):
                 out["abcd1234"].evidence_hash,
                 compute_evidence_hash("src/Guard.php", 2, project_root),
             )
+
+
+class ContinuationBaselineTests(unittest.TestCase):
+    """A second dedupe pass over the same wave files re-states one run. Diffing
+    it against the snapshot that run's own first pass wrote made every finding
+    read as recurring and none as new, so the section contradicted the report it
+    sat in."""
+
+    CLI = str(BIN_DIR / "dedupe_findings.py")
+
+    def _wave(self, waves: Path, *, line: int, snippet: str) -> None:
+        from tests.test_dedupe_findings import _mk_finding_md  # type: ignore
+        waves.mkdir(parents=True, exist_ok=True)
+        (waves / "W1.md").write_text(
+            _mk_finding_md(
+                n=1,
+                sink_file="src/Api/Controller.php",
+                sink_line=line,
+                sink_kind="idor_lookup",
+                root_cause_family="authz",
+                enclosing_symbol="Controller::show",
+                sink_snippet=snippet,
+                severity="High",
+                confidence=9,
+            ),
+            encoding="utf-8",
+        )
+
+    def _dedupe(self, review_root: Path, *, refute: Path | None = None) -> str:
+        import subprocess
+        args = [
+            "python3", self.CLI,
+            "--input-glob", str(review_root / "waves" / "*.md"),
+            "--output", str(review_root / "REPORT.md"),
+            "--details-dir", str(review_root / "REPORT"),
+            "--project-root", str(review_root),
+        ]
+        if refute is not None:
+            args += ["--refute", str(refute)]
+        proc = subprocess.run(args, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return (review_root / "REPORT.md").read_text(encoding="utf-8")
+
+    def _empty_refute(self, review_root: Path) -> Path:
+        path = review_root / "refute.md"
+        path.write_text("refute_records: []\n", encoding="utf-8")
+        return path
+
+    def test_refute_pass_of_a_first_run_reports_no_previous_run(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            self._wave(review_root / "waves", line=10, snippet="$id = $req->get('id');")
+            self.assertNotIn("## Diff vs previous run", self._dedupe(review_root))
+            report = self._dedupe(review_root, refute=self._empty_refute(review_root))
+            self.assertNotIn("## Diff vs previous run", report)
+
+    def test_refute_pass_repeats_the_first_passs_diff(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            waves = review_root / "waves"
+            # Run 1 — the genuine previous run.
+            self._wave(waves, line=10, snippet="$id = $req->get('id');")
+            self._dedupe(review_root)
+            # Run 2, first pass — a different sink, so one new and one closed.
+            self._wave(waves, line=77, snippet="$other = $req->get('slug');")
+            first = self._dedupe(review_root)
+            self.assertIn("- New findings (not in previous state): 1", first)
+            self.assertIn("- Recurring (also in previous state): 0", first)
+            self.assertIn("- Closed (in previous state, gone now): 1", first)
+            # Run 2, second pass — same waves, so the same diff, not a self-diff.
+            second = self._dedupe(review_root, refute=self._empty_refute(review_root))
+            self.assertIn("- New findings (not in previous state): 1", second)
+            self.assertIn("- Recurring (also in previous state): 0", second)
+            self.assertIn("- Closed (in previous state, gone now): 1", second)
+
+    def test_plain_rerun_over_the_same_waves_is_a_continuation_too(self):
+        # No flag distinguishes this pass; only the wave files do. A flag-based
+        # signal left exactly this case self-diffing.
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            waves = review_root / "waves"
+            self._wave(waves, line=10, snippet="$id = $req->get('id');")
+            self._dedupe(review_root)
+            self._wave(waves, line=77, snippet="$other = $req->get('slug');")
+            first = self._dedupe(review_root)
+            second = self._dedupe(review_root)
+            self.assertIn("- New findings (not in previous state): 1", second)
+            self.assertIn("- Closed (in previous state, gone now): 1", second)
+            self.assertEqual(
+                first.split("## Diff vs previous run")[1],
+                second.split("## Diff vs previous run")[1],
+            )
+
+    def test_third_and_later_passes_keep_the_same_baseline(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            waves = review_root / "waves"
+            self._wave(waves, line=10, snippet="$id = $req->get('id');")
+            self._dedupe(review_root)
+            self._wave(waves, line=77, snippet="$other = $req->get('slug');")
+            self._dedupe(review_root)
+            refute = self._empty_refute(review_root)
+            self._dedupe(review_root, refute=refute)
+            third = self._dedupe(review_root, refute=refute)
+            self.assertIn("- New findings (not in previous state): 1", third)
+            self.assertIn("- Closed (in previous state, gone now): 1", third)
+
+    def test_a_later_audit_diffs_against_the_latest_findings(self):
+        # New wave content is a new run, so the carried baseline must not leak
+        # past the run that owns it.
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            waves = review_root / "waves"
+            self._wave(waves, line=10, snippet="$id = $req->get('id');")
+            self._dedupe(review_root)
+            self._dedupe(review_root, refute=self._empty_refute(review_root))
+            self._wave(waves, line=10, snippet="$id = $req->get('id'); // reworded")
+            report = self._dedupe(review_root)
+            self.assertIn("- New findings (not in previous state): 1", report)
+            self.assertIn("- Closed (in previous state, gone now): 1", report)
+
+
+class RunIdentityTests(unittest.TestCase):
+    """`run_id` is what tells a re-statement of one run from a fresh audit."""
+
+    def _waves(self, root: Path, bodies: dict[str, str]) -> list[Path]:
+        root.mkdir(parents=True, exist_ok=True)
+        out = []
+        for name, body in bodies.items():
+            path = root / name
+            path.write_text(body, encoding="utf-8")
+            out.append(path)
+        return out
+
+    def test_same_files_same_id_regardless_of_argument_order(self):
+        with tempfile.TemporaryDirectory() as td:
+            paths = self._waves(Path(td), {"W1.md": "a", "W2.md": "b"})
+            self.assertEqual(compute_run_id(paths), compute_run_id(list(reversed(paths))))
+
+    def test_changed_content_changes_the_id(self):
+        with tempfile.TemporaryDirectory() as td:
+            paths = self._waves(Path(td), {"W1.md": "a"})
+            before = compute_run_id(paths)
+            paths[0].write_text("a2", encoding="utf-8")
+            self.assertNotEqual(before, compute_run_id(paths))
+
+    def test_added_or_removed_wave_changes_the_id(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            one = compute_run_id(self._waves(root, {"W1.md": "a"}))
+            two = compute_run_id(self._waves(root, {"W1.md": "a", "W2.md": "b"}))
+            self.assertNotEqual(one, two)
+
+    def test_empty_input_never_matches_a_recorded_id(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            save_state([], review_root, baseline=None, run_id="")
+            self.assertEqual(compute_run_id([]), "")
+            self.assertEqual(load_continuation_baseline(review_root, ""), (False, None))
+
+
+class ContinuationBaselineUnitTests(unittest.TestCase):
+    RUN = "0123456789abcdef"
+
+    def _snapshot(self):
+        return [FindingSnapshot("abcd1234", "src/A.php", 10, "idor_lookup", "High", "A")]
+
+    def test_state_without_the_new_keys_is_not_a_continuation(self):
+        # A file written by a build that predates `baseline`/`run_id`: falling
+        # back is right, claiming "no previous run" would erase real history.
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            save_state(self._snapshot(), review_root)
+            payload = json.loads((review_root / STATE_FILENAME).read_text(encoding="utf-8"))
+            del payload["baseline"]
+            del payload["run_id"]
+            (review_root / STATE_FILENAME).write_text(json.dumps(payload), encoding="utf-8")
+            self.assertEqual(load_continuation_baseline(review_root, self.RUN), (False, None))
+
+    def test_recorded_null_baseline_is_distinct_from_an_absent_one(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            save_state([], review_root, baseline=None, run_id=self.RUN)
+            self.assertEqual(load_continuation_baseline(review_root, self.RUN), (True, None))
+
+    def test_a_different_run_id_is_not_a_continuation(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            save_state([], review_root, baseline=self._snapshot(), run_id=self.RUN)
+            self.assertEqual(load_continuation_baseline(review_root, "ffff"), (False, None))
+
+    def test_malformed_baseline_falls_back_instead_of_reading_as_empty(self):
+        # `(True, [])` here would call every finding New on a half-written file.
+        for broken in (42, "x", {"a": 1}):
+            with tempfile.TemporaryDirectory() as td:
+                review_root = Path(td)
+                save_state([], review_root, baseline=self._snapshot(), run_id=self.RUN)
+                payload = json.loads((review_root / STATE_FILENAME).read_text(encoding="utf-8"))
+                payload["baseline"] = broken
+                (review_root / STATE_FILENAME).write_text(json.dumps(payload), encoding="utf-8")
+                self.assertEqual(
+                    load_continuation_baseline(review_root, self.RUN), (False, None),
+                    msg=f"baseline={broken!r}",
+                )
+
+    def test_schema_version_stays_readable_by_a_build_without_these_keys(self):
+        # Moving the version would make such a build reject the whole file and
+        # reset `resolutions`, the one accumulated part of this state.
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            save_state(self._snapshot(), review_root, baseline=None, run_id=self.RUN)
+            payload = json.loads((review_root / STATE_FILENAME).read_text(encoding="utf-8"))
+            self.assertIn(payload["schema_version"], (1, 2))
+
 
 
 if __name__ == "__main__":

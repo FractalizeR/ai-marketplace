@@ -52,6 +52,8 @@ from dedupe.state import (  # noqa: E402
     VerdictsInError,
     active_rejections,
     compute_diff,
+    compute_run_id,
+    load_continuation_baseline,
     load_resolutions,
     load_state,
     load_verdicts_in,
@@ -380,12 +382,22 @@ def main(argv: list[str] | None = None) -> int:
     # When --no-state is passed (or output happens to lack a parent on weird
     # invocations) we skip the load/save round-trip entirely.
     #
+    # A second pass over the SAME wave files — the refute pass, an imported-
+    # verdicts pass, a plain re-render — re-states one run rather than taking a
+    # fresh look at the code. Diffing it against the state its own first pass
+    # just wrote would report every finding as recurring and none as new, so it
+    # inherits that pass's baseline and persists it unchanged. Sameness is
+    # decided by the wave files themselves, not by which flags were passed.
     snapshots = snapshots_from(merged, manual)
     diff = None
+    baseline = None
+    run_id = compute_run_id(paths)
     state_usable = not args.no_state and str(review_root) not in ("", ".")
     if state_usable:
-        previous = load_state(review_root)
-        diff = compute_diff(previous, snapshots)
+        continuation, baseline = load_continuation_baseline(review_root, run_id)
+        if not continuation:
+            baseline = load_state(review_root)
+        diff = compute_diff(baseline, snapshots)
 
     # Cross-run resolution memory (Stage 2 / P2.5): REMEMBERED rejections from
     # prior runs (adversarial refute and/or --verdicts-in) that still hold —
@@ -466,7 +478,7 @@ def main(argv: list[str] | None = None) -> int:
             side_records.unmatched_hardening,
         )
         if state_usable:
-            save_state(snapshots, review_root, resolutions=new_resolutions)
+            save_state(snapshots, review_root, resolutions=new_resolutions, baseline=baseline, run_id=run_id)
         print(
             f"Wrote {args.output} "
             f"({len(merged)} merged, {len(manual)} manual, "
@@ -501,7 +513,7 @@ def main(argv: list[str] | None = None) -> int:
         side_records.unmatched_hardening,
     )
     if state_usable:
-        save_state(snapshots, review_root, resolutions=new_resolutions)
+        save_state(snapshots, review_root, resolutions=new_resolutions, baseline=baseline, run_id=run_id)
     print(
         f"Wrote {args.output} + {len(written) - 1} detail file(s) in {details_dir} "
         f"({len(merged)} merged, {len(manual)} manual, "

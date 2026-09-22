@@ -4,6 +4,17 @@ All notable changes to this plugin will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`access_control` parsing no longer aborts the whole audit.** The flow-mapping splitter in `bin/recon/recipes/symfony.py` counted brackets but not quotes, so a quoted CIDR list (`ips: '127.0.0.0/8,::1,10.0.0.0/8'`) was cut into fragments and `::1` became an empty key — which `bin/recon/yaml_emit.py` rejects, failing recon and with it the run. Quote handling is now shared by every layer that scans this text: comma splitting, brace nesting in a multi-line `- { … }` rule (a quoted `}` used to end the rule early and drop it), and escaped quotes inside double-quoted scalars.
+- **One unmodelled YAML construct no longer costs the whole recon.** Rules parsed out of `security.yaml` are filtered against the CONTEXT.md emitter's key contract before they reach it, so a merge key (`<<: *common`) or any other construct the line parser does not model costs that key and a warning instead of the entire inventory.
+- **YAML anchors and aliases in `access_control`.** A leading `&name` is stripped from the value instead of being carried into CONTEXT.md, and a whole-value `*name` alias resolves to its anchor's scalar. Resolution is positional — only anchors defined above the alias are eligible — so a name redefined later in the file cannot widen an address range a worker reads. Anchors on mapping / sequence / block-scalar nodes are not collected, and an unresolved alias stays literal rather than becoming a wrong value.
+- **`.claude/` is excluded from the extractor walk.** A coding agent's git worktree parked under `.claude/worktrees/` was read as a second copy of the project tree, doubling every inventory counter and tripping the recon sanity gate. The Python and PHP copies of `DEFAULT_EXCLUDE` are now checked against each other by a test rather than by a comment.
+- **`## Diff vs previous run` no longer diffs a run against itself.** The dedupe pass that follows adversarial refute (and any other re-render over the same wave files) reported every finding as recurring, because it compared against the snapshot the run's own first pass had just written. A run is now identified by its wave files, and a pass over the same ones inherits the baseline of the first instead of rotating it. `.findings_state.json` gains `baseline` and `run_id` as additive keys — the schema version deliberately does not move, so a rollback to an earlier build still reads the file and keeps the accumulated `resolutions` journal.
+- **`console_gap_reason` distinguishes an operator's choice from an unresolved runner.** The Codex orchestrator templates passed `--no-console` when a containerized project supplied no `--console-cmd`, so the recorded reason read as `console_disabled_by_flag` although no flag had been passed; they now pass no flag, as the OpenCode templates already did, and the utility records `env_runner_unknown: containerized project …`. REPORT.md additionally spells the flag reason out in prose.
+
 ## [4.3.0] — 2026-09-21
 
 ### Verdict buckets, `findings.json`, cross-run memory
