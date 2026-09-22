@@ -94,6 +94,16 @@ def collect_input_paths(inputs: list[str], input_glob: str | None) -> list[Path]
     return sorted(set(paths))
 
 
+# The bare tokens recon writes into `console_gap_reason` read, in a report, as
+# if the tool had made the call. Naming who asked keeps a reader from filing an
+# operator's deliberate static-only run as a defect (and vice versa).
+_GAP_REASON_PROSE = {
+    "console_disabled_by_flag": (
+        "console_disabled_by_flag (--no-console was passed; static-only run requested)"
+    ),
+}
+
+
 def read_coverage_gaps(review_root: Path) -> list[str]:
     """Best-effort: surface recon-level coverage gaps from <review_root>/CONTEXT.md.
 
@@ -118,6 +128,7 @@ def read_coverage_gaps(review_root: Path) -> list[str]:
     if not isinstance(env, dict) or not env.get("console_gap"):
         return []
     reason = env.get("console_gap_reason") or "console enrichment not performed"
+    reason = _GAP_REASON_PROSE.get(reason, reason)
     mode = env.get("console_mode", "disabled")
     return [
         f"Console enrichment not performed (console_mode={mode}): {reason}. "
@@ -368,6 +379,7 @@ def main(argv: list[str] | None = None) -> int:
     # Cross-run diff: load previous state from <review_root> = output.parent.
     # When --no-state is passed (or output happens to lack a parent on weird
     # invocations) we skip the load/save round-trip entirely.
+    #
     snapshots = snapshots_from(merged, manual)
     diff = None
     state_usable = not args.no_state and str(review_root) not in ("", ".")

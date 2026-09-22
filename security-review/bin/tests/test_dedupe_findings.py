@@ -1506,6 +1506,21 @@ class CoverageGapsTests(unittest.TestCase):
         self.assertIn("Console enrichment not performed", gaps[0])
         self.assertIn("env_runner_unknown", gaps[0])
 
+    def test_flag_reason_says_who_asked_for_the_static_only_run(self):
+        # The bare token reads as if the tool decided; a report reader has to
+        # be able to tell an operator's deliberate choice from a tool's
+        # inability to resolve a runner.
+        rr = Path(tempfile.mkdtemp())
+        (rr / "CONTEXT.md").write_text(
+            _CONTEXT_WITH_GAP.replace(
+                'console_gap_reason: "env_runner_unknown: containerized project"',
+                "console_gap_reason: console_disabled_by_flag",
+            ),
+            encoding="utf-8",
+        )
+        gaps = dff.read_coverage_gaps(rr)
+        self.assertIn("--no-console was passed", gaps[0])
+
     def test_read_coverage_gaps_empty_when_no_gap(self):
         rr = Path(tempfile.mkdtemp())
         (rr / "CONTEXT.md").write_text(_CONTEXT_NO_GAP, encoding="utf-8")

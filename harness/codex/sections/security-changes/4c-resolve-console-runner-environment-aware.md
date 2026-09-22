@@ -11,7 +11,7 @@ Skip this whole step when **any** holds:
 
 Otherwise:
 
-1. Detect the recipe: `python3 ${FR_SECURITY_CORE_ROOT}/bin/recon_inventory.py "<PROJECT_ROOT>" --detect`. Console enrichment applies to **Symfony** only — for other recipes proceed with `CONSOLE_MODE = off`.
+1. Detect the recipe: `python3 ${FR_SECURITY_CORE_ROOT}/bin/recon_inventory.py "<PROJECT_ROOT>" --detect`. Console enrichment applies to **Symfony** only — for other recipes proceed with `CONSOLE_MODE = auto` (the recipe declares no console entrypoint, so the utility records console enrichment as N/A rather than as a gap).
 2. Probe (read-only, safe even for untrusted repos):
 
    ```bash
@@ -20,7 +20,7 @@ Otherwise:
 
    It prints JSON: `{containerized, container_signals, host_php_present, host_php_version, suggested_php_service, suggestions:[{mode, cmd_template, label, source, detail}], reason}`.
 3. If `containerized == false` AND `host_php_present == true` → the host is a faithful runner; set `CONSOLE_MODE = auto` (the recon utility auto-selects the host).
-4. Otherwise (containerized, or no host php) → there is no flag to disambiguate and no way to prompt, so **do not run a repo-derived command speculatively**. Set `CONSOLE_MODE = off`; the recon utility records a loud `console_gap` (ceiling=medium) in CONTEXT.md, which `dedupe_findings.py` surfaces as a `## Coverage Gaps` section in REPORT.md. To enable container/Makefile enrichment on Codex, re-run with `frsr --console-cmd "docker compose exec -T <php-service> php bin/console"` (or a Makefile passthrough `frsr --console-cmd "make console CMD={args}"`) — it exports `FR_SECURITY_CONSOLE_CMD` so the space-containing template survives; for an explicit static-only run, pass `--no-console`.
+4. Otherwise (containerized, or no host php) → there is no flag to disambiguate and no way to prompt, so **do not run a repo-derived command speculatively**. Set `CONSOLE_MODE = auto`; passing `--no-console` here would be a lie about who made the choice — the utility would file the gap as the operator's explicit static-only request. With no flag it records a loud `console_gap` of its own (ceiling=medium) in CONTEXT.md, which `dedupe_findings.py` surfaces as a `## Coverage Gaps` section in REPORT.md. To enable container/Makefile enrichment on Codex, re-run with `frsr --console-cmd "docker compose exec -T <php-service> php bin/console"` (or a Makefile passthrough `frsr --console-cmd "make console CMD={args}"`) — it exports `FR_SECURITY_CONSOLE_CMD` so the space-containing template survives; for an explicit static-only run, pass `--no-console`.
 5. Forward `CONSOLE_MODE` (`off` | `auto` | `env` | a container/Makefile command) to the recon worker in step 5.
 
 > The choice is always deterministic on Codex. For a containerized project, `frsr --console-cmd "<template>"` (→ `FR_SECURITY_CONSOLE_CMD`, `CONSOLE_MODE = env`) is the space-safe way to enable console enrichment; with no console command set, the run proceeds static-only with a recorded `console_gap` (ceiling=medium) — the safe default.
