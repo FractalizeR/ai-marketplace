@@ -67,7 +67,7 @@ if (!defined('T_ATTRIBUTE')) { define('T_ATTRIBUTE', -1006); }
 const DEFAULT_EXCLUDE = [
     'vendor', 'var/cache', 'var/log', 'node_modules',
     'storage/framework/cache', 'storage/logs', 'bootstrap/cache',
-    'public/build', '.git',
+    'public/build', '.git', '.claude',
 ];
 const DEFAULT_MAX_FILE_SIZE = 2097152; // 2 MiB
 

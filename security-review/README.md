@@ -135,7 +135,7 @@ What `--project-root` affects:
 
 ## Project-specific exclusions
 
-In addition to the built-in safe defaults (`vendor/`, `var/cache/`, `var/log/`, `node_modules/`, `storage/framework/cache/`, `storage/logs/`, `bootstrap/cache/`, `public/build/`, `.git/`), which the PHP extractor skips *before* parsing, you can exclude additional directories:
+In addition to the built-in safe defaults (`vendor/`, `var/cache/`, `var/log/`, `node_modules/`, `storage/framework/cache/`, `storage/logs/`, `bootstrap/cache/`, `public/build/`, `.git/`, `.claude/`), which the PHP extractor skips *before* parsing, you can exclude additional directories:
 
 - **`CLAUDE.md`** — the recommended way for recurring project-level conditions. Before running recon, the orchestrator reads CLAUDE.md from both `<cwd>` and `<PROJECT_ROOT>` (for composite repos these are different files) and automatically extracts path prefixes from the `## Code review exclusions` section (or its equivalent). It is not parsed by regex — Claude reads it naturally. **All paths are `PROJECT_ROOT`-relative**; entries that don't resolve inside `PROJECT_ROOT` are skipped with a warning. Recommended format:
 

@@ -19,6 +19,12 @@ from typing import Any, Optional
 
 # Default vendor-exclude paths for grep / extractor sources (rev 3.5).
 # Note: `var/` is symfony-specific (cache+logs). Generic recipe drops it.
+#
+# This list deliberately does NOT carry `.git` / `.claude` the way
+# `sandbox.DEFAULT_EXCLUDE` does, because every consumer walks from a declared
+# subtree (`PHP_SCAN_ROOTS`, `config/`, `src/**` sanity globs) rather than from
+# project_root, so those dirs are unreachable here. A recipe that scans from the
+# project root would break that invariant and must add them.
 EXCLUDE_PATHS: tuple[str, ...] = (
     "vendor/", "var/", "node_modules/", "tests/", "test/", "Tests/", "Test/", "*.min.js",
 )

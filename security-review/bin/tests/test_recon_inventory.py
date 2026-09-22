@@ -413,6 +413,26 @@ class RunExtractorForwardsExclude(unittest.TestCase):
             self.assertIn("App\\Real", fqns)
             self.assertNotIn("Vendor\\X", fqns)
 
+    def test_default_exclude_drops_nested_agent_worktree(self):
+        # A coding agent may park a full git worktree of the project under
+        # .claude/worktrees/<name>/. Without the exclusion the extractor walks
+        # that copy too and reports every class twice, which doubles the
+        # inventory counters and trips the recon sanity gate.
+        with tempfile.TemporaryDirectory() as td:
+            proj = self._project(Path(td))
+            copy_root = proj / ".claude" / "worktrees" / "wt1" / "app"
+            copy_root.mkdir(parents=True)
+            (copy_root / "Real.php").write_text(
+                "<?php\nnamespace App;\nclass Real {}\n"
+            )
+            out, warn = self.sandbox.run_extractor(
+                PLUGIN_ROOT, proj, "class", proj,
+            )
+            self.assertIsNone(warn, msg=warn)
+            fqns = [i["fqn"] for i in out["items"]]
+            self.assertEqual(fqns.count("App\\Real"), 1)
+            self.assertFalse([f for f in out["items"] if ".claude" in f["file"]])
+
     def test_user_extra_exclude_appended(self):
         with tempfile.TemporaryDirectory() as td:
             proj = self._project(Path(td))
@@ -441,6 +461,22 @@ class RunExtractorForwardsExclude(unittest.TestCase):
             fqns = {i["fqn"] for i in out["items"]}
             self.assertIn("App\\Real", fqns)
             self.assertNotIn("App\\Huge", fqns)
+
+
+class DefaultExcludePythonPhpParity(unittest.TestCase):
+    """sandbox.DEFAULT_EXCLUDE and the PHP extractor's own fallback list carry
+    a "keep aligned" comment each. Divergence is silent — a manual run of the
+    extractor would then scan a subtree the production path skips — so the
+    alignment is asserted rather than trusted."""
+
+    def test_php_fallback_list_matches_the_python_tuple(self):
+        sys.path.insert(0, str(BIN_DIR))
+        from recon import sandbox
+        php_src = (BIN_DIR / "recon" / "extract_php_metadata.php").read_text(encoding="utf-8")
+        m = re.search(r"const DEFAULT_EXCLUDE = \[(.*?)\];", php_src, re.S)
+        self.assertIsNotNone(m, "const DEFAULT_EXCLUDE not found in the extractor")
+        php_entries = tuple(re.findall(r"'([^']*)'", m.group(1)))
+        self.assertEqual(php_entries, sandbox.DEFAULT_EXCLUDE)
 
 
 if __name__ == "__main__":

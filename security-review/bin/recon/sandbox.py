@@ -60,6 +60,13 @@ DEFAULT_EXCLUDE: tuple[str, ...] = (
     "bootstrap/cache",
     "public/build",
     ".git",
+    # The whole tree, not just .claude/worktrees/: it is agent scratch space
+    # by convention, never application source. The observed failure was a
+    # coding agent's git worktree parked under .claude/worktrees/, which the
+    # extractor counted as a second copy of every class — doubling every
+    # inventory counter and tripping the recon sanity gate. Note there is no
+    # way to un-exclude a DEFAULT_EXCLUDE entry: `--exclude` only appends.
+    ".claude",
 )
 
 # Default per-file size cap. Files larger than this are skipped by the
