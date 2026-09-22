@@ -135,8 +135,18 @@ _RESERVED = frozenset({"true", "false", "yes", "no", "on", "off", "null", "~"})
 _SPECIAL_CHARS = frozenset(":#[]{},&*!|>%@`")
 
 
+def is_valid_key(k: Any) -> bool:
+    """Whether `k` may be emitted as a mapping key.
+
+    Public so a producer that builds keys from free text can drop what this
+    module would refuse, instead of letting one unexpected construct raise and
+    take the whole CONTEXT.md — and the audit — with it.
+    """
+    return isinstance(k, str) and bool(_KEY_RE.match(k))
+
+
 def _validate_key(k: Any) -> None:
-    if not isinstance(k, str) or not _KEY_RE.match(k):
+    if not is_valid_key(k):
         raise ValueError(f"Invalid YAML subset key: {k!r} (must match /^[A-Za-z_][A-Za-z0-9_-]*$/)")
 
 

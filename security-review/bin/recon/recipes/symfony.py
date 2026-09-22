@@ -39,6 +39,7 @@ from recon.types import (
     StackMatch,
 )
 from recon.graphql_detect import detect_graphql
+from recon import yaml_emit
 
 
 RECIPE_NAME = "symfony"
@@ -1282,8 +1283,10 @@ def collect_auth_layer_and_firewalls(
         )
     rel = sec_file.relative_to(project_root).as_posix()
 
-    firewalls = _parse_firewalls(text)
-    access_control = _parse_access_control(text)
+    firewalls = _drop_unemittable_keys(_parse_firewalls(text), rel_hint="firewalls",
+                                       warnings=warnings)
+    access_control = _drop_unemittable_keys(_parse_access_control(text),
+                                            rel_hint="access_control", warnings=warnings)
     has_jwt = bool(re.search(r"jwt|lexik_jwt", text, re.I))
     has_oauth = bool(re.search(r"oauth|knpu/oauth2", text, re.I))
     stateless = any(fw.get("stateless") == "true" for fw in firewalls)
@@ -1517,6 +1520,32 @@ def _enter_nested_block(text: str, path: tuple[str, ...]) -> Optional[tuple[int,
                 if cursor == len(path):
                     return (i + 1, indent)
     return None
+
+
+def _drop_unemittable_keys(
+    rules: list[dict[str, str]], *, rel_hint: str, warnings: list[str]
+) -> list[dict[str, str]]:
+    """Drop keys the CONTEXT.md emitter would refuse, recording each one.
+
+    These parsers build keys by splitting free text on the first `:`, so any
+    YAML construct they do not model — a merge key `<<`, a quoted key, a
+    complex key — reaches the emitter as an invalid key and raises there. That
+    aborts recon, and with it the audit, over one rule the recipe simply did
+    not understand. Costing one key instead keeps the blast radius local, and
+    the warning keeps the loss visible in CONTEXT.md.
+    """
+    out: list[dict[str, str]] = []
+    for rule in rules:
+        clean = {k: v for k, v in rule.items() if yaml_emit.is_valid_key(k)}
+        for dropped in rule:
+            if not yaml_emit.is_valid_key(dropped):
+                warnings.append(
+                    f"security.yaml {rel_hint}: unsupported key {dropped!r} dropped "
+                    "(not representable in CONTEXT.md)"
+                )
+        if clean:
+            out.append(clean)
+    return out
 
 
 def _parse_firewalls(text: str) -> list[dict[str, str]]:

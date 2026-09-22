@@ -1433,6 +1433,51 @@ class FlowInlineKvQuotedScalars(unittest.TestCase):
         self.assertEqual(ac[0]["ips"], "127.0.0.0/8,::1,10.0.0.0/8")
 
 
+class UnemittableKeysAreDroppedNotFatal(unittest.TestCase):
+    """The rule parsers split free text on the first `:`, so a YAML construct
+    they do not model produces a key the CONTEXT.md emitter refuses — and the
+    refusal used to abort recon, and with it the whole audit, over one rule."""
+
+    def test_merge_key_costs_one_key_not_the_whole_recon(self):
+        from recon.recipes.symfony import _drop_unemittable_keys, _parse_access_control
+        from recon.yaml_emit import dump_yaml_subset
+        rules = _parse_access_control(
+            "security:\n"
+            "    access_control:\n"
+            "        - path: ^/admin\n"
+            "          <<: *common\n"
+            "          roles: ROLE_ADMIN\n"
+        )
+        self.assertIn("<<", rules[0])
+        with self.assertRaises(ValueError):
+            dump_yaml_subset({"access_control": rules})
+
+        warnings = []
+        clean = _drop_unemittable_keys(rules, rel_hint="access_control", warnings=warnings)
+        self.assertEqual(clean, [{"path": "^/admin", "roles": "ROLE_ADMIN"}])
+        self.assertTrue(dump_yaml_subset({"access_control": clean}))
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("<<", warnings[0])
+
+    def test_rule_left_with_no_usable_key_is_dropped_whole(self):
+        from recon.recipes.symfony import _drop_unemittable_keys
+        warnings = []
+        self.assertEqual(
+            _drop_unemittable_keys([{"": ":1"}], rel_hint="access_control", warnings=warnings),
+            [],
+        )
+        self.assertEqual(len(warnings), 1)
+
+    def test_valid_rules_pass_through_untouched(self):
+        from recon.recipes.symfony import _drop_unemittable_keys
+        warnings = []
+        rules = [{"path": "^/admin", "roles": "ROLE_ADMIN"}]
+        self.assertEqual(
+            _drop_unemittable_keys(rules, rel_hint="access_control", warnings=warnings), rules
+        )
+        self.assertEqual(warnings, [])
+
+
 class YamlAliasResolution(unittest.TestCase):
     """An `ips: *name` alias used to reach CONTEXT.md as the literal `*name`,
     so a worker could not tell that a rule restricts the route to internal
