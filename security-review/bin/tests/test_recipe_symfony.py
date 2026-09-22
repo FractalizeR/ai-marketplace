@@ -1358,5 +1358,49 @@ class ConsoleRouteFileResolution(unittest.TestCase):
         )
 
 
+class FlowInlineKvQuotedScalars(unittest.TestCase):
+    """A quoted scalar inside a flow mapping carries literal commas and colons.
+    Splitting it produced an empty key, which the CONTEXT.md emitter rejects —
+    recon aborted on any project whose access_control lists CIDRs inline."""
+
+    def test_quoted_comma_list_with_ipv6_loopback_and_anchor(self):
+        line = (
+            "{ path: '^/monitor/health', roles: PUBLIC_ACCESS, "
+            "ips: &internal_networks '127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16' }"
+        )
+        out = recipe_symfony._parse_flow_inline_kv(line)
+        self.assertNotIn("", out)
+        self.assertEqual(out["path"], "^/monitor/health")
+        self.assertEqual(out["roles"], "PUBLIC_ACCESS")
+        self.assertEqual(
+            out["ips"], "127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+        )
+
+    def test_quoted_env_placeholder_keeps_parens_balanced(self):
+        line = "{ path: ^/api/v1/callback, ips: '%env(INTERNAL_API_ALLOWED_CIDRS)%', roles: ROLE_SERVICE }"
+        out = recipe_symfony._parse_flow_inline_kv(line)
+        self.assertNotIn("", out)
+        self.assertEqual(out["ips"], "%env(INTERNAL_API_ALLOWED_CIDRS)%")
+        self.assertEqual(out["roles"], "ROLE_SERVICE")
+
+    def test_unquoted_entries_unchanged(self):
+        out = recipe_symfony._parse_flow_inline_kv("{ path: ^/admin, roles: ROLE_ADMIN }")
+        self.assertEqual(out, {"path": "^/admin", "roles": "ROLE_ADMIN"})
+
+    def test_block_style_value_drops_the_anchor_too(self):
+        # The anchor sits on the value in block style just as often as in flow
+        # style; keeping `&name ` would ship the anchor name into CONTEXT.md.
+        from recon.recipes.symfony import _parse_access_control
+        text = (
+            "security:\n"
+            "    access_control:\n"
+            "        - path: ^/internal\n"
+            "          ips: &internal_networks '127.0.0.0/8,::1,10.0.0.0/8'\n"
+        )
+        ac = _parse_access_control(text)
+        self.assertEqual(len(ac), 1)
+        self.assertEqual(ac[0]["ips"], "127.0.0.0/8,::1,10.0.0.0/8")
+
+
 if __name__ == "__main__":
     unittest.main()

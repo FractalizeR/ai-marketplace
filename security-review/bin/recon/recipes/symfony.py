@@ -542,12 +542,24 @@ def _parse_flow_inline_kv(s: str) -> dict[str, str]:
         return {}
     inner = inner[1:-1].strip()
     out: dict[str, str] = {}
-    # Split on commas not inside brackets.
+    # Split on commas not inside brackets and not inside a quoted scalar. The
+    # quote check precedes the bracket branch: a quoted CIDR list such as
+    # '10.0.0.0/8,::1' carries both commas and colons that are literal text,
+    # and splitting it yields a fragment like `::1` whose partition(":") gives
+    # an empty key — which the CONTEXT.md emitter rejects, aborting recon.
     parts: list[str] = []
     depth = 0
+    quote = ""
     cur: list[str] = []
     for ch in inner:
-        if ch in "[{(":
+        if quote:
+            cur.append(ch)
+            if ch == quote:
+                quote = ""
+        elif ch in "'\"":
+            quote = ch
+            cur.append(ch)
+        elif ch in "[{(":
             depth += 1
             cur.append(ch)
         elif ch in "]})":
@@ -564,8 +576,21 @@ def _parse_flow_inline_kv(s: str) -> dict[str, str]:
         if ":" not in p:
             continue
         k, _, v = p.partition(":")
-        out[k.strip()] = _strip_yaml_quotes(v.strip())
+        out[k.strip()] = _strip_yaml_quotes(_strip_yaml_anchor(v.strip()))
     return out
+
+
+_YAML_ANCHOR_RE = re.compile(r"^&[A-Za-z0-9_-]+\s+")
+
+
+def _strip_yaml_anchor(s: str) -> str:
+    """Drop a leading `&name ` anchor so the value, not the anchor, is kept."""
+    return _YAML_ANCHOR_RE.sub("", s, count=1)
+
+
+def _clean_yaml_scalar(raw: str) -> str:
+    """Normalize a block-style scalar: inline comment, anchor, quotes."""
+    return _strip_yaml_quotes(_strip_yaml_anchor(_strip_inline_comment(raw.strip())))
 
 
 def _strip_yaml_quotes(s: str) -> str:
@@ -1479,11 +1504,11 @@ def _parse_access_control(text: str) -> list[dict[str, str]]:
             kv = stripped[2:]
             if ":" in kv:
                 k, _, v = kv.partition(":")
-                cur[k.strip()] = _strip_yaml_quotes(_strip_inline_comment(v.strip()))
+                cur[k.strip()] = _clean_yaml_scalar(v)
             continue
         if cur_active and ":" in stripped:
             k, _, v = stripped.partition(":")
-            cur[k.strip()] = _strip_yaml_quotes(_strip_inline_comment(v.strip()))
+            cur[k.strip()] = _clean_yaml_scalar(v)
     if cur_active:
         out.append(cur)
     return out
