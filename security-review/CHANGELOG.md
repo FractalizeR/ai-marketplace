@@ -4,7 +4,11 @@ All notable changes to this plugin will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [4.4.0] — 2026-09-23
+
+### Recon survives the configs it did not model; bucket records find their finding
+
+Six defects surfaced by a live control run, none of them introduced by the verdict-bucket work they were found alongside. Four of them ended an audit or silently narrowed what a worker was told; two made a report say something that was not true.
 
 ### Changed
 

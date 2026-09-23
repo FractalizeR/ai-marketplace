@@ -14,10 +14,10 @@ All commands are run from the repo root unless stated otherwise.
 
 ### Tests
 
-The plugin's Python pipeline is covered by a stdlib-only `unittest` suite (~1372 tests, no third-party deps, no `pytest.ini`).
+The plugin's Python pipeline is covered by a stdlib-only `unittest` suite (~1434 tests, no third-party deps, no `pytest.ini`).
 
 ```bash
-# Full engine suite (~1372 tests, ~50 seconds)
+# Full engine suite (~1434 tests, ~50 seconds)
 python3 -m unittest discover -s security-review/bin/tests
 
 # Build tooling suite (fast; multi-environment build, see below)
@@ -47,7 +47,7 @@ python3 build/build.py --harness=claude   --mode=check   # byte-identity anti-dr
 python3 build/build.py --harness=opencode --mode=check   # OpenCode structural gates
 python3 build/build.py --harness=codex    --mode=check   # Codex structural gates
 python3 -m unittest discover -s build/tests              # build tooling suite (~251, fast)
-python3 -m unittest discover -s security-review/bin/tests # engine suite (~1372, ~50s)
+python3 -m unittest discover -s security-review/bin/tests # engine suite (~1434, ~55s)
 claude plugin validate .                                 # marketplace metadata
 ```
 
@@ -106,7 +106,7 @@ renderer landed in Phase 2B-core (below); the Codex renderer is still a stub
   `build/ADR-0001-artifacts-are-prompts.md` for why prose, not only tokens, is the
   rewrite surface.
 - Tests: `python3 -m unittest discover -s build/tests`. The `.githooks/pre-commit`
-  hook runs `build --mode=check` + the build suite (fast); the ~1372 engine suite
+  hook runs `build --mode=check` + the build suite (fast); the ~1434 engine suite
   stays manual (no CI — see "No CI — validation is local").
 
 ### Multi-environment build (Phase 2B-core: OpenCode derivation)
@@ -335,7 +335,7 @@ Per slash command run, the orchestrator (`commands/*.md` prompt) executes four s
 
 3. **Workers** — the orchestrator launches `Task(subagent_type="security", model=<from plan>, ...)` in batches of ≤6 parallel calls. Each worker reads the slice's `target_files`, applies its checklist chain (see resolver below), and `Write`s findings to `<review_root>/waves/<slice_id>.md`. The model argument is the **balanced profile**: opus for trust-boundary waves (W1/W2/W6), sonnet for mechanical data-flow waves (W3/W4/W5/W∞). `--all-opus` forces opus everywhere (legacy).
 
-4. **Dedupe + optional refute** — `bin/dedupe_findings.py` (package: `bin/dedupe/`) parses all `waves/*.md` (each worker verdict is `confirmed` / `needs_validation` / `hardening`), deduplicates `confirmed` findings by `sink_hash` (computed deterministically from the worker's normalized `sink_snippet`), and writes a split report: `<review_root>/REPORT.md` (executive summary + index, plus `## Needs validation` / `## Hardening notes` sections for bucket records unmatched to any `confirmed` finding) + `<review_root>/REPORT/<root_cause_family>.md` (per-family detail) + `<review_root>/findings.json` (the public inter-plugin contract, `schema_version`-gated, listing every constituent finding across all three verdicts — see `bin/dedupe/export.py`). State for cross-run "New / Recurring / Closed" plus remembered refute/`--verdicts-in` verdicts is kept in `<review_root>/.findings_state.json`. The optional adversarial refute pass calls `security-refute` sequentially (parallelism forbidden — single `refute.md` writer) on batches of ≤20 `confirmed` findings — `needs_validation` and `hardening` are never refuted, since refute looks for blocking code and `needs_validation` is by definition blocked on a fact outside the repo; results are folded back via a second `dedupe_findings.py --refute=<path>` invocation, or via `--verdicts-in=<path>` for externally-produced verdicts (e.g. a ticket-triage plugin). When recon recorded a `console_gap` (see the `environment` block), `dedupe_findings.py` leads REPORT.md with a `## Coverage Gaps` section so reduced coverage is surfaced, not buried.
+4. **Dedupe + optional refute** — `bin/dedupe_findings.py` (package: `bin/dedupe/`) parses all `waves/*.md` (each worker verdict is `confirmed` / `needs_validation` / `hardening`), deduplicates `confirmed` findings by `sink_hash` (computed deterministically from the worker's normalized `sink_snippet`), and writes a split report: `<review_root>/REPORT.md` (executive summary + index, plus `## Needs validation` / `## Hardening notes` sections for bucket records unmatched to any `confirmed` finding) + `<review_root>/REPORT/<root_cause_family>.md` (per-family detail) + `<review_root>/findings.json` (the public inter-plugin contract, `schema_version`-gated, listing every constituent finding across all three verdicts — see `bin/dedupe/export.py`). A `needs_validation` / `hardening` record binds to a `confirmed` finding in three tiers — exact `sink_hash`, then `dedupe()`'s own Pass-2 fallback key, then its Pass-3 location key (with Pass 3's own "more than one sink_kind" gate) — so a record binds to the group `dedupe()` put a finding with that coordinate into, rather than only when two workers quoted the sink identically; a record bound without a hash match carries `[ATTACHED_WITHOUT_HASH]`. State for cross-run "New / Recurring / Closed" plus remembered refute/`--verdicts-in` verdicts is kept in `<review_root>/.findings_state.json`, which also stores the diff `baseline` and a `run_id` derived from the wave files — a second pass over the same waves (refute, `--verdicts-in`, a plain re-render) is the same run and inherits that baseline instead of diffing against what its own first pass wrote. The optional adversarial refute pass calls `security-refute` sequentially (parallelism forbidden — single `refute.md` writer) on batches of ≤20 `confirmed` findings — `needs_validation` and `hardening` are never refuted, since refute looks for blocking code and `needs_validation` is by definition blocked on a fact outside the repo; results are folded back via a second `dedupe_findings.py --refute=<path>` invocation, or via `--verdicts-in=<path>` for externally-produced verdicts (e.g. a ticket-triage plugin). When recon recorded a `console_gap` (see the `environment` block), `dedupe_findings.py` leads REPORT.md with a `## Coverage Gaps` section so reduced coverage is surfaced, not buried.
 
 ### Five-layer checklist resolver
 
