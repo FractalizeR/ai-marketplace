@@ -149,6 +149,12 @@ def build_findings_export(
     needs_validation/hardening entry is the *group's* `primary_sink_hash`,
     the same value a `confirmed` entry from that group carries — a consumer
     can join the three lists on it without re-deriving `sink_hash` matching.
+
+    `matched_to` is best-effort: it means "the same sink", which is decided the
+    way `dedupe()` decides it, not by the two rows carrying identical text. A
+    record bound without a matching `sink_hash` carries
+    `[ATTACHED_WITHOUT_HASH]` in its `flags`, so a consumer that needs the
+    stricter reading can filter on that rather than on `matched_to` alone.
     """
     confirmed = _confirmed_entries(merged, "main") + _confirmed_entries(manual, "manual_review")
 

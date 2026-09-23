@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .models import (
+    FLAG_ATTACHED_WITHOUT_HASH,
     FLAG_CROSS_SINK_MERGE,
     FLAG_MERGED_DESPITE_HASH_MISMATCH,
     FLAG_PARSE_FAILED,
@@ -171,7 +172,7 @@ def render_finding(idx: int, mf: MergedFinding, *, resolutions: dict | None = No
             out.append("")
             out.append(_render_resolution_note(resolution))
     # Verdict-bucket annotations (Stage 2 / P2.3) -- records `attach_side_records`
-    # matched to THIS finding by sink_hash. Rendered here (not as a separate
+    # bound to THIS finding. Rendered here (not as a separate
     # report row) so `render_finding`'s two callers -- family detail AND
     # `manual_review.md` -- both surface them for free; a finding that lands in
     # manual_review (didn't auto-promote) still carries its attached notes.
@@ -196,13 +197,15 @@ def render_finding(idx: int, mf: MergedFinding, *, resolutions: dict | None = No
 #
 # Two rendering forms per bucket type:
 #   - "attached" (`_render_attached_*`) -- compact, appended inside
-#     `render_finding` right after the confirmed finding it was matched to
-#     (`attach_side_records`, by sink_hash). Not a competing report row.
+#     `render_finding` right after the confirmed finding it was bound to
+#     (`attach_side_records`, by sink_hash or by `dedupe()`'s own location
+#     keys). Not a competing report row.
 #   - "standalone" (`render_*_entry` + `_render_*_section`) -- the full
-#     record, for a bucket entry `attach_side_records` could NOT match to any
-#     confirmed finding (including every `nohash00` record -- an empty
-#     `sink_snippet` never participates in matching, by construction, so it
-#     is always standalone; see `pipeline.attach_side_records`). These render
+#     record, for a bucket entry `attach_side_records` could bind to no
+#     confirmed finding. A `nohash00` record (empty `sink_snippet`) can still
+#     be bound by location, so it is NOT standalone by construction; what is
+#     always standalone is a record whose own location the parser could not
+#     read. These render
 #     ONLY in the index REPORT.md (`render_index_report`/`render_report`, at
 #     the END, after the findings), never split per family: `_group_by_family`
 #     reads `root_cause_family` off `MergedFinding.primary`, which a bare
@@ -234,10 +237,24 @@ def render_finding(idx: int, mf: MergedFinding, *, resolutions: dict | None = No
 # ---------------------------------------------------------------------------
 
 
+def _attachment_note(flags: list[str]) -> list[str]:
+    """Spell out a by-location binding where the record is rendered.
+
+    The bare flag tells a reader nothing, and an annotation sitting under a
+    confirmed finding otherwise reads as "the workers agreed on this sink".
+    """
+    if FLAG_ATTACHED_WITHOUT_HASH not in flags:
+        return []
+    return [
+        "* **attachment**: bound by location, not by quoted text — confirm it "
+        "is the same sink before treating it as a note on this finding"
+    ]
+
+
 def _render_attached_needs_validation(nv: NeedsValidation) -> str:
-    """Compact annotation form for a needs_validation record matched by
-    sink_hash to a confirmed finding. See the module note above for why this
-    is a field-line block, not a `raw_body` replay or a blockquote."""
+    """Compact annotation form for a needs_validation record bound to a
+    confirmed finding. See the module note above for why this is a field-line
+    block, not a `raw_body` replay or a blockquote."""
     lines = [
         f"* **claimed_root_cause**: {nv.claimed_root_cause}"
         if nv.claimed_root_cause
@@ -255,6 +272,7 @@ def _render_attached_needs_validation(nv: NeedsValidation) -> str:
         lines.append(f"* **condition_keys**: {', '.join(nv.condition_keys)}")
     if nv.flags:
         lines.append(f"* **flags**: {' '.join(nv.flags)}")
+    lines.extend(_attachment_note(nv.flags))
     src = nv.source_file + (f" ({nv.slice_id})" if nv.slice_id else "")
     lines.append(f"* **sink_hash**: `{nv.sink_hash}`")
     lines.append(f"* **source**: {src}")
@@ -262,14 +280,15 @@ def _render_attached_needs_validation(nv: NeedsValidation) -> str:
 
 
 def _render_attached_hardening(hn: HardeningNote) -> str:
-    """Compact annotation form for a hardening record matched by sink_hash
-    to a confirmed finding. See the module note above for why this is a
-    field-line block, not a `raw_body` replay or a blockquote."""
+    """Compact annotation form for a hardening record bound to a confirmed
+    finding. See the module note above for why this is a field-line block,
+    not a `raw_body` replay or a blockquote."""
     lines = [f"* **text**: {hn.text}" if hn.text else "* **text**: (none given)"]
     if hn.condition_keys:
         lines.append(f"* **condition_keys**: {', '.join(hn.condition_keys)}")
     if hn.flags:
         lines.append(f"* **flags**: {' '.join(hn.flags)}")
+    lines.extend(_attachment_note(hn.flags))
     src = hn.source_file + (f" ({hn.slice_id})" if hn.slice_id else "")
     lines.append(f"* **sink_hash**: `{hn.sink_hash}`")
     lines.append(f"* **source**: {src}")
@@ -279,9 +298,9 @@ def _render_attached_hardening(hn: HardeningNote) -> str:
 def render_needs_validation_entry(idx: int, nv: NeedsValidation) -> str:
     """Render one standalone `## Needs validation` lead by replaying its
     `raw_body` (same convention as `render_finding` for a `Finding`). Includes
-    `nohash00` records (empty `sink_snippet`) -- they are a sentinel, not a
-    real hash, so `attach_side_records` never matches them; they must not be
-    silently dropped here."""
+    `nohash00` records (empty `sink_snippet`): the sentinel keeps them out of
+    hash matching, and when location matching does not bind them either they
+    land here rather than being silently dropped."""
     flag_suffix = f" {' '.join(nv.flags)}" if nv.flags else ""
     loc = f"{nv.sink_file}:{nv.sink_line}" if nv.sink_file else "(no location)"
     title = f"### Needs validation {idx}: `{loc}`{flag_suffix}"

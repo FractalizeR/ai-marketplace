@@ -327,6 +327,28 @@ class VerdictBucketRenderingTests(unittest.TestCase):
         self.assertIn("local plan", body)
         self.assertNotIn("### Needs validation", body)
 
+    def test_loose_binding_says_so_in_the_rendered_annotation(self):
+        # An annotation under a confirmed finding otherwise reads as "the
+        # workers agreed on this sink"; the bare flag name does not say
+        # otherwise to a human reading the report.
+        # A canonical sink_kind on both sides: the fixture default is a
+        # custom sink, which the loose tiers deliberately leave out.
+        mf = _mk_merged(sink_snippet="code", sink_kind="dql_concat")
+        nv = self._nv(
+            sink_snippet="a different quotation of the same line",
+            sink_kind="dql_concat", root_cause_family="injection",
+            enclosing_symbol="Repo::find",
+        )
+        attach_side_records([mf], [nv], [])
+        body = render_finding(1, mf)
+        self.assertIn("**Needs validation (attached):**", body)
+        self.assertIn("bound by location, not by quoted text", body)
+
+    def test_exact_binding_carries_no_attachment_caveat(self):
+        mf = _mk_merged(sink_snippet="code")
+        attach_side_records([mf], [self._nv(sink_snippet="code")], [])
+        self.assertNotIn("bound by location", render_finding(1, mf))
+
     def test_matched_hardening_renders_attached_in_finding(self):
         mf = _mk_merged(sink_snippet="code")
         hn = self._hn(sink_snippet="code")

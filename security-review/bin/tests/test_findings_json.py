@@ -185,6 +185,30 @@ class ExportSchemaTests(unittest.TestCase):
         self.assertEqual(entry["matched_to"], merged[0].primary.sink_hash)
         self.assertEqual(entry["sink_hash"], nv.sink_hash)
 
+    def test_loosely_bound_record_carries_matched_to_and_the_flag(self):
+        # `matched_to` alone no longer implies the two rows quoted the same
+        # text; the flag is what a consumer filters on for the strict reading.
+        merged, manual = df.dedupe([self._confirmed("$q = $em->createQuery($s);")])
+        nv = df.NeedsValidation(
+            sink_file="src/Repo.php", sink_line=42, sink_kind="dql_concat",
+            root_cause_family="injection", enclosing_symbol="Repo::find",
+            sink_snippet="a different quotation of the same line",
+        )
+        pipeline.attach_side_records(merged, [nv], [])
+
+        payload = build_findings_export(merged, manual, [], [])
+        entry = payload["needs_validation"][0]
+        self.assertEqual(entry["matched_to"], merged[0].primary.sink_hash)
+        self.assertNotEqual(entry["sink_hash"], entry["matched_to"])
+        self.assertIn(df.FLAG_ATTACHED_WITHOUT_HASH, entry["flags"])
+        self.assertEqual(
+            set(entry) - {"verdict", "sink_hash", "matched_to", "sink_file", "sink_line",
+                          "sink_kind", "root_cause_family", "enclosing_symbol",
+                          "claimed_root_cause", "blockers", "condition_keys",
+                          "source_file", "slice_id", "flags"},
+            set(), "findings.json entry shape must not change",
+        )
+
     def test_unmatched_records_carry_null_matched_to(self):
         nv = df.NeedsValidation(
             sink_file="src/Other.php", sink_line=7, sink_kind="weak_random",

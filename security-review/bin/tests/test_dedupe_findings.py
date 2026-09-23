@@ -1247,10 +1247,10 @@ class AttachSideRecordsTests(unittest.TestCase):
         self.assertEqual(merged[0].needs_validation, [nv])
         self.assertEqual(result.unmatched_needs_validation, [])
 
-    def test_same_file_different_snippet_does_not_match(self):
-        """Regression pin: matching is by `sink_hash` (content), not
-        `sink_file`/`sink_line` -- a NeedsValidation at the SAME location but
-        a genuinely different sink_snippet must NOT attach to the finding."""
+    def test_same_location_different_snippet_attaches_and_is_marked(self):
+        """Two workers quoting one sink differently is the ordinary case, not
+        the exception: every coordinate but the text agrees, so the record
+        binds on `dedupe()`'s own fallback key and says it did so by location."""
         merged, manual = df.dedupe([self._confirmed("$q = $em->createQuery($s);")])
         nv = df.NeedsValidation(
             sink_file="src/Repo.php", sink_line=42, sink_kind="dql_concat",
@@ -1261,8 +1261,9 @@ class AttachSideRecordsTests(unittest.TestCase):
 
         result = pipeline.attach_side_records(merged, [nv], [])
 
-        self.assertEqual(merged[0].needs_validation, [])
-        self.assertEqual(result.unmatched_needs_validation, [nv])
+        self.assertEqual(merged[0].needs_validation, [nv])
+        self.assertEqual(result.unmatched_needs_validation, [])
+        self.assertIn(df.FLAG_ATTACHED_WITHOUT_HASH, nv.flags)
 
     def test_non_matching_sink_hash_goes_to_unmatched(self):
         merged, manual = df.dedupe([self._confirmed()])
@@ -1284,9 +1285,11 @@ class AttachSideRecordsTests(unittest.TestCase):
         self.assertEqual(result.unmatched_needs_validation, [nv])
         self.assertEqual(result.unmatched_hardening, [hn])
 
-    def test_empty_snippet_nohash_never_matches(self):
-        """`nohash00` is a sentinel for an empty snippet, not a real hash --
-        two unrelated empty-snippet records must not spuriously 'match'."""
+    def test_empty_snippet_nohash_does_not_bind_across_files(self):
+        """`nohash00` is a sentinel for an empty snippet, not a real hash, so
+        two unrelated empty-snippet records must not collide on it. Such a
+        record CAN still bind by location (see LooseAttachmentTests); what it
+        must never do is bind to a finding somewhere else entirely."""
         merged, manual = df.dedupe([self._confirmed(snippet="")])
         self.assertEqual(merged[0].primary.sink_hash, "nohash00")
         nv = df.NeedsValidation(
@@ -1323,6 +1326,242 @@ class AttachSideRecordsTests(unittest.TestCase):
         self.assertTrue(all(isinstance(m, df.MergedFinding) for m in merged))
 
 
+class LooseAttachmentTests(unittest.TestCase):
+    """Tiers 2 and 3: a bucket record binds exactly when `dedupe()` would have
+    merged it had it been `confirmed`. Measured on two live runs before it was
+    written -- a plain "same file" rule would have bound three records to
+    findings about a different sink in that file, and zero correct ones."""
+
+    def _confirmed(self, **kw):
+        base = dict(
+            title_line="h", sink_file="src/Repo.php", sink_line=42,
+            sink_kind="dql_concat", root_cause_family="injection",
+            enclosing_symbol="Repo::find", sink_snippet="$q = $em->createQuery($s);",
+            severity="High", confidence=9,
+        )
+        base.update(kw)
+        return df.Finding(**base)
+
+    def _nv(self, **kw):
+        base = dict(
+            sink_file="src/Repo.php", sink_line=42, sink_kind="dql_concat",
+            root_cause_family="injection", enclosing_symbol="Repo::find",
+            sink_snippet="a different quotation of the same line",
+        )
+        base.update(kw)
+        return df.NeedsValidation(**base)
+
+    def _attach(self, findings, records):
+        merged, manual = df.dedupe(findings)
+        return merged, pipeline.attach_side_records(merged, records, [])
+
+    def test_same_file_other_line_and_kind_does_not_bind(self):
+        # The one class of false binding actually observed: an unrelated
+        # observation about another sink in the same file.
+        merged, result = self._attach(
+            [self._confirmed()],
+            [self._nv(sink_line=180, sink_kind="ssrf", root_cause_family="ssrf",
+                      enclosing_symbol="Repo::fetch")],
+        )
+        self.assertEqual(merged[0].needs_validation, [])
+        self.assertEqual(len(result.unmatched_needs_validation), 1)
+
+    def test_same_file_and_kind_other_family_does_not_bind(self):
+        merged, result = self._attach(
+            [self._confirmed()],
+            [self._nv(sink_line=180, root_cause_family="disclosure")],
+        )
+        self.assertEqual(merged[0].needs_validation, [])
+        self.assertEqual(len(result.unmatched_needs_validation), 1)
+
+    def test_same_location_other_kind_binds_via_the_location_tier(self):
+        # `dedupe()` keeps Pass 3 for exactly this: one place in the code that
+        # two workers classified differently.
+        merged, result = self._attach(
+            [self._confirmed()],
+            [self._nv(sink_kind="ssrf", root_cause_family="ssrf")],
+        )
+        self.assertEqual(len(merged[0].needs_validation), 1)
+        self.assertEqual(result.unmatched_needs_validation, [])
+        self.assertIn(df.FLAG_ATTACHED_WITHOUT_HASH, merged[0].needs_validation[0].flags)
+
+    def test_unknown_symbol_binds_within_the_line_bucket_and_not_across_it(self):
+        merged, result = self._attach(
+            [self._confirmed(sink_line=22, enclosing_symbol="unknown")],
+            [self._nv(sink_line=24, enclosing_symbol="unknown"),
+             self._nv(sink_line=25, enclosing_symbol="unknown")],
+        )
+        # 22 and 24 share bucket 4; 25 opens bucket 5, and its line is too far
+        # for the location tier as well.
+        self.assertEqual(len(merged[0].needs_validation), 1)
+        self.assertEqual(merged[0].needs_validation[0].sink_line, 24)
+        self.assertEqual(len(result.unmatched_needs_validation), 1)
+
+    def test_empty_snippet_record_still_binds(self):
+        # `nohash00` is a sentinel, so tier 1 cannot help; the location tiers
+        # carry no hash and are exactly what such a record needs.
+        nv = self._nv(sink_snippet="")
+        self.assertEqual(nv.sink_hash, "nohash00")
+        merged, result = self._attach([self._confirmed()], [nv])
+        self.assertEqual(merged[0].needs_validation, [nv])
+        self.assertIn(df.FLAG_ATTACHED_WITHOUT_HASH, nv.flags)
+
+    def test_unknown_other_kind_gets_no_special_treatment(self):
+        merged, result = self._attach(
+            [self._confirmed()],
+            [self._nv(sink_kind="other:tenant_id_confusion",
+                      root_cause_family="other:tenant_id_confusion")],
+        )
+        # Same location, so it binds via the location tier like any other kind.
+        self.assertEqual(len(merged[0].needs_validation), 1)
+        self.assertIn(df.FLAG_ATTACHED_WITHOUT_HASH, merged[0].needs_validation[0].flags)
+
+    def test_custom_sink_finding_is_left_out_of_the_loose_tiers(self):
+        # `dedupe()` excludes a custom_sink finding from its own fallback merge
+        # and keys it differently; the record beside one stays unattached. The
+        # single place this rule is narrower than "whatever dedupe() would do".
+        confirmed = self._confirmed(
+            sink_kind="other:tenant_id_confusion",
+            root_cause_family="other:tenant_id_confusion",
+            category="custom",
+        )
+        merged, manual = df.dedupe([confirmed])
+        target = (merged + manual)[0]
+        self.assertTrue(target.primary.is_custom_sink)
+        result = pipeline.attach_side_records(
+            merged + manual,
+            [self._nv(sink_kind="other:tenant_id_confusion",
+                      root_cause_family="other:tenant_id_confusion")],
+            [],
+        )
+        self.assertEqual(target.needs_validation, [])
+        self.assertEqual(len(result.unmatched_needs_validation), 1)
+
+    def test_exact_hash_wins_over_a_nearer_location(self):
+        merged, manual = df.dedupe([
+            self._confirmed(sink_line=42, enclosing_symbol="Repo::find"),
+            self._confirmed(sink_line=43, enclosing_symbol="Repo::fetch",
+                            sink_snippet="$q = $em->createQuery($t);"),
+        ])
+        self.assertEqual(len(merged), 2)
+        # The record sits exactly where the SECOND finding is, but quotes the
+        # first one's text. Text is the more exact signal, so it wins.
+        nv = self._nv(sink_line=43, enclosing_symbol="Repo::fetch",
+                      sink_snippet="$q = $em->createQuery($s);")
+        pipeline.attach_side_records(merged, [nv], [])
+        owner = next(mf for mf in merged if mf.needs_validation)
+        self.assertEqual(owner.primary.sink_line, 42)
+        self.assertNotIn(df.FLAG_ATTACHED_WITHOUT_HASH, nv.flags)
+
+    def test_pick_nearest_prefers_the_closer_line(self):
+        a, b = object(), object()
+        self.assertIs(pipeline._pick_nearest([(10, a), (40, b)], 38), b)
+        self.assertIs(pipeline._pick_nearest([(40, b), (10, a)], 12), a)
+
+    def test_pick_nearest_breaks_an_exact_tie_by_index_order(self):
+        # Equidistant on either side: the first indexed wins, so the choice
+        # does not depend on dict/set iteration order between runs.
+        a, b = object(), object()
+        self.assertIs(pipeline._pick_nearest([(8, a), (12, b)], 10), a)
+        self.assertIs(pipeline._pick_nearest([(12, b), (8, a)], 10), b)
+
+    def test_two_competing_findings_resolve_to_the_nearer_one(self):
+        # Two SEPARATE MergedFindings really claiming one key — the fixture
+        # has to keep them apart, or `_pick_nearest` is never called at all.
+        merged, manual = df.dedupe([
+            self._confirmed(sink_line=3, enclosing_symbol="unknown"),
+            self._confirmed(sink_line=8, enclosing_symbol="unknown",
+                            sink_snippet="$q = $em->createQuery($t);"),
+        ])
+        self.assertEqual(len(merged), 2)
+        pipeline.attach_side_records(
+            merged, [self._nv(sink_line=9, enclosing_symbol="unknown")], [])
+        owner = next(mf for mf in merged if mf.needs_validation)
+        self.assertEqual(owner.primary.sink_line, 8)
+
+    def test_fallback_key_tier_wins_over_the_location_tier(self):
+        # Both loose tiers claim the record and point at DIFFERENT findings.
+        # Tier 2 agrees on the classification too, so it is the better answer;
+        # the order must be pinned by a test, not only by the tuple literal.
+        merged, manual = df.dedupe([
+            self._confirmed(sink_line=50, enclosing_symbol="Repo::find"),
+            self._confirmed(sink_line=42, enclosing_symbol="Repo::find",
+                            sink_kind="command_exec", root_cause_family="injection",
+                            sink_snippet="exec($cmd);"),
+        ])
+        self.assertEqual(len(merged), 2)
+        pipeline.attach_side_records(merged, [self._nv(sink_line=42)], [])
+        owner = next(mf for mf in merged if mf.needs_validation)
+        self.assertEqual(owner.primary.sink_kind, "dql_concat")
+        self.assertEqual(owner.primary.sink_line, 50)
+
+    def test_record_without_a_location_stays_standalone(self):
+        # A record whose location the parser could not read has nothing to
+        # match on; binding it would hide it under an unrelated finding.
+        merged, manual = df.dedupe([self._confirmed()])
+        nv = self._nv(sink_file="", sink_line=0, enclosing_symbol="unknown")
+        result = pipeline.attach_side_records(merged, [nv], [])
+        self.assertEqual(merged[0].needs_validation, [])
+        self.assertEqual(result.unmatched_needs_validation, [nv])
+
+    def test_malformed_finding_never_collects_records(self):
+        # `dedupe()` drops a finding with no sink_file on Pass 0, before any
+        # location merge, so it is not somewhere a record could have merged.
+        merged, manual = df.dedupe([
+            df.Finding(title_line="h", sink_file="", sink_line=0,
+                       sink_kind="dql_concat", root_cause_family="injection",
+                       enclosing_symbol="unknown", sink_snippet="something"),
+        ])
+        self.assertEqual(merged, [])
+        self.assertIn(df.FLAG_PARSE_FAILED, manual[0].flags)
+        nv = self._nv(sink_file="", sink_line=0, enclosing_symbol="unknown")
+        result = pipeline.attach_side_records(merged + manual, [nv], [])
+        self.assertEqual(manual[0].needs_validation, [])
+        self.assertEqual(result.unmatched_needs_validation, [nv])
+
+    def test_flag_reflects_this_call_not_an_earlier_one(self):
+        nv = self._nv()
+        loose, _ = df.dedupe([self._confirmed()])
+        pipeline.attach_side_records(loose, [nv], [])
+        self.assertIn(df.FLAG_ATTACHED_WITHOUT_HASH, nv.flags)
+        exact, _ = df.dedupe([self._confirmed(sink_snippet=nv.sink_snippet)])
+        pipeline.attach_side_records(exact, [nv], [])
+        self.assertNotIn(df.FLAG_ATTACHED_WITHOUT_HASH, nv.flags)
+
+    def test_same_kind_other_family_at_one_location_does_not_bind(self):
+        # Pass 3 fires only when a location carries MORE THAN ONE sink_kind.
+        # Same kind, different family is two groups to `dedupe()` — checked by
+        # feeding it both as findings — so it must be two here as well.
+        confirmed = self._confirmed()
+        rival = self._confirmed(root_cause_family="disclosure",
+                                sink_snippet="$q = $em->createQuery($t);")
+        self.assertEqual(len(df.dedupe([confirmed, rival])[0]), 2)
+
+        merged, result = self._attach(
+            [confirmed], [self._nv(root_cause_family="disclosure")])
+        self.assertEqual(merged[0].needs_validation, [])
+        self.assertEqual(len(result.unmatched_needs_validation), 1)
+
+    def test_calling_twice_does_not_duplicate_the_annotation(self):
+        merged, manual = df.dedupe([self._confirmed()])
+        nv = self._nv()
+        pipeline.attach_side_records(merged, [nv], [])
+        pipeline.attach_side_records(merged, [nv], [])
+        self.assertEqual(merged[0].needs_validation, [nv])
+        self.assertEqual(nv.flags.count(df.FLAG_ATTACHED_WITHOUT_HASH), 1)
+
+    def test_hardening_binds_by_location_too(self):
+        merged, manual = df.dedupe([self._confirmed()])
+        hn = df.HardeningNote(
+            sink_file="src/Repo.php", sink_line=42, sink_kind="dql_concat",
+            root_cause_family="injection", enclosing_symbol="Repo::find",
+            sink_snippet="another quotation", text="prefer a parameter binder",
+        )
+        pipeline.attach_side_records(merged, [], [hn])
+        self.assertEqual(merged[0].hardening, [hn])
+        self.assertIn(df.FLAG_ATTACHED_WITHOUT_HASH, hn.flags)
+
+
 class AttachSideRecordsSpyTests(unittest.TestCase):
     """Accept test for the P2.2 architectural constraint (E6 probe,
     `memory/cloudflare-borrow-plan/E6-pipeline-probe.md`): a bucket record has
@@ -1346,6 +1585,7 @@ class AttachSideRecordsSpyTests(unittest.TestCase):
                 self.enclosing_symbol = "Repo::find"
                 self.sink_snippet = "$q = $em->createQuery($s);"
                 self.root_cause_family = "injection"
+                self.flags = []
                 self.sink_hash = df.Finding(
                     title_line="h", sink_snippet=self.sink_snippet,
                 ).sink_hash
@@ -1390,6 +1630,42 @@ class AttachSideRecordsSpyTests(unittest.TestCase):
 
         pipeline.attach_side_records(merged, [nv_spy], [hn_spy])
 
+        for touched in (nv_touched, hn_touched):
+            self.assertNotIn("severity", touched)
+            self.assertNotIn("confidence", touched)
+            self.assertNotIn("raw_body", touched)
+            self.assertNotIn("is_custom_sink", touched)
+            self.assertNotIn("is_unknown_symbol", touched)
+
+    def test_never_reads_them_on_the_loose_tiers_either(self):
+        """The strict tier returns before the location tiers ever run, so the
+        guard above only covers tier 1. Here the spy's hash deliberately does
+        NOT match, forcing the binding through the fallback and location keys."""
+        merged, manual = df.dedupe([
+            df.Finding(
+                title_line="h", sink_file="src/Repo.php", sink_line=42,
+                sink_kind="dql_concat", root_cause_family="injection",
+                enclosing_symbol="Repo::find",
+                sink_snippet="$q = $em->createQuery($s);",
+            )
+        ])
+
+        # The donor derives sink_hash before the overrides land, so the hash is
+        # overridden too — otherwise the spy would still match on tier 1.
+        nv_spy, nv_touched = self._spy_and_log(
+            sink_snippet="a different quotation",
+            sink_hash=df.Finding(title_line="h", sink_snippet="a different quotation").sink_hash,
+        )
+        hn_spy, hn_touched = self._spy_and_log(
+            sink_snippet="another quotation",
+            sink_hash=df.Finding(title_line="h", sink_snippet="another quotation").sink_hash,
+        )
+        self.assertNotEqual(nv_spy.sink_hash, merged[0].primary.sink_hash)
+
+        pipeline.attach_side_records(merged, [nv_spy], [hn_spy])
+
+        self.assertEqual(len(merged[0].needs_validation), 1, "the loose tier must have run")
+        self.assertEqual(len(merged[0].hardening), 1, "the loose tier must have run")
         for touched in (nv_touched, hn_touched):
             self.assertNotIn("severity", touched)
             self.assertNotIn("confidence", touched)

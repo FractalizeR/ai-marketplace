@@ -82,6 +82,7 @@ FLAG_REFUTE_CLAIMED = "[REFUTE_CLAIMED]"
 # `Merged*` wrapper of their own (unlike `Finding` -> `MergedFinding`).
 FLAG_VERDICT_HAS_SEVERITY = "[VERDICT_HAS_SEVERITY]"   # worker put Severity/Confidence on a bucket record; dropped
 FLAG_NV_INCOMPLETE = "[NV_INCOMPLETE]"                  # needs_validation missing blockers and/or a validation plan
+FLAG_ATTACHED_WITHOUT_HASH = "[ATTACHED_WITHOUT_HASH]"  # bucket record bound to a finding by location, not by snippet
 
 
 # ---------------------------------------------------------------------------
@@ -392,13 +393,14 @@ class ParsedWave:
 class SideRecords:
     """Return type of `pipeline.attach_side_records` (P2.2).
 
-    A matched needs_validation/hardening record is attached IN PLACE to its
+    A bound needs_validation/hardening record is attached IN PLACE to its
     MergedFinding (`MergedFinding.needs_validation` / `.hardening`) -- that
     is the annotation itself, not something a caller reads back from here.
-    `matched` is a diagnostic (sink_hash, target) index for tests/tooling,
-    not required by the renderer. Records with no matching sink_hash are
-    collected in the `unmatched_*` lists for their own standalone report
-    sections (P2.3): `## Needs validation` / `## Hardening notes`.
+    `matched` is a diagnostic index for tests/tooling, not required by the
+    renderer; its first element is the RECORD's own sink_hash, which equals
+    the target's only when the binding was by hash. Records that bound to no
+    finding are collected in the `unmatched_*` lists for their own standalone
+    report sections (P2.3): `## Needs validation` / `## Hardening notes`.
     """
 
     matched: list[tuple[str, MergedFinding]] = field(default_factory=list)

@@ -10,7 +10,10 @@ Pre-pass: normalize known custom sink kinds (other:*) into canonical kinds.
 
 from __future__ import annotations
 
+from typing import Optional
+
 from .models import (
+    FLAG_ATTACHED_WITHOUT_HASH,
     FLAG_CONFIDENCE_DISAGREEMENT,
     FLAG_CONFLICTING_SEVERITY,
     FLAG_CROSS_SINK_MERGE,
@@ -437,77 +440,200 @@ def dedupe(findings: list[Finding]) -> tuple[list[MergedFinding], list[MergedFin
 # ---------------------------------------------------------------------------
 
 
+def _has_unknown_symbol(record) -> bool:
+    """`Finding.is_unknown_symbol`, recomputed from a field a bucket record has.
+
+    Deliberately the RAW comparison, not the normalized one: `_dedup_bucket`
+    picks its branch this way, and a record that answered the question
+    differently from the finding it belongs to would key into a branch the
+    finding never entered. Reading `is_unknown_symbol` off the record instead
+    is what `AttachSideRecordsSpyTests` forbids.
+    """
+    return record.enclosing_symbol == "unknown" or not record.enclosing_symbol
+
+
+def _record_fallback_key(record) -> tuple:
+    """Pass-2 key for a bucket record: the same shape `_dedup_bucket` builds
+    for a Finding, computed from fields a bucket record actually has."""
+    if _has_unknown_symbol(record):
+        return (
+            record.sink_file, record.sink_kind, record.root_cause_family,
+            f"line_bucket_{record.sink_line // 5}",
+        )
+    return (
+        record.sink_file, record.sink_kind, record.root_cause_family,
+        _normalize_symbol(record.enclosing_symbol),
+    )
+
+
+def _record_location_key(record) -> tuple:
+    """Pass-3 key for a bucket record: one code location, any classification."""
+    return (record.sink_file, record.sink_line, _normalize_symbol(record.enclosing_symbol))
+
+
+def _pick_nearest(candidates: list[tuple[int, "MergedFinding"]], sink_line: int) -> MergedFinding:
+    """Nearest by line, ties going to whichever was indexed first.
+
+    Deterministic on purpose: `findings.json` must be byte-identical across
+    repeated runs over the same waves, and a set-ordered pick would break that.
+    """
+    best_mf = candidates[0][1]
+    best_delta = abs(candidates[0][0] - sink_line)
+    for line, mf in candidates[1:]:
+        delta = abs(line - sink_line)
+        if delta < best_delta:
+            best_mf, best_delta = mf, delta
+    return best_mf
+
+
 def attach_side_records(
     merged: list[MergedFinding],
     needs_validation: list[NeedsValidation],
     hardening: list[HardeningNote],
 ) -> SideRecords:
     """Bind `needs_validation` / `hardening` bucket records to the confirmed
-    findings `dedupe()` already merged, by `sink_hash`.
+    findings `dedupe()` already merged.
 
-    A record whose `sink_hash` equals the `sink_hash` of the MergedFinding's
-    `primary` OR any of its `merged_from` (Pass 2/3 of `dedupe()` can absorb
-    findings with a different sink_hash than the winner -- `merged_from` is
-    still the same real sink, just a losing snippet variant) becomes an
-    ANNOTATION on that MergedFinding (appended to its own `.needs_validation`
-    / `.hardening` list) rather than a competing report entry -- e.g.
-    `confirmed` in W1 + `needs_validation` in W3 on the same sink collapses to
-    one finding with a note, not two report rows, even when W3's snippet
-    happened to lose the Pass-2/3 primary-selection coin toss. There is no
-    ranking by verdict: this function never reads `severity`/`confidence`/
-    `raw_body`/`is_custom_sink`/`is_unknown_symbol` off a bucket record
-    (asserted by `AttachSideRecordsSpyTests` in `test_dedupe_findings.py` --
-    the E6 probe's isolation finding, now a regression test); the
-    `merged_from` traversal below reads only `Finding.sink_hash`, never a
-    bucket record's. `MergedFinding` itself has no `sink_hash` of its own
-    (E6 probe: `AttributeError`) -- that's why this indexes over its
-    `Finding` members instead.
+    A bound record becomes an ANNOTATION on that MergedFinding (appended to its
+    own `.needs_validation` / `.hardening` list) rather than a competing report
+    entry -- e.g. `confirmed` in W1 + `needs_validation` in W3 on the same sink
+    collapses to one finding with a note, not two report rows.
 
-    A `nohash00` sink_hash (empty snippet) never participates in matching on
-    either side -- it is a sentinel, not a real hash, so treating it as one
-    would let two unrelated empty-snippet records from different files
-    "collide" in matches. If two distinct MergedFindings happen to share one
-    real sink_hash (identical snippet, different file/symbol -- 32-bit
-    truncated hash, so possible though rare), a record attaches to whichever
-    MergedFinding was indexed first; this is a documented simplification, not
-    exercised by production data so far.
+    Binding is tried in three tiers, most exact first, and a record that binds
+    in one is never offered to the next:
 
-    Records not matched are returned unattached, for the report's own
-    standalone `## Needs validation` / `## Hardening notes` sections (P2.3).
+      1. `sink_hash` -- the record and the finding quoted the same sink text.
+      2. `dedupe()`'s own Pass-2 fallback key (file, kind, family, symbol; a
+         line bucket when the symbol is unknown). Two workers routinely quote
+         one sink slightly differently, so their hashes diverge while every
+         other coordinate agrees -- this is the tier that case needs.
+      3. `dedupe()`'s own Pass-3 key (file, line, symbol), which ignores kind
+         and family: one location classified two ways. Pass 3 only fires when the
+       classifications actually differ, and so does this tier.
 
-    `other:*` sink_kind canonicalization (`_normalize_known_other_kinds`)
-    runs over both bucket lists in place, the same pre-pass `dedupe()` runs
-    over `findings` -- so a bucket record's `sink_kind` is canonical before
-    it is ever rendered, same as a Finding's.
+    Tiers 2 and 3 borrow `dedupe()`'s own keys rather than inventing a second,
+    looser notion of "the same sink". They are NOT the identity "binds exactly
+    when `dedupe()` would have merged it": `dedupe()` registers one fallback
+    key per Pass-1 group and buckets Pass 3 by `primary` alone, while these
+    index every constituent `Finding`. So the rule is the slightly wider one:
+    a record binds to the group `dedupe()` put a finding with that coordinate
+    into. Matching is on the record's *location*, not its text, so a bound
+    record carries `FLAG_ATTACHED_WITHOUT_HASH` and the report says the binding
+    was not by snippet -- a reader must be able to tell the two apart.
+
+    Findings whose `dedupe()` strategy is `custom_sink` are left out of tiers 2
+    and 3 entirely: `dedupe()` excludes them from its own fallback merge, and
+    their key has a different shape. A record beside one stays unattached.
+
+    A `nohash00` sink_hash (empty snippet) never participates in tier 1 -- it is
+    a sentinel, not a real hash, so treating it as one would let two unrelated
+    empty-snippet records from different files "collide". Tiers 2 and 3 carry no
+    hash, so such a record can still bind there, which is the point: a record
+    with no usable snippet is exactly what tier 1 cannot help.
+
+    Tier 1 keys on the hash alone: two distinct MergedFindings that happen to
+    share one real sink_hash (identical snippet, different file or symbol --
+    the hash is truncated to 32 bits, so possible though rare) put a record on
+    whichever was indexed first. A documented simplification, unchanged here,
+    and not exercised by production data so far.
+
+    Records not bound anywhere are returned unattached, for the report's own
+    standalone `## Needs validation` / `## Hardening notes` sections.
+
+    This function never reads `severity`/`confidence`/`raw_body`/
+    `is_custom_sink`/`is_unknown_symbol` off a bucket record.
+    `severity`/`confidence`/`is_custom_sink`/`is_unknown_symbol` do not exist
+    on one (Stage-2 decision: buckets carry no severity), so a stray access
+    would raise -- but `raw_body` DOES exist and would resolve silently, which
+    is why `AttachSideRecordsSpyTests` in `test_dedupe_findings.py` asserts the
+    whole set with a spy rather than relying on an incidental crash. It covers
+    every tier. `MergedFinding` itself has no `sink_hash` of its own, which is
+    why all three indexes are built over its `Finding` members.
+
+    `other:*` sink_kind canonicalization (`_normalize_known_other_kinds`) runs
+    over both bucket lists in place, the same pre-pass `dedupe()` runs over
+    `findings` -- so a bucket record's `sink_kind` is canonical before it is
+    ever matched or rendered, same as a Finding's.
     """
     _normalize_known_other_kinds(needs_validation)
     _normalize_known_other_kinds(hardening)
 
     by_hash: dict[str, MergedFinding] = {}
+    by_fallback: dict[tuple, list[tuple[int, MergedFinding]]] = {}
+    by_location: dict[tuple, list[tuple[int, MergedFinding]]] = {}
     for mf in merged:
         for f in [mf.primary] + mf.merged_from:
-            h = f.sink_hash
-            if h != "nohash00":
-                by_hash.setdefault(h, mf)
+            if f.sink_hash != "nohash00":
+                by_hash.setdefault(f.sink_hash, mf)
+            if _is_malformed(f):
+                # `dedupe()` drops these on Pass 0, before any location merge
+                # runs, so they are not a place a record could have merged
+                # into. Their key degenerates to ("", kind, family, bucket 0);
+                # leaving them in is also what kept a record whose own location
+                # the parser could not read from staying standalone, since such
+                # a record keys to the same degenerate tuple.
+                continue
+            strategy, _primary_key, fallback_key = _dedup_bucket(f)
+            if strategy == "custom_sink":
+                continue
+            by_fallback.setdefault(fallback_key, []).append((f.sink_line, mf))
+            if f.sink_line:
+                location_key = (f.sink_file, f.sink_line, _normalize_symbol(f.enclosing_symbol))
+                by_location.setdefault(location_key, []).append((f.sink_line, f.sink_kind, mf))
 
     result = SideRecords()
 
+    def _bind(record) -> Optional[tuple[MergedFinding, bool]]:
+        """Return (finding, bound_by_hash) for the first tier that matches."""
+        if record.sink_hash != "nohash00":
+            target = by_hash.get(record.sink_hash)
+            if target is not None:
+                return target, True
+        candidates = by_fallback.get(_record_fallback_key(record))
+        if candidates:
+            return _pick_nearest(candidates, record.sink_line), False
+        # Pass 3 collapses a location only when the group holds MORE THAN ONE
+        # sink_kind (`_pass3_cross_sink_merge`: `if len(kinds) <= 1: continue`).
+        # Same kind at the same place with a different family is two groups to
+        # `dedupe()`, so it must stay two here as well.
+        located = [
+            (line, mf) for line, kind, mf in by_location.get(_record_location_key(record), [])
+            if kind != record.sink_kind
+        ]
+        if located:
+            return _pick_nearest(located, record.sink_line), False
+        return None
+
+    def _mark(record, bound_by_hash: bool) -> None:
+        """Set the flag from THIS call's outcome, so a record re-bound against
+        a different `merged` does not keep a mark the new binding contradicts."""
+        while FLAG_ATTACHED_WITHOUT_HASH in record.flags:
+            record.flags.remove(FLAG_ATTACHED_WITHOUT_HASH)
+        if not bound_by_hash:
+            record.flags.append(FLAG_ATTACHED_WITHOUT_HASH)
+
     for nv in needs_validation:
-        h = nv.sink_hash
-        target = by_hash.get(h) if h != "nohash00" else None
-        if target is not None:
-            target.needs_validation.append(nv)
-            result.matched.append((h, target))
-        else:
+        bound = _bind(nv)
+        if bound is None:
+            _mark(nv, True)
             result.unmatched_needs_validation.append(nv)
+            continue
+        target, bound_by_hash = bound
+        _mark(nv, bound_by_hash)
+        if not any(x is nv for x in target.needs_validation):
+            target.needs_validation.append(nv)
+        result.matched.append((nv.sink_hash, target))
 
     for hn in hardening:
-        h = hn.sink_hash
-        target = by_hash.get(h) if h != "nohash00" else None
-        if target is not None:
-            target.hardening.append(hn)
-            result.matched.append((h, target))
-        else:
+        bound = _bind(hn)
+        if bound is None:
+            _mark(hn, True)
             result.unmatched_hardening.append(hn)
+            continue
+        target, bound_by_hash = bound
+        _mark(hn, bound_by_hash)
+        if not any(x is hn for x in target.hardening):
+            target.hardening.append(hn)
+        result.matched.append((hn.sink_hash, target))
 
     return result

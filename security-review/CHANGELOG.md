@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **A verdict-bucket record binds to a confirmed finding by sink, not by quoted text.** `needs_validation` / `hardening` records were bound only when their `sink_hash` matched, and `sink_hash` is computed from the worker's `sink_snippet` — so two workers quoting one sink slightly differently produced a finding plus a separate bucket row for the same place. Binding now falls back to `dedupe()`'s own merge keys, so a record binds exactly when `dedupe()` would have merged it had it been `confirmed`; a record bound that way carries `[ATTACHED_WITHOUT_HASH]` and REPORT.md says the binding was by location rather than by text. `findings.json` keeps its shape and `schema_version` — `matched_to` is now best-effort and the flag carries the stricter reading.
+
 ### Fixed
 
 - **`access_control` parsing no longer aborts the whole audit.** The flow-mapping splitter in `bin/recon/recipes/symfony.py` counted brackets but not quotes, so a quoted CIDR list (`ips: '127.0.0.0/8,::1,10.0.0.0/8'`) was cut into fragments and `::1` became an empty key — which `bin/recon/yaml_emit.py` rejects, failing recon and with it the run. Quote handling is now shared by every layer that scans this text: comma splitting, brace nesting in a multi-line `- { … }` rule (a quoted `}` used to end the rule early and drop it), and escaped quotes inside double-quoted scalars.
