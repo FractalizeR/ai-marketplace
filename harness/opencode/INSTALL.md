@@ -120,6 +120,27 @@ The orchestrator runs recon → wave planning → external-process fan-out (one
 writing artifacts (`REPORT.md`, `findings.json`, `waves/`, …) under
 `security-review-opencode/`.
 
+### Comparing two builds against each other
+
+Artifacts installed in the global scope (`~/.config/opencode/{commands,agents}/`) are
+visible to **every** `opencode run` on the machine, whichever bundle
+`FR_SECURITY_CORE_ROOT` points at. Pointing the variable at an older bundle therefore
+does not give you that older build: the workers still read the installed agents.
+
+The same channel was measured on the Codex sibling — workers on one side of a paired run
+picked up an instruction that existed only in the other side's worker prose. To compare
+two builds honestly, uninstall before the first side:
+
+```bash
+rm -f ~/.config/opencode/commands/security-{project,changes}.md \
+      ~/.config/opencode/agents/security{,-recon,-refute}.md
+```
+
+Run that side, install the other build, run the second side. Keep every other input
+identical — same target revision, same `{high, fast}` models, same `--console-cmd` and
+`--exclude` on both sides. Installing per-project (`.opencode/` inside the target)
+avoids the channel entirely, at the cost of copying the artifacts per project.
+
 ## Permissions & residual risk
 
 `opencode.json` ships a deliberately scoped posture:

@@ -129,6 +129,29 @@ Do **not** bump the cachebuster on a separate copy: `codex plugin add
 to at `codex plugin marketplace add` time (step 2), so a bump on any other path is a
 no-op. Then start a new thread to test the updated plugin.
 
+### Comparing two builds against each other
+
+An installed plugin is **global**: every `codex exec` on the machine sees its skills,
+whichever bundle `FR_SECURITY_CORE_ROOT` points at. So pointing the variable at an older
+bundle does **not** give you that older build — the workers still read the installed
+skill's instructions.
+
+This was measured, not assumed. In a paired run of two builds over one project, workers
+on the *old* side picked up a wave-file instruction that exists only in the *new*
+`SKILL.md` and applied it to 15 of 19 wave files. In that instance the effect was
+cosmetic (the exported `findings.json` was byte-identical with and without it), but the
+channel is open and nothing warns you it is.
+
+To compare two builds honestly, remove the installed plugin before the first side:
+
+```bash
+codex plugin remove fr-security-review
+```
+
+Run that side, install the other build, run the second side. Keep every other input
+identical — same target revision, same `{high, fast}` models, same `--console-cmd` and
+`--exclude` on both sides.
+
 ## Permissions & offline posture
 
 Codex has no `opencode.json`-style permission file. The security posture rests on the
