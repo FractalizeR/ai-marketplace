@@ -687,6 +687,16 @@ class EmitIndexTests(_E2EFixture):
         self.assertIn("**false_positive**: closed by the ingress (synthetic)", triage)
         self.assertIn("`needs_validation#1` needs_validation", triage)
 
+    def test_work_unit_section_lists_each_record_with_status_and_note(self):
+        sidecars = self.sidecars()
+        self.loc_of(sidecars["u2crypto"], "confirmed#2")["note"] = "also reachable via a second sink (synthetic)"
+        work = _section(self.index(sidecars), "Work units")
+        self.assertIn(f"### `{UNIT_FILES['u2crypto']}`", work)
+        self.assertIn("`confirmed#2` confirmed", work)
+        self.assertIn("**confirmed**: also reachable via a second sink (synthetic)", work)
+        self.assertIn("`hardening#0` hardening", work)
+        self.assertNotIn(UNIT_FILES["triagemanual"], work)
+
     def test_work_unit_row_shows_severity_history_and_status_counts(self):
         work = _section(self.index(), "Work units")
         row = next(l for l in work.splitlines() if UNIT_FILES["u1injection"] in l)

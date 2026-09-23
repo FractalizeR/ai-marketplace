@@ -588,6 +588,23 @@ def emit_index(
     def unit_locs(unit_id: str) -> list[dict]:
         return [loc_of[rid] for rid in grouping.get(unit_id, []) if rid in loc_of]
 
+    def unit_detail(unit_id: str) -> list[str]:
+        """Per-record block: the verifier's note can carry what the columns
+        can't (extra sinks found nearby, a moved location)."""
+        s = sidecars[unit_id]
+        out = [f"### `{s.get('unit_file')}` — {_cell(s.get('title'))}", ""]
+        for rid in grouping[unit_id]:
+            r = by_id.get(rid)
+            loc = loc_of.get(rid, {})
+            if r is None:
+                continue
+            out.append(
+                f"- `{r.record_id}` {r.verdict} `{_verified_loc_str(r, loc)}` {_cell(r.sink_kind)} — {_cell(_record_detail(r))} "
+                f"— **{_cell(loc.get('status'))}**: {_cell(loc.get('note'))}"
+            )
+        out.append("")
+        return out
+
     lines: list[str] = ["# INDEX", ""]
 
     # 1. Header.
@@ -625,9 +642,11 @@ def emit_index(
                 row.append(_cell(priority_map.get(SEVERITY_PREFIX.get(s.get("severity_after"), ""))))
             row += [_status_counts(locs), _cell(", ".join(_verified_keys(locs)))]
             lines.append("| " + " | ".join(row) + " |")
+        lines.append("")
+        for u in work:
+            lines += unit_detail(u)
     else:
-        lines.append("None.")
-    lines.append("")
+        lines += ["None.", ""]
 
     # 3. Triage.
     lines += ["## Triage", ""]
@@ -640,18 +659,7 @@ def emit_index(
             lines.append(f"| `{s.get('unit_file')}` | {_cell(s.get('title'))} | {len(grouping[u])} | {_status_counts(unit_locs(u))} |")
         lines.append("")
         for u in triage:
-            s = sidecars[u]
-            lines += [f"### `{s.get('unit_file')}` — {_cell(s.get('title'))}", ""]
-            for rid in grouping[u]:
-                r = by_id.get(rid)
-                loc = loc_of.get(rid, {})
-                if r is None:
-                    continue
-                lines.append(
-                    f"- `{r.record_id}` {r.verdict} `{_verified_loc_str(r, loc)}` {_cell(r.sink_kind)} — {_cell(_record_detail(r))} "
-                    f"— **{_cell(loc.get('status'))}**: {_cell(loc.get('note'))}"
-                )
-            lines.append("")
+            lines += unit_detail(u)
     else:
         lines += ["None.", ""]
 
