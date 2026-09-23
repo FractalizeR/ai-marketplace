@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **`findings.json`'s `discovered_via`, finding bodies in `REPORT/<root_cause_family>.md`, standalone `## Needs validation` / `## Hardening notes` entries in `REPORT.md`, and `REPORT.md`'s `## Checklist coverage` no longer leak the plugin install path.** A checklist path is only meaningful from its `checklists/` anchor onward, but all four places carried it as the worker or the wave plan wrote it — including the absolute prefix of wherever the plugin happened to be installed. This showed up whenever the wave plan consulted for `## Checklist coverage` was built by a different install than the one rendering the report: the absolute path didn't match either install's root, so it was left untouched. The same normalization now also fixes the per-checklist finding counts in that section, which silently read zero for every checklist under the same mismatch.
+- **A standalone `## Needs validation` / `## Hardening notes` entry now shows "Previously rejected" when its `sink_hash` carries an active rejection**, as a confirmed finding already did — including one bound to a finding without a hash match. `--verdicts-in` and refute store rejections for those hashes too, but the report never showed them, so a settled lead read as open on every re-run.
 
 ## [4.4.0] — 2026-09-23
 

@@ -111,21 +111,29 @@ def _title_category(mf: MergedFinding) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _render_resolution_note(resolution) -> str:
-    """Cross-run resolution mark (Stage 2 / P2.5) -- annotates, never
-    suppresses: the finding still renders in full above this line. Duck-typed
-    on `state.Resolution` (`.refute_file`/`.refute_line`/`.source`), the same
+def _resolution_note_text(resolution) -> str:
+    """Shared wording for a cross-run rejection mark, WITHOUT the leading
+    `> ` blockquote marker -- `_render_resolution_note` prefixes that marker
+    for the blockquote form; `_attached_resolution_note` embeds this text
+    as-is in a `* **field**: value` line instead. Duck-typed on
+    `state.Resolution` (`.refute_file`/`.refute_line`/`.source`), the same
     pattern already used for `diff`/`cost`, to avoid a renderer -> state
     import. `run_seq` is intentionally never read here -- it must not reach
     REPORT.md (see `dedupe.state` module docstring)."""
     refute_file = getattr(resolution, "refute_file", "")
     refute_line = getattr(resolution, "refute_line", 0)
     if refute_file:
-        return f"> Previously rejected; evidence at `{refute_file}:{refute_line}`"
+        return f"Previously rejected; evidence at `{refute_file}:{refute_line}`"
     source = getattr(resolution, "source", "")
     if source:
-        return f"> Previously rejected (source: `{source}`)"
-    return "> Previously rejected"
+        return f"Previously rejected (source: `{source}`)"
+    return "Previously rejected"
+
+
+def _render_resolution_note(resolution) -> str:
+    """Cross-run resolution mark (Stage 2 / P2.5) -- annotates, never
+    suppresses: the finding still renders in full above this line."""
+    return f"> {_resolution_note_text(resolution)}"
 
 
 def render_finding(idx: int, mf: MergedFinding, *, resolutions: dict | None = None) -> str:
@@ -214,13 +222,21 @@ def render_finding(idx: int, mf: MergedFinding, *, resolutions: dict | None = No
         out.append("**Needs validation (attached):**")
         for nv in mf.needs_validation:
             out.append("")
-            out.append(_render_attached_needs_validation(nv))
+            out.append(
+                _render_attached_needs_validation(
+                    nv, resolutions=resolutions, primary_hash=f.sink_hash
+                )
+            )
     if mf.hardening:
         out.append("")
         out.append("**Hardening notes (attached):**")
         for hn in mf.hardening:
             out.append("")
-            out.append(_render_attached_hardening(hn))
+            out.append(
+                _render_attached_hardening(
+                    hn, resolutions=resolutions, primary_hash=f.sink_hash
+                )
+            )
     out.append("")
     return "\n".join(out)
 
@@ -284,7 +300,37 @@ def _attachment_note(flags: list[str]) -> list[str]:
     ]
 
 
-def _render_attached_needs_validation(nv: NeedsValidation) -> str:
+def _attached_resolution_note(
+    record_hash: str, primary_hash: str, resolutions: dict | None
+) -> list[str]:
+    """A `* **field**: value` line marking a tier-2/3 attached record
+    (`FLAG_ATTACHED_WITHOUT_HASH`, bound by location) that carries its OWN
+    active rejection under a different `sink_hash` than the parent finding.
+
+    A tier-1 attach shares `primary_hash` (exact `sink_hash` match is the
+    first binding tier `attach_side_records` tries), so the parent's own
+    `resolutions` note already renders two blocks above via `render_finding`
+    -- marking it again here would duplicate the identical note. Only a
+    record whose hash actually differs needs its own mark, and only that
+    hash was ever looked up in `resolutions`, so this is the one case the
+    parent's lookup cannot cover.
+
+    Field-line shape (not `_render_resolution_note`'s blockquote): this
+    block is entirely `* **field**: value` lines by construction (see the
+    module note above), and reflow.py wraps that shape correctly regardless
+    of length, so there is no continuation-line risk to avoid here.
+    """
+    if not resolutions or record_hash == primary_hash:
+        return []
+    resolution = resolutions.get(record_hash)
+    if resolution is None or getattr(resolution, "verdict", None) != "rejected":
+        return []
+    return [f"* **previously_rejected**: {_resolution_note_text(resolution)}"]
+
+
+def _render_attached_needs_validation(
+    nv: NeedsValidation, *, resolutions: dict | None = None, primary_hash: str = ""
+) -> str:
     """Compact annotation form for a needs_validation record bound to a
     confirmed finding. See the module note above for why this is a field-line
     block, not a `raw_body` replay or a blockquote."""
@@ -306,13 +352,16 @@ def _render_attached_needs_validation(nv: NeedsValidation) -> str:
     if nv.flags:
         lines.append(f"* **flags**: {' '.join(nv.flags)}")
     lines.extend(_attachment_note(nv.flags))
+    lines.extend(_attached_resolution_note(nv.sink_hash, primary_hash, resolutions))
     src = nv.source_file + (f" ({nv.slice_id})" if nv.slice_id else "")
     lines.append(f"* **sink_hash**: `{nv.sink_hash}`")
     lines.append(f"* **source**: {src}")
     return "\n".join(lines)
 
 
-def _render_attached_hardening(hn: HardeningNote) -> str:
+def _render_attached_hardening(
+    hn: HardeningNote, *, resolutions: dict | None = None, primary_hash: str = ""
+) -> str:
     """Compact annotation form for a hardening record bound to a confirmed
     finding. See the module note above for why this is a field-line block,
     not a `raw_body` replay or a blockquote."""
@@ -322,18 +371,26 @@ def _render_attached_hardening(hn: HardeningNote) -> str:
     if hn.flags:
         lines.append(f"* **flags**: {' '.join(hn.flags)}")
     lines.extend(_attachment_note(hn.flags))
+    lines.extend(_attached_resolution_note(hn.sink_hash, primary_hash, resolutions))
     src = hn.source_file + (f" ({hn.slice_id})" if hn.slice_id else "")
     lines.append(f"* **sink_hash**: `{hn.sink_hash}`")
     lines.append(f"* **source**: {src}")
     return "\n".join(lines)
 
 
-def render_needs_validation_entry(idx: int, nv: NeedsValidation) -> str:
+def render_needs_validation_entry(
+    idx: int, nv: NeedsValidation, *, resolutions: dict | None = None
+) -> str:
     """Render one standalone `## Needs validation` lead by replaying its
     `raw_body` (same convention as `render_finding` for a `Finding`). Includes
     `nohash00` records (empty `sink_snippet`): the sentinel keeps them out of
     hash matching, and when location matching does not bind them either they
-    land here rather than being silently dropped."""
+    land here rather than being silently dropped.
+
+    `resolutions` (same remembered, already-`active_rejections`-filtered map
+    `render_finding` takes) marks a standalone lead whose `sink_hash` was
+    previously rejected via `--verdicts-in`/refute -- memory marks, it does
+    not suppress: the entry still renders in full above the note."""
     flag_suffix = f" {' '.join(nv.flags)}" if nv.flags else ""
     loc = f"{nv.sink_file}:{nv.sink_line}" if nv.sink_file else "(no location)"
     title = f"### Needs validation {idx}: `{loc}`{flag_suffix}"
@@ -343,13 +400,22 @@ def render_needs_validation_entry(idx: int, nv: NeedsValidation) -> str:
         body = _append_field(body, "sink_hash", nv.sink_hash)
     else:
         body = _replace_field(body, "sink_hash", nv.sink_hash)
-    return "\n".join([title, "", body, ""])
+    out = [title, "", body]
+    if resolutions:
+        resolution = resolutions.get(nv.sink_hash)
+        if resolution is not None and getattr(resolution, "verdict", None) == "rejected":
+            out.append("")
+            out.append(_render_resolution_note(resolution))
+    out.append("")
+    return "\n".join(out)
 
 
-def render_hardening_entry(idx: int, hn: HardeningNote) -> str:
+def render_hardening_entry(
+    idx: int, hn: HardeningNote, *, resolutions: dict | None = None
+) -> str:
     """Render one standalone `## Hardening notes` entry. See
-    `render_needs_validation_entry` for the `nohash00` handling rationale --
-    same construction applies here."""
+    `render_needs_validation_entry` for the `nohash00` handling and
+    `resolutions` mark rationale -- same construction applies here."""
     flag_suffix = f" {' '.join(hn.flags)}" if hn.flags else ""
     loc = f"{hn.sink_file}:{hn.sink_line}" if hn.sink_file else "(no location)"
     title = f"### Hardening {idx}: `{loc}`{flag_suffix}"
@@ -359,10 +425,19 @@ def render_hardening_entry(idx: int, hn: HardeningNote) -> str:
         body = _append_field(body, "sink_hash", hn.sink_hash)
     else:
         body = _replace_field(body, "sink_hash", hn.sink_hash)
-    return "\n".join([title, "", body, ""])
+    out = [title, "", body]
+    if resolutions:
+        resolution = resolutions.get(hn.sink_hash)
+        if resolution is not None and getattr(resolution, "verdict", None) == "rejected":
+            out.append("")
+            out.append(_render_resolution_note(resolution))
+    out.append("")
+    return "\n".join(out)
 
 
-def _render_needs_validation_section(unmatched: list[NeedsValidation]) -> list[str]:
+def _render_needs_validation_section(
+    unmatched: list[NeedsValidation], *, resolutions: dict | None = None
+) -> list[str]:
     """`## Needs validation` -- unmatched leads only. Index REPORT.md only
     (never per-family, see module note above). Sorted by
     (source_file, sink_file, sink_line) so ordering is stable across runs
@@ -381,11 +456,13 @@ def _render_needs_validation_section(unmatched: list[NeedsValidation]) -> list[s
     ]
     ordered = sorted(unmatched, key=lambda nv: (nv.source_file, nv.sink_file, nv.sink_line))
     for idx, nv in enumerate(ordered, start=1):
-        lines.append(render_needs_validation_entry(idx, nv))
+        lines.append(render_needs_validation_entry(idx, nv, resolutions=resolutions))
     return lines
 
 
-def _render_hardening_section(unmatched: list[HardeningNote]) -> list[str]:
+def _render_hardening_section(
+    unmatched: list[HardeningNote], *, resolutions: dict | None = None
+) -> list[str]:
     """`## Hardening notes` -- unmatched notes only. Same placement and
     ordering rules as `_render_needs_validation_section`."""
     if not unmatched:
@@ -399,7 +476,7 @@ def _render_hardening_section(unmatched: list[HardeningNote]) -> list[str]:
     ]
     ordered = sorted(unmatched, key=lambda hn: (hn.source_file, hn.sink_file, hn.sink_line))
     for idx, hn in enumerate(ordered, start=1):
-        lines.append(render_hardening_entry(idx, hn))
+        lines.append(render_hardening_entry(idx, hn, resolutions=resolutions))
     return lines
 
 
@@ -816,8 +893,8 @@ def render_report(
         out.append("")
         for idx, mf in enumerate(manual, start=1):
             out.append(render_finding(idx, mf, resolutions=resolutions))
-    out.extend(_render_needs_validation_section(unmatched_needs_validation or []))
-    out.extend(_render_hardening_section(unmatched_hardening or []))
+    out.extend(_render_needs_validation_section(unmatched_needs_validation or [], resolutions=resolutions))
+    out.extend(_render_hardening_section(unmatched_hardening or [], resolutions=resolutions))
     return "\n".join(out)
 
 
@@ -858,6 +935,7 @@ def render_index_report(
     incomplete: bool = False,
     unmatched_needs_validation: list[NeedsValidation] | None = None,
     unmatched_hardening: list[HardeningNote] | None = None,
+    resolutions: dict | None = None,
 ) -> str:
     """Executive summary + index table linking to per-family detail files.
 
@@ -870,6 +948,10 @@ def render_index_report(
     a specific finding render inline via `render_finding` instead, in
     whichever file that finding lands in (family detail or
     `manual_review.md`).
+
+    `resolutions` is forwarded only to those two standalone sections here --
+    the per-family/manual-review findings themselves get it separately, via
+    `render_family_detail`/`render_manual_review_file` in `write_split_report`.
     """
     out = [
         render_summary(
@@ -925,8 +1007,8 @@ def render_index_report(
             out.append(f"See [`{details_dirname}/manual_review.md`]({details_dirname}/manual_review.md).")
             out.append("")
 
-    out.extend(_render_needs_validation_section(unmatched_needs_validation or []))
-    out.extend(_render_hardening_section(unmatched_hardening or []))
+    out.extend(_render_needs_validation_section(unmatched_needs_validation or [], resolutions=resolutions))
+    out.extend(_render_hardening_section(unmatched_hardening or [], resolutions=resolutions))
     return "\n".join(out)
 
 
@@ -1014,6 +1096,7 @@ def write_split_report(
             incomplete=incomplete,
             unmatched_needs_validation=unmatched_needs_validation,
             unmatched_hardening=unmatched_hardening,
+            resolutions=resolutions,
         ),
     )
     written.append(output_path)

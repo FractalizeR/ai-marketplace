@@ -29,16 +29,18 @@ from dedupe.models import (  # noqa: E402
 )
 from dedupe.pipeline import attach_side_records  # noqa: E402
 from dedupe.pipeline import dedupe as df_dedupe  # noqa: E402
+from dedupe.refute import compute_evidence_hash  # noqa: E402
 from dedupe.renderer import (  # noqa: E402
     _replace_field,
     render_finding,
     render_hardening_entry,
     render_index_report,
     render_needs_validation_entry,
+    render_report,
     render_summary,
     write_split_report,
 )
-from dedupe.state import Resolution  # noqa: E402
+from dedupe.state import Resolution, active_rejections  # noqa: E402
 
 
 def _mk_finding(
@@ -856,6 +858,277 @@ class ResolutionAnnotationTests(unittest.TestCase):
         body = render_finding(1, mf, resolutions=resolutions)
         self.assertNotIn("42", body)
         self.assertNotIn("run_seq", body)
+
+
+class StandaloneResolutionAnnotationTests(unittest.TestCase):
+    """A `resolutions` rejection also marks a STANDALONE `## Needs validation`
+    / `## Hardening notes` entry (unmatched by `attach_side_records`), not
+    just a confirmed `Finding` -- CLAUDE.md "memory marks, never suppresses"
+    applies to leads and hardening notes the same as to findings. Bound
+    (attached-to-a-finding) records with a tier-1 (exact-hash) bind are out
+    of scope here: they share the parent's `sink_hash`, so the parent
+    finding's own note already covers them; see
+    `AttachedResolutionAnnotationTests` below for the tier-2/3 (by-location,
+    own hash) case, which DOES get its own mark."""
+
+    def _nv(self, sink_snippet="lead code", **kwargs) -> NeedsValidation:
+        defaults = dict(
+            sink_file="src/Lead.php", sink_line=20,
+            claimed_root_cause="claimed cause",
+            raw_body="* **claimed_root_cause**: claimed cause\n",
+            source_file="W1.md", slice_id="W1",
+        )
+        defaults.update(kwargs)
+        return NeedsValidation(sink_snippet=sink_snippet, **defaults)
+
+    def _hn(self, sink_snippet="hardening code", **kwargs) -> HardeningNote:
+        defaults = dict(
+            sink_file="src/Harden.php", sink_line=30,
+            text="hardening text",
+            raw_body="* **text**: hardening text\n",
+            source_file="W1.md", slice_id="W1",
+        )
+        defaults.update(kwargs)
+        return HardeningNote(sink_snippet=sink_snippet, **defaults)
+
+    def test_needs_validation_entry_marks_rejected_hash(self):
+        nv = self._nv()
+        resolutions = {nv.sink_hash: Resolution(
+            verdict="rejected", refute_file="src/Guard.php", refute_line=3, source="refute",
+        )}
+        entry = render_needs_validation_entry(1, nv, resolutions=resolutions)
+        # DoD: the lead itself is not suppressed -- title/body still present.
+        self.assertIn("### Needs validation 1: `src/Lead.php:20`", entry)
+        self.assertIn("claimed cause", entry)
+        self.assertIn("Previously rejected", entry)
+        self.assertIn("src/Guard.php:3", entry)
+
+    def test_hardening_entry_marks_rejected_hash(self):
+        hn = self._hn()
+        resolutions = {hn.sink_hash: Resolution(verdict="rejected", source="triage")}
+        entry = render_hardening_entry(1, hn, resolutions=resolutions)
+        self.assertIn("### Hardening 1: `src/Harden.php:30`", entry)
+        self.assertIn("hardening text", entry)
+        self.assertIn("Previously rejected (source: `triage`)", entry)
+
+    def test_needs_validation_entry_no_match_no_note(self):
+        entry = render_needs_validation_entry(
+            1, self._nv(), resolutions={"someotherhash": Resolution(verdict="rejected")}
+        )
+        self.assertNotIn("Previously rejected", entry)
+
+    def test_hardening_entry_reaffirmed_no_note(self):
+        hn = self._hn()
+        resolutions = {hn.sink_hash: Resolution(verdict="reaffirmed", source="triage")}
+        entry = render_hardening_entry(1, hn, resolutions=resolutions)
+        self.assertNotIn("Previously rejected", entry)
+
+    def test_needs_validation_entry_resolutions_none_is_back_compat(self):
+        entry = render_needs_validation_entry(1, self._nv())
+        self.assertNotIn("Previously rejected", entry)
+
+    def test_marks_survive_write_split_report_index(self):
+        """Red-if-turned-into-a-filter guard for the split-report path: the
+        wiring bug this feature fixes was `write_split_report` dropping
+        `resolutions` before it ever reached `render_index_report` -- so this
+        must go through the real entry point, not just the leaf renderer."""
+        nv = self._nv()
+        hn = self._hn()
+        resolutions = {
+            nv.sink_hash: Resolution(verdict="rejected", source="triage"),
+            hn.sink_hash: Resolution(verdict="rejected", source="triage"),
+        }
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "REPORT.md"
+            details = Path(td) / "REPORT"
+            write_split_report(
+                [], [], out, details,
+                unmatched_needs_validation=[nv],
+                unmatched_hardening=[hn],
+                resolutions=resolutions,
+            )
+            index_text = out.read_text(encoding="utf-8")
+        self.assertIn("## Needs validation", index_text)
+        self.assertIn("## Hardening notes", index_text)
+        self.assertEqual(index_text.count("Previously rejected"), 2)
+
+    def test_marks_survive_single_file_report(self):
+        nv = self._nv()
+        resolutions = {nv.sink_hash: Resolution(verdict="rejected", source="triage")}
+        text = render_report(
+            [], [], unmatched_needs_validation=[nv], resolutions=resolutions,
+        )
+        self.assertIn("Previously rejected", text)
+
+    def _mk_project(self, td: Path) -> Path:
+        project_root = td / "project"
+        guard = project_root / "src" / "Guard.php"
+        guard.parent.mkdir(parents=True)
+        guard.write_text(
+            "\n".join(["<?php", "function check() {", "    deny_unless(hasRole('admin'));", "}"]),
+            encoding="utf-8",
+        )
+        return project_root
+
+    def test_invalidated_rejection_shows_no_mark_on_standalone_entries(self):
+        """Evidence-hash invalidation (state.active_rejections) must protect
+        standalone entries exactly as it already protects confirmed findings:
+        a positive control (evidence unchanged -> mark) plus the regression
+        (evidence changed -> no mark), both driven through the real
+        `active_rejections` filter the pipeline uses, not a hand-rolled dict."""
+        nv = self._nv()
+        hn = self._hn()
+        with tempfile.TemporaryDirectory() as td:
+            project_root = self._mk_project(Path(td))
+            evidence_hash = compute_evidence_hash("src/Guard.php", 3, project_root)
+            raw_resolutions = {
+                nv.sink_hash: Resolution(
+                    verdict="rejected", evidence_hash=evidence_hash,
+                    refute_file="src/Guard.php", refute_line=3, source="refute",
+                ),
+                hn.sink_hash: Resolution(
+                    verdict="rejected", evidence_hash=evidence_hash,
+                    refute_file="src/Guard.php", refute_line=3, source="refute",
+                ),
+            }
+
+            # Positive control: evidence untouched -> active -> mark renders.
+            active = active_rejections(raw_resolutions, project_root)
+            nv_entry = render_needs_validation_entry(1, nv, resolutions=active)
+            hn_entry = render_hardening_entry(1, hn, resolutions=active)
+            self.assertIn("Previously rejected", nv_entry)
+            self.assertIn("Previously rejected", hn_entry)
+
+            # Protection removed at the cited line -> evidence_hash changes
+            # -> active_rejections drops it -> no mark, without touching
+            # resolutions itself (mirrors test_findings_state.py's scenario).
+            (project_root / "src" / "Guard.php").write_text(
+                "\n".join(["<?php", "function check() {", "    // no check anymore", "}"]),
+                encoding="utf-8",
+            )
+            active_after = active_rejections(raw_resolutions, project_root)
+            nv_entry_after = render_needs_validation_entry(1, nv, resolutions=active_after)
+            hn_entry_after = render_hardening_entry(1, hn, resolutions=active_after)
+            self.assertNotIn("Previously rejected", nv_entry_after)
+            self.assertNotIn("Previously rejected", hn_entry_after)
+
+
+class AttachedResolutionAnnotationTests(unittest.TestCase):
+    """A resolution can also apply to a record ATTACHED to a confirmed
+    finding (`attach_side_records`) rather than standalone. Two tiers behave
+    differently:
+
+    - tier-1 (exact `sink_hash` match): the attached record shares the
+      parent finding's hash, so `render_finding`'s own `resolutions` lookup
+      (on `f.sink_hash`) already renders the note once, above the attached
+      block. Marking the attached copy too would duplicate it.
+    - tier-2/3 (`FLAG_ATTACHED_WITHOUT_HASH`, bound by location): the record
+      keeps its OWN, different `sink_hash`, which the parent's lookup never
+      sees -- only a mark keyed on the record's own hash can cover it. It
+      renders as a `* **previously_rejected**: ...` field line (the attached
+      form is already built entirely from field lines, not a `raw_body`
+      replay or a blockquote -- see the module note above
+      `_render_attached_needs_validation` -- so this is a safe field-line
+      addition, not the blockquote-reflow case `render_finding`'s
+      `[REFUTE_CLAIMED]`/`resolutions` blockquote branch has to avoid)."""
+
+    def _nv(self, sink_snippet, **kwargs) -> NeedsValidation:
+        defaults = dict(
+            sink_file="src/A.php", sink_line=10,
+            claimed_root_cause="claimed cause",
+            raw_body="* **claimed_root_cause**: claimed cause\n",
+            source_file="W1.md", slice_id="W1",
+        )
+        defaults.update(kwargs)
+        return NeedsValidation(sink_snippet=sink_snippet, **defaults)
+
+    def _hn(self, sink_snippet, **kwargs) -> HardeningNote:
+        defaults = dict(
+            sink_file="src/A.php", sink_line=10,
+            text="hardening text",
+            raw_body="* **text**: hardening text\n",
+            source_file="W1.md", slice_id="W1",
+        )
+        defaults.update(kwargs)
+        return HardeningNote(sink_snippet=sink_snippet, **defaults)
+
+    def test_tier2_needs_validation_own_rejection_gets_field_line_mark(self):
+        mf = _mk_merged(sink_snippet="code", sink_kind="dql_concat")
+        nv = self._nv(
+            "a different quotation of the same line",
+            sink_kind="dql_concat", root_cause_family="injection",
+            enclosing_symbol="Repo::find",
+        )
+        attach_side_records([mf], [nv], [])
+        self.assertNotEqual(nv.sink_hash, mf.primary.sink_hash)  # tier-2/3, own hash
+        resolutions = {nv.sink_hash: Resolution(
+            verdict="rejected", refute_file="src/Guard.php", refute_line=3, source="refute",
+        )}
+        body = render_finding(1, mf, resolutions=resolutions)
+        self.assertIn("**Needs validation (attached):**", body)
+        self.assertIn("* **previously_rejected**: Previously rejected; evidence at "
+                       "`src/Guard.php:3`", body)
+
+    def test_tier2_hardening_own_rejection_gets_field_line_mark(self):
+        mf = _mk_merged(sink_snippet="code", sink_kind="dql_concat")
+        hn = self._hn(
+            "a different quotation of the same line",
+            sink_kind="dql_concat", root_cause_family="injection",
+            enclosing_symbol="Repo::find",
+        )
+        attach_side_records([mf], [], [hn])
+        self.assertNotEqual(hn.sink_hash, mf.primary.sink_hash)
+        resolutions = {hn.sink_hash: Resolution(verdict="rejected", source="triage")}
+        body = render_finding(1, mf, resolutions=resolutions)
+        self.assertIn("**Hardening notes (attached):**", body)
+        self.assertIn("* **previously_rejected**: Previously rejected (source: `triage`)", body)
+
+    def test_tier1_exact_bind_does_not_duplicate_the_parents_note(self):
+        """The attached record shares the parent's hash -- only the parent's
+        own note (rendered above the attached block) should show; the
+        attached field-line form must not repeat it."""
+        mf = _mk_merged(sink_snippet="code")
+        nv = self._nv("code")  # same snippet -> same sink_hash as the parent
+        attach_side_records([mf], [nv], [])
+        self.assertEqual(nv.sink_hash, mf.primary.sink_hash)
+        resolutions = {mf.primary.sink_hash: Resolution(verdict="rejected", source="triage")}
+        body = render_finding(1, mf, resolutions=resolutions)
+        self.assertEqual(body.count("Previously rejected"), 1)
+        self.assertNotIn("* **previously_rejected**:", body)
+
+    def test_tier2_reaffirmed_own_hash_no_mark(self):
+        mf = _mk_merged(sink_snippet="code", sink_kind="dql_concat")
+        nv = self._nv(
+            "a different quotation of the same line",
+            sink_kind="dql_concat", root_cause_family="injection",
+            enclosing_symbol="Repo::find",
+        )
+        attach_side_records([mf], [nv], [])
+        resolutions = {nv.sink_hash: Resolution(verdict="reaffirmed", source="triage")}
+        body = render_finding(1, mf, resolutions=resolutions)
+        self.assertNotIn("Previously rejected", body)
+
+    def test_tier2_no_matching_resolution_no_mark(self):
+        mf = _mk_merged(sink_snippet="code", sink_kind="dql_concat")
+        nv = self._nv(
+            "a different quotation of the same line",
+            sink_kind="dql_concat", root_cause_family="injection",
+            enclosing_symbol="Repo::find",
+        )
+        attach_side_records([mf], [nv], [])
+        body = render_finding(1, mf, resolutions={"someotherhash": Resolution(verdict="rejected")})
+        self.assertNotIn("Previously rejected", body)
+
+    def test_resolutions_none_is_back_compat_no_mark(self):
+        mf = _mk_merged(sink_snippet="code", sink_kind="dql_concat")
+        nv = self._nv(
+            "a different quotation of the same line",
+            sink_kind="dql_concat", root_cause_family="injection",
+            enclosing_symbol="Repo::find",
+        )
+        attach_side_records([mf], [nv], [])
+        body = render_finding(1, mf)
+        self.assertNotIn("Previously rejected", body)
 
 
 if __name__ == "__main__":
