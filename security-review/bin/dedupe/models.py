@@ -56,6 +56,106 @@ def _sink_hash_from_snippet(snippet: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:8]
 
 # ---------------------------------------------------------------------------
+# Checklist path normalization.
+#
+# A wave file / waves_plan.json can be rendered by a DIFFERENT plugin install
+# than the one that produced it (composite audits, a codex/opencode bundle
+# built on another machine, a re-run against a rebuilt dist/). An absolute
+# filesystem path baked in at authoring time (a worker's `Discovered via`
+# value, or a `checklists` entry in waves_plan.json) must never survive into
+# a shared artefact (findings.json, REPORT.md, REPORT/<family>.md) as-is.
+# `checklist_tail` is the one normalization primitive both `parser.py`
+# (Discovered via) and `renderer.py` (raw_body replay + `## Checklist
+# coverage`) build on, so all three channels agree on the same tail for the
+# same checklist regardless of which install's absolute prefix it carried.
+# ---------------------------------------------------------------------------
+
+
+def checklist_tail(path: str) -> str | None:
+    """Return `path`'s tail starting at its LAST "checklists/" segment.
+
+    `rfind`, not `find`: the machine-specific prefix ahead of the real
+    checklists root can itself contain the substring "checklists/" (e.g. an
+    install path like `/opt/example-install/old-checklists/security-review/
+    checklists/core/auth.md`) -- taking the first occurrence would leave a
+    chunk of that prefix inside the "tail". Returns `None` when no
+    "checklists/" marker is present at all, so a caller can fall back to the
+    original value rather than guess at a path it cannot recognize.
+    """
+    normalized = path.removeprefix("./")
+    idx = normalized.rfind("checklists/")
+    if idx < 0:
+        return None
+    return normalized[idx:]
+
+
+_CHECKLIST_PATH_RE = re.compile(r"checklists/[^\s,]*\.md(?![\w.])", re.IGNORECASE)
+_CHECKLIST_MARKER_RE = re.compile(r"checklist:")
+
+
+def _extract_checklist_path(candidate: str) -> tuple[str, str] | None:
+    """Find the recognizable checklist path at the head of `candidate`.
+
+    Returns `(path, trailing_text)` -- `trailing_text` is whatever in
+    `candidate` comes after the recognized path (e.g. a worker's trailing
+    " exploratory" note), left untouched by the caller. `None` when
+    `checklist_tail` finds no "checklists/" marker, or what immediately
+    follows it isn't a clean "....md" (a ".md.bak" suffix fails the
+    boundary check, and the path class cannot cross a space/comma) -- free
+    text the worker wrote after the real path must never be swallowed into
+    it.
+    """
+    tail = checklist_tail(candidate)
+    if tail is None:
+        return None
+    m = _CHECKLIST_PATH_RE.match(tail)
+    if not m:
+        return None
+    return m.group(0), tail[m.end():]
+
+
+def _normalize_segment(segment: str) -> str:
+    """Normalize every `checklist:<path>` token within one comma-free
+    segment of a `Discovered via` value (see `normalize_discovered_via`).
+
+    Each token is bounded by the NEXT `checklist:` token in the same
+    segment (or the segment's end), so one token's un-recognized trailing
+    text can never bleed into the next token's path.
+    """
+    matches = list(_CHECKLIST_MARKER_RE.finditer(segment))
+    if not matches:
+        return segment
+    out = [segment[: matches[0].start()]]
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(segment)
+        candidate = segment[m.end():end]
+        found = _extract_checklist_path(candidate)
+        if found is None:
+            out.append(segment[m.start():end])
+        else:
+            path, trailing = found
+            out.append(f"checklist:{path}{trailing}")
+    return "".join(out)
+
+
+def normalize_discovered_via(value: str) -> str:
+    """Normalize every `checklist:<path>` token in a `Discovered via` value
+    to `checklist:<tail>` (see `checklist_tail`).
+
+    Splits on commas first, keeping the separators, and processes each
+    segment independently: a `checklist:` token whose path cannot be
+    recognized (no "checklists/" marker, or no valid ".md" ending) is left
+    exactly as authored, never guessed at, and never lets its unrecognized
+    text bleed into a neighboring token -- across a comma, a bare word like
+    `exploratory`, or another `checklist:` token on the same line.
+    """
+    return "".join(
+        part if part == "," else _normalize_segment(part)
+        for part in re.split(r"(,)", value)
+    )
+
+
+# ---------------------------------------------------------------------------
 # Severity.
 # ---------------------------------------------------------------------------
 

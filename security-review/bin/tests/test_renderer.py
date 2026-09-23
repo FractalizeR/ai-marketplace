@@ -24,12 +24,17 @@ from dedupe.models import (  # noqa: E402
     HardeningNote,
     MergedFinding,
     NeedsValidation,
+    checklist_tail,
+    normalize_discovered_via,
 )
 from dedupe.pipeline import attach_side_records  # noqa: E402
 from dedupe.pipeline import dedupe as df_dedupe  # noqa: E402
 from dedupe.renderer import (  # noqa: E402
+    _replace_field,
     render_finding,
+    render_hardening_entry,
     render_index_report,
+    render_needs_validation_entry,
     render_summary,
     write_split_report,
 )
@@ -179,6 +184,154 @@ class DiffBlockTests(unittest.TestCase):
         self.assertNotIn("Closed since previous run", summary)
 
 
+class ChecklistTailNormalizationTests(unittest.TestCase):
+    """`models.checklist_tail` / `models.normalize_discovered_via` --
+    table-driven cases. A foreign install's absolute prefix is built as a
+    clearly-fake, non-existent path (never a real path on this machine) --
+    these functions are pure string ops and never touch the filesystem."""
+
+    def test_checklist_tail_cases(self):
+        cases = [
+            ("checklists/core/auth.md", "checklists/core/auth.md"),
+            (
+                "/opt/example-install/core/checklists/core/auth.md",
+                "checklists/core/auth.md",
+            ),
+            (
+                "/home/example-user/checklists/repo/security-review/checklists/core/auth.md",
+                "checklists/core/auth.md",
+            ),
+            ("./checklists/x.md", "checklists/x.md"),
+            ("/opt/example-install/file-without-marker.md", None),
+            (
+                "/Users/example/Library/Application Support/install/"
+                "checklists/core/auth.md",
+                "checklists/core/auth.md",
+            ),
+        ]
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                self.assertEqual(checklist_tail(raw), expected)
+
+    def test_normalize_discovered_via_cases(self):
+        cases = [
+            ("checklist:checklists/core/auth.md", "checklist:checklists/core/auth.md"),
+            (
+                "checklist:/opt/example-install/core/checklists/core/auth.md",
+                "checklist:checklists/core/auth.md",
+            ),
+            (
+                "checklist:/home/example-user/checklists/repo/security-review/"
+                "checklists/core/auth.md",
+                "checklist:checklists/core/auth.md",
+            ),
+            ("checklist:./checklists/x.md", "checklist:checklists/x.md"),
+            ("exploratory", "exploratory"),
+            (
+                "checklist:/opt/example-install/file-without-marker.md",
+                "checklist:/opt/example-install/file-without-marker.md",
+            ),
+            (
+                "checklist:/Users/example/Library/Application Support/"
+                "install/checklists/core/auth.md",
+                "checklist:checklists/core/auth.md",
+            ),
+            # A token with no ".md" of its own must not extend to a LATER
+            # token's ".md" -- each of these three ends unchanged.
+            (
+                "checklist:foo.md.bak",
+                "checklist:foo.md.bak",
+            ),
+            (
+                "checklist:checklists/core/auth",
+                "checklist:checklists/core/auth",
+            ),
+            # Uppercase extension is still recognized.
+            (
+                "checklist:/opt/example-install/checklists/core/AUTH.MD",
+                "checklist:checklists/core/AUTH.MD",
+            ),
+            # Two tokens, space-separated (no comma) -- each stops at the
+            # other, neither swallows the other's path.
+            (
+                "checklist:/opt/example-install/checklists/core/a.md "
+                "checklist:/opt/other-install/checklists/core/b.md",
+                "checklist:checklists/core/a.md checklist:checklists/core/b.md",
+            ),
+            # A bare word before the token is untouched, not absorbed.
+            (
+                "exploratory checklist:/opt/example-install/checklists/core/a.md",
+                "exploratory checklist:checklists/core/a.md",
+            ),
+        ]
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                self.assertEqual(normalize_discovered_via(raw), expected)
+
+    def test_normalize_discovered_via_does_not_cross_comma_to_a_later_md(self):
+        """A `checklist:` token whose own path has no `.md` must not reach
+        across a comma to a LATER token's `.md` and delete everything in
+        between."""
+        raw = (
+            "checklist:core/auth, exploratory, "
+            "checklist:/opt/example-install/checklists/core/a.md"
+        )
+        expected = (
+            "checklist:core/auth, exploratory, "
+            "checklist:checklists/core/a.md"
+        )
+        self.assertEqual(normalize_discovered_via(raw), expected)
+
+    def test_normalize_discovered_via_does_not_misattribute_across_comma(self):
+        """Free text with a `.md` mention after a comma must not be pulled
+        into an EARLIER, unrelated `checklist:` token that has no `.md` of
+        its own."""
+        raw = (
+            "checklist:/opt/example-install/checklists/core/auth (traced), "
+            "see /opt/example-install/checklists/x.md"
+        )
+        # Neither side is a recognizable, self-contained `checklist:<path>.md`
+        # token, so the value is left byte-identical.
+        self.assertEqual(normalize_discovered_via(raw), raw)
+
+    def test_normalize_discovered_via_two_tokens_comma_separated(self):
+        """One relative + one foreign-absolute token, comma-separated ->
+        both normalized, original separator (", ") preserved verbatim."""
+        raw = (
+            "checklist:checklists/core/auth.md, "
+            "checklist:/opt/example-install/core/checklists/stacks/symfony/auth.md"
+        )
+        expected = (
+            "checklist:checklists/core/auth.md, "
+            "checklist:checklists/stacks/symfony/auth.md"
+        )
+        self.assertEqual(normalize_discovered_via(raw), expected)
+
+    def test_spaced_path_does_not_swallow_comma_separated_next_token(self):
+        """A spaced install path must still stop at the next `checklist:`
+        token instead of consuming the separator and the second path too."""
+        raw = (
+            "checklist:/Users/example/Library/Application Support/"
+            "install/checklists/core/auth.md, "
+            "checklist:checklists/stacks/symfony/auth.md"
+        )
+        expected = (
+            "checklist:checklists/core/auth.md, "
+            "checklist:checklists/stacks/symfony/auth.md"
+        )
+        self.assertEqual(normalize_discovered_via(raw), expected)
+
+    def test_spaced_path_does_not_swallow_trailing_exploratory_token(self):
+        """A trailing space-separated `exploratory` token (no comma) must
+        survive untouched, not get absorbed into the normalized path."""
+        raw = (
+            "checklist:/Users/example/Library/Application Support/"
+            "install/checklists/core/auth.md exploratory"
+        )
+        expected = "checklist:checklists/core/auth.md exploratory"
+        self.assertEqual(normalize_discovered_via(raw), expected)
+
+
 class ChecklistCoverageBlockTests(unittest.TestCase):
     """`## Checklist coverage` block, sourced from waves_plan.json."""
 
@@ -276,6 +429,104 @@ class ChecklistCoverageBlockTests(unittest.TestCase):
         # Absolute path should NOT appear; relative form must.
         self.assertNotIn(str(cl.resolve()), summary)
         self.assertIn("`checklists/core/injection.md`", summary)
+
+
+class DiscoveredViaBodyReplacementTests(unittest.TestCase):
+    """`render_finding` overwrites the `Discovered via` line in the replayed
+    `raw_body` with `f.discovered_via`. `raw_body` is the worker's verbatim
+    text -- normalizing `f.discovered_via` at parse time alone does not
+    touch it, so this replacement is what keeps a foreign install's
+    absolute path out of `REPORT/<family>.md`."""
+
+    def test_body_discovered_via_line_replaced_with_normalized_value(self):
+        f = _mk_finding()
+        f.discovered_via = "checklist:checklists/core/auth.md"
+        f.raw_body = (
+            "* **Description**: test desc\n"
+            "* **Discovered via**: checklist:/opt/example-install/core/"
+            "checklists/core/auth.md\n"
+        )
+        mf = MergedFinding(primary=f, flags=[])
+        body = render_finding(1, mf)
+        self.assertNotIn("/opt/example-install", body)
+        self.assertIn("* **Discovered via**: checklist:checklists/core/auth.md", body)
+
+    def test_body_without_discovered_via_field_is_left_alone(self):
+        """No `Discovered via` line in raw_body -> nothing is appended (the
+        field replacement is opt-in on presence, unlike sink_hash)."""
+        f = _mk_finding()
+        f.discovered_via = "checklist:checklists/core/auth.md"
+        f.raw_body = "* **Description**: test desc\n"
+        mf = MergedFinding(primary=f, flags=[])
+        body = render_finding(1, mf)
+        self.assertNotIn("Discovered via", body)
+
+
+class ReplaceFieldLiteralSubstitutionTests(unittest.TestCase):
+    """`_replace_field` must treat `new_value` as literal text, not an
+    `re.sub` replacement template -- a backslash in worker free text (a
+    Windows install path, a PHP FQCN) must not raise `re.error`, and a
+    literal `\\1` must not be expanded as a backreference."""
+
+    def test_backslash_in_value_does_not_raise(self):
+        body = "* **Discovered via**: checklist:checklists/core/auth.md\n"
+        value = r"checklist:checklists/core/auth.md, traced via App\Controller\Foo"
+        result = _replace_field(body, "Discovered via", value)
+        self.assertIn(value, result)
+
+    def test_literal_backreference_is_not_expanded(self):
+        body = "* **Discovered via**: checklist:checklists/core/auth.md\n"
+        result = _replace_field(body, "Discovered via", r"see \1 group")
+        self.assertIn(r"* **Discovered via**: see \1 group", result)
+
+    def test_render_finding_survives_backslash_in_discovered_via(self):
+        """End-to-end through `render_finding`, not just the helper --
+        `f.discovered_via` is worker free text once it carries no
+        `checklist:` token for `normalize_discovered_via` to touch."""
+        f = _mk_finding()
+        f.discovered_via = r"App\Controller\Foo, checklist:checklists/core/auth.md"
+        f.raw_body = "* **Discovered via**: checklist:checklists/core/auth.md\n"
+        mf = MergedFinding(primary=f, flags=[])
+        body = render_finding(1, mf)
+        self.assertIn(r"App\Controller\Foo", body)
+
+
+class StandaloneBucketDiscoveredViaNormalizationTests(unittest.TestCase):
+    """`render_needs_validation_entry` / `render_hardening_entry` replay
+    `raw_body` verbatim (like `render_finding` does for a `Finding`), but
+    `NeedsValidation`/`HardeningNote` carry no parsed `discovered_via` field
+    of their own -- so the `Discovered via` line must be re-normalized from
+    the replayed body itself, not from a pre-normalized attribute."""
+
+    def test_needs_validation_entry_normalizes_discovered_via(self):
+        nv = NeedsValidation(
+            sink_file="src/A.php", sink_line=10,
+            claimed_root_cause="claimed cause",
+            raw_body=(
+                "* **claimed_root_cause**: claimed cause\n"
+                "* **Discovered via**: checklist:/opt/example-install/core/"
+                "checklists/core/auth.md\n"
+            ),
+            source_file="W1.md", slice_id="W1",
+        )
+        entry = render_needs_validation_entry(1, nv)
+        self.assertNotIn("/opt/example-install", entry)
+        self.assertIn("* **Discovered via**: checklist:checklists/core/auth.md", entry)
+
+    def test_hardening_entry_normalizes_discovered_via(self):
+        hn = HardeningNote(
+            sink_file="src/A.php", sink_line=10,
+            text="hardening text",
+            raw_body=(
+                "* **text**: hardening text\n"
+                "* **Discovered via**: checklist:/opt/example-install/core/"
+                "checklists/core/auth.md\n"
+            ),
+            source_file="W1.md", slice_id="W1",
+        )
+        entry = render_hardening_entry(1, hn)
+        self.assertNotIn("/opt/example-install", entry)
+        self.assertIn("* **Discovered via**: checklist:checklists/core/auth.md", entry)
 
 
 class VerdictBucketRenderingTests(unittest.TestCase):

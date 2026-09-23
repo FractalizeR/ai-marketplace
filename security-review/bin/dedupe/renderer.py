@@ -21,6 +21,8 @@ from .models import (
     HardeningNote,
     MergedFinding,
     NeedsValidation,
+    checklist_tail,
+    normalize_discovered_via,
 )
 from .reflow import reflow_markdown
 
@@ -46,17 +48,43 @@ def _default_plugin_root() -> Path:
 
 
 def _replace_field(body: str, field_name: str, new_value: str) -> str:
-    """Replace `* **FieldName**: ...` with a new single-line value."""
+    """Replace `* **FieldName**: ...` with a new single-line value.
+
+    Uses a callable replacement, never a template string: `new_value` can be
+    worker-authored free text, and a template string treats its backslashes
+    as escape/backreference syntax -- a literal `\\1` would be expanded, and
+    an unrecognized escape (e.g. `\\C` from a Windows path) raises `re.error`.
+    """
     pattern = re.compile(
         rf"^(\*\s+\*\*{re.escape(field_name)}\*\*\s*:).*$",
         re.MULTILINE,
     )
-    return pattern.sub(rf"\1 {new_value}", body, count=1)
+    return pattern.sub(lambda m: f"{m.group(1)} {new_value}", body, count=1)
 
 
 def _append_field(body: str, field_name: str, value: str) -> str:
     """Append a new field line at the end of the metadata block."""
     return body.rstrip() + f"\n* **{field_name}**: {value}\n"
+
+
+_DISCOVERED_VIA_LINE_RE = re.compile(
+    r"^\*\s+\*\*Discovered via\*\*\s*:\s*(.*)$", re.MULTILINE
+)
+
+
+def _normalize_discovered_via_in_body(body: str) -> str:
+    """Re-normalize a `Discovered via` line replayed verbatim from `raw_body`.
+
+    Unlike `Finding` (normalized once at parse time into `f.discovered_via`,
+    see `parser.py`), `NeedsValidation`/`HardeningNote` have no
+    `discovered_via` field of their own, so their standalone renderers must
+    re-normalize the line themselves rather than replaying it verbatim.
+    """
+    m = _DISCOVERED_VIA_LINE_RE.search(body)
+    if not m:
+        return body
+    normalized = normalize_discovered_via(m.group(1).strip())
+    return _replace_field(body, "Discovered via", normalized)
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +161,11 @@ def render_finding(idx: int, mf: MergedFinding, *, resolutions: dict | None = No
     body = _replace_field(body, "Confidence", f"{mf.confidence}/10")
     if mf.categories:
         body = _replace_field(body, "Category", ", ".join(mf.categories))
+    if "**Discovered via**" in body:
+        # `raw_body` is the verbatim original text, so the replayed body
+        # still carries the worker's un-normalized value unless we overwrite
+        # the field with the already-normalized `f.discovered_via`.
+        body = _replace_field(body, "Discovered via", f.discovered_via)
     if "**sink_hash**" not in body:
         body = _append_field(body, "sink_hash", f.sink_hash)
     else:
@@ -305,6 +338,7 @@ def render_needs_validation_entry(idx: int, nv: NeedsValidation) -> str:
     loc = f"{nv.sink_file}:{nv.sink_line}" if nv.sink_file else "(no location)"
     title = f"### Needs validation {idx}: `{loc}`{flag_suffix}"
     body = (nv.raw_body or "").strip()
+    body = _normalize_discovered_via_in_body(body)
     if "**sink_hash**" not in body:
         body = _append_field(body, "sink_hash", nv.sink_hash)
     else:
@@ -320,6 +354,7 @@ def render_hardening_entry(idx: int, hn: HardeningNote) -> str:
     loc = f"{hn.sink_file}:{hn.sink_line}" if hn.sink_file else "(no location)"
     title = f"### Hardening {idx}: `{loc}`{flag_suffix}"
     body = (hn.raw_body or "").strip()
+    body = _normalize_discovered_via_in_body(body)
     if "**sink_hash**" not in body:
         body = _append_field(body, "sink_hash", hn.sink_hash)
     else:
@@ -377,14 +412,20 @@ def _normalize_checklist_path(p: str, plugin_root: Path) -> str:
     """Return checklist path relative to plugin_root, falling back to original.
 
     waves_plan emits absolute paths (resolve_checklists). For readability in
-    REPORT.md we strip the plugin-root prefix. If a path is not under
-    plugin_root (e.g. tests passing custom paths) we return it unchanged.
+    REPORT.md we strip the plugin-root prefix. If a path is not under THIS
+    install's plugin_root -- e.g. waves_plan.json was saved by a DIFFERENT
+    install (a composite audit, a rebuilt codex/opencode bundle) rather than
+    a custom test path -- we fall back to `checklist_tail`: a "checklists/"-
+    rooted tail reads the same regardless of which install produced it, and
+    keeps this install's own absolute layout out of the shared report. Only
+    when even that marker is absent do we return the path unchanged.
     """
     try:
         rel = Path(p).resolve().relative_to(plugin_root.resolve())
         return rel.as_posix()
     except (ValueError, OSError):
-        return p
+        tail = checklist_tail(p)
+        return tail if tail is not None else p
 
 
 def _checklist_stack(rel_path: str) -> str | None:
@@ -428,8 +469,10 @@ def _findings_per_checklist(merged: Iterable[MergedFinding]) -> dict[str, int]:
 
     Format the worker emits: `checklist:<file>` (see agents/security.md).
     Workers may write either an absolute path or a plugin-root-relative one;
-    both are normalized to a path-tail match against the relative form so
-    coverage attribution lines up regardless of which form the worker used.
+    both are normalized via `checklist_tail` (same primitive as
+    `_normalize_checklist_path` and `parser.normalize_discovered_via`) so
+    coverage attribution lines up regardless of which form the worker used,
+    or which install produced it.
     Multi-checklist references separated by commas/whitespace are counted
     against each checklist mentioned.
     """
@@ -442,15 +485,12 @@ def _findings_per_checklist(merged: Iterable[MergedFinding]) -> dict[str, int]:
         for token in re.split(r"[,\s]+", dv):
             if not token.startswith("checklist:"):
                 continue
-            tail = token.split(":", 1)[1].strip()
-            if not tail:
+            path = token.split(":", 1)[1].strip()
+            if not path:
                 continue
-            # Normalize: strip leading './', any absolute prefix becomes the
-            # checklists/... suffix when present.
-            tail = tail.removeprefix("./")
-            idx = tail.find("checklists/")
-            if idx >= 0:
-                tail = tail[idx:]
+            tail = checklist_tail(path)
+            if tail is None:
+                tail = path.removeprefix("./")
             counts[tail] = counts.get(tail, 0) + 1
     return counts
 

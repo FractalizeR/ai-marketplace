@@ -85,6 +85,7 @@ def _mk_needs_validation_md(
     validation_plan_local: str = "",
     validation_plan_deployment: str = "check reverse proxy config for trusted_proxies",
     condition_keys: str = "deployment_control_not_in_source",
+    discovered_via: str = "",
 ) -> str:
     snippet_block = "\n".join("    " + ln for ln in sink_snippet.splitlines())
     lines = [
@@ -105,6 +106,8 @@ def _mk_needs_validation_md(
         lines.append(f"* **validation_plan_deployment**: {validation_plan_deployment}")
     if condition_keys:
         lines.append(f"* **condition_keys**: {condition_keys}")
+    if discovered_via:
+        lines.append(f"* **Discovered via**: {discovered_via}")
     lines.append("")
     return "\n".join(lines)
 
@@ -120,8 +123,10 @@ def _mk_hardening_md(
     *,
     text: str = "no rate limiting on this endpoint, but no principal/resource is affected",
     condition_keys: str = "admin_only",
+    discovered_via: str = "",
 ) -> str:
     snippet_block = "\n".join("    " + ln for ln in sink_snippet.splitlines())
+    discovered_via_line = f"* **Discovered via**: {discovered_via}\n" if discovered_via else ""
     return (
         f"# Hardening {n}: [{sink_kind}]: `{sink_file}:{sink_line}`\n"
         f"\n"
@@ -132,6 +137,7 @@ def _mk_hardening_md(
         f"{snippet_block}\n"
         f"* **text**: {text}\n"
         f"* **condition_keys**: {condition_keys}\n"
+        f"{discovered_via_line}"
         f"\n"
     )
 
@@ -1740,6 +1746,114 @@ class EndToEndTests(unittest.TestCase):
         f1 = df.parse_findings_file(p1)[0]
         f2 = df.parse_findings_file(p1)[0]
         self.assertEqual(f1.sink_hash, f2.sink_hash)
+
+
+class AbsolutePathNormalizationEndToEndTests(unittest.TestCase):
+    """A wave file authored (`Discovered via`) and a `waves_plan.json` saved
+    by a DIFFERENT, foreign plugin install must not leak that install's
+    absolute path into findings.json, REPORT.md, or REPORT/<family>.md, and
+    the checklist's `## Checklist coverage` count must still be non-zero (the
+    finding's `discovered_via` and the plan's `checklists` entry resolve to
+    the same tail via `checklist_tail`, not by literal string equality).
+
+    Also covers a standalone (unmatched) `needs_validation` lead and a
+    standalone `hardening` note -- these replay `raw_body` verbatim rather
+    than a parsed `discovered_via` field, so they are a separate leak
+    channel from the confirmed finding above.
+
+    `FOREIGN_ROOT` is a fabricated, non-existent path -- never a real path
+    on this machine -- per the public-repo synthetic-fixture convention.
+    """
+
+    FOREIGN_ROOT = "/opt/example-install/other-plugin-root"
+    FOREIGN_CHECKLIST = f"{FOREIGN_ROOT}/checklists/core/business_logic.md"
+
+    def _run_cli(self, tmpdir: Path) -> tuple[Path, Path]:
+        import json
+        import subprocess
+
+        md = _mk_finding_md(
+            1, "src/Checkout.php", 88, "race_condition", "business_logic",
+            "Checkout::confirm", "$total = $cart->total();",
+            severity="High", confidence=9,
+            discovered_via=f"checklist:{self.FOREIGN_CHECKLIST}",
+        )
+        waves_dir = tmpdir / "waves"
+        waves_dir.mkdir()
+        (waves_dir / "W5_PART1.md").write_text(md, encoding="utf-8")
+
+        # Standalone (unmatched) needs_validation + hardening -- distinct
+        # sink_file/sink_line and sink_snippet from the finding above, so
+        # neither binds to it by hash or by location and both stay
+        # standalone, rendered by `render_needs_validation_entry` /
+        # `render_hardening_entry`.
+        nv_hn_md = WAVE_FORMAT_MARKER + _mk_needs_validation_md(
+            1, "src/RateLimiter.php", 12, "missing_authz", "authz",
+            "RateLimiter::check", "$ip = $request->getClientIp();",
+            discovered_via=f"checklist:{self.FOREIGN_CHECKLIST}",
+        ) + _mk_hardening_md(
+            1, "src/Admin.php", 20, "csrf_missing", "authz", "Admin::update",
+            "$this->save($request->all());",
+            discovered_via=f"checklist:{self.FOREIGN_CHECKLIST}",
+        )
+        (waves_dir / "W1_PART1.md").write_text(nv_hn_md, encoding="utf-8")
+
+        waves_plan_path = tmpdir / "waves_plan.json"
+        waves_plan_path.write_text(
+            json.dumps([
+                {
+                    "wave_id": "W5",
+                    "slice_id": "W5_PART1",
+                    "checklists": [self.FOREIGN_CHECKLIST],
+                }
+            ]),
+            encoding="utf-8",
+        )
+
+        output = tmpdir / "REPORT.md"
+        details_dir = tmpdir / "REPORT"
+        subprocess.run(
+            [
+                sys.executable, _CLI_SCRIPT,
+                "--input-glob", str(waves_dir / "*.md"),
+                "--output", str(output),
+                "--details-dir", str(details_dir),
+                "--waves-plan", str(waves_plan_path),
+                "--no-state",
+            ],
+            capture_output=True, text=True, check=True,
+        )
+        return output, details_dir
+
+    def test_no_foreign_prefix_and_nonzero_checklist_count(self):
+        tmpdir = Path(tempfile.mkdtemp())
+        output, details_dir = self._run_cli(tmpdir)
+
+        findings_json = output.parent / "findings.json"
+        self.assertTrue(findings_json.is_file())
+
+        report_text = output.read_text(encoding="utf-8")
+        findings_json_text = findings_json.read_text(encoding="utf-8")
+        detail_texts = [p.read_text(encoding="utf-8") for p in details_dir.glob("*.md")]
+        self.assertTrue(detail_texts, "expected at least one REPORT/<family>.md detail file")
+
+        # Guard against a vacuous pass: the standalone sections must actually
+        # have rendered (not silently bound to the finding or dropped) for
+        # the FOREIGN_ROOT check below to exercise them.
+        self.assertIn("## Needs validation", report_text)
+        self.assertIn("## Hardening notes", report_text)
+
+        for text in [report_text, findings_json_text] + detail_texts:
+            self.assertNotIn(self.FOREIGN_ROOT, text)
+
+        self.assertIn(
+            "`checklists/core/business_logic.md` (W5): activated, 1 findings",
+            report_text,
+        )
+        self.assertIn(
+            "* **Discovered via**: checklist:checklists/core/business_logic.md",
+            report_text,
+        )
 
 
 _CONTEXT_WITH_GAP = """---

@@ -20,6 +20,7 @@ from .models import (
     HardeningNote,
     NeedsValidation,
     ParsedWave,
+    normalize_discovered_via,
 )
 
 
@@ -356,7 +357,7 @@ def _parse_finding_block(header: str, body: str, source_file: str = "", slice_id
         elif key == "Recommendation":
             f.recommendation = value
         elif key == "Discovered via":
-            f.discovered_via = value
+            f.discovered_via = normalize_discovered_via(value)
 
         i += 1
     return f
