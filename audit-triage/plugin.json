@@ -1,6 +1,6 @@
 {
   "name": "fr-audit-triage",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Turn a fr-security-review findings.json into deduplicated, code-verified units of work grouped by fix pattern, with a triage bucket for leads and hardening notes, and a structured verdict channel back into the audit.",
   "author": {
     "name": "Vladislav Rastrusny",

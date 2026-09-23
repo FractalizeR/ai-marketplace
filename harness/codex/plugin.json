@@ -1,6 +1,6 @@
 {
   "name": "fr-security-review",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Framework-aware static-first security audit for PHP/Symfony/Laravel: recipe-driven recon, focused worker waves, deterministic deduplication. Schema v2.",
   "author": {
     "name": "FractalizeR",

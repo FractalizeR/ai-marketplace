@@ -14,10 +14,10 @@ All commands are run from the repo root unless stated otherwise.
 
 ### Tests
 
-The plugin's Python pipeline is covered by a stdlib-only `unittest` suite (~1434 tests, no third-party deps, no `pytest.ini`).
+The plugin's Python pipeline is covered by a stdlib-only `unittest` suite (~1440 tests, no third-party deps, no `pytest.ini`).
 
 ```bash
-# Full engine suite (~1434 tests, ~50 seconds)
+# Full engine suite (~1440 tests, ~50 seconds)
 python3 -m unittest discover -s security-review/bin/tests
 
 # Build tooling suite (fast; multi-environment build, see below)
@@ -47,7 +47,7 @@ python3 build/build.py --harness=claude   --mode=check   # byte-identity anti-dr
 python3 build/build.py --harness=opencode --mode=check   # OpenCode structural gates
 python3 build/build.py --harness=codex    --mode=check   # Codex structural gates
 python3 -m unittest discover -s build/tests              # build tooling suite (~251, fast)
-python3 -m unittest discover -s security-review/bin/tests # engine suite (~1434, ~55s)
+python3 -m unittest discover -s security-review/bin/tests # engine suite (~1440, ~55s)
 claude plugin validate .                                 # marketplace metadata
 ```
 
@@ -106,7 +106,7 @@ renderer landed in Phase 2B-core (below); the Codex renderer is still a stub
   `build/ADR-0001-artifacts-are-prompts.md` for why prose, not only tokens, is the
   rewrite surface.
 - Tests: `python3 -m unittest discover -s build/tests`. The `.githooks/pre-commit`
-  hook runs `build --mode=check` + the build suite (fast); the ~1434 engine suite
+  hook runs `build --mode=check` + the build suite (fast); the ~1440 engine suite
   stays manual (no CI — see "No CI — validation is local").
 
 ### Multi-environment build (Phase 2B-core: OpenCode derivation)

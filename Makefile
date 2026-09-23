@@ -45,7 +45,7 @@ check: ## Full local validation gate (3-harness anti-drift + build + engine + tr
 test-build: ## Run the build-tooling test suite (fast)
 	python3 -m unittest discover -s build/tests
 
-test-engine: ## Run the engine test suite (~1434 tests, ~50s)
+test-engine: ## Run the engine test suite (~1440 tests, ~50s)
 	python3 -m unittest discover -s security-review/bin/tests
 
 test-triage: ## Run the fr-audit-triage bin/ test suite (fast)
