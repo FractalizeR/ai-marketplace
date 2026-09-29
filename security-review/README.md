@@ -22,9 +22,9 @@ For a Symfony project, a working project environment (a `bin/console` that actua
 
 1. **Recon.** A recipe (Symfony / Laravel / generic PHP) collects a structured inventory of the project without an LLM: routes, middleware, controllers, data models, voters, form classes, listeners, messenger handlers, etc. The result is `<review_root>/CONTEXT.md` (schema v2 with frontmatter and closed shape specs).
    A sanity check then compares the inventory against the filesystem. It does not stop the run: whatever recon could not collect or interpret (files a section missed, a failed extractor, config it could not read) is printed as a warning and recorded in `<review_root>/recon_gaps.json`.
-2. **Plan waves.** `plan_waves.py` slices the inventory into thematic waves (auth+disclosure, injection+data-access, output-render, serialization+crypto, ssrf+fileops, fintech, exploratory) and assigns each one its own set of checklists and target files. The files from `recon_gaps.json` go to a separate follow-up wave, **WGAP**, so a recon gap costs an extra pass instead of the run.
+2. **Plan waves.** `plan_waves.py` slices the inventory into thematic waves (auth+disclosure, injection+data-access, output-render, serialization+crypto, ssrf+fileops, fintech, exploratory) and assigns each one its own set of checklists and target files. Gap files from `recon_gaps.json` that no thematic wave already carries go to a separate follow-up wave, **WGAP**, so a recon gap costs an extra pass instead of the run; uninterpreted config usually stays in the thematic wave that routes it (the security config in W1).
 3. **Workers.** Parallel workers, 6 per batch, balanced-profile models: opus for analysis of trust boundaries and recon gaps (W1/W2/W6/WGAP), sonnet for mechanical data-flow (W3/W4/W5/W∞).
-4. **Dedupe.** `dedupe_findings.py` stitches per-wave findings into a split report: `REPORT.md` (executive summary + index) + `REPORT/<root_cause_family>.md` (details) + `findings.json` (schema-versioned, machine-readable — every finding across all three worker verdicts). Workers report three verdicts, not just exploitable vulnerabilities: `confirmed` (the classic severity/confidence-gated finding), `needs_validation` (a traced path blocked on a fact outside the repo), and `hardening` (a traced observation with no affected principal or resource) — the latter two render as `## Needs validation` / `## Hardening notes` in `REPORT.md`. A `## Coverage Gaps` section lists what recon could not cover (a skipped console, crashed waves, each `recon_gaps.json` entry with the files that were and were not reviewed).
+4. **Dedupe.** `dedupe_findings.py` stitches per-wave findings into a split report: `REPORT.md` (executive summary + index) + `REPORT/<root_cause_family>.md` (details) + `findings.json` (schema-versioned, machine-readable — every finding across all three worker verdicts). Workers report three verdicts, not just exploitable vulnerabilities: `confirmed` (the classic severity/confidence-gated finding), `needs_validation` (a traced path blocked on a fact outside the repo), and `hardening` (a traced observation with no affected principal or resource) — the latter two render as `## Needs validation` / `## Hardening notes` in `REPORT.md`. A `## Coverage Gaps` section lists what recon could not cover (a skipped console, crashed waves, each `recon_gaps.json` entry with the files that were and were not routed to a wave).
 
 ### False-positive filtering
 
@@ -32,7 +32,7 @@ The audit reports recall-first and has no false-positive pass of its own. To fil
 
 ### ⚠️ Token consumption
 
-`/fr-security-review:security-project` launches several parallel Opus/Sonnet workers on each run (W1–W6 + W∞ + WGAP when recon left gaps). Cost depends on the model and project size.
+`/fr-security-review:security-project` launches several parallel Opus/Sonnet workers on each run (W1–W6 + W∞ + WGAP when recon left gap files no other wave carries). Cost depends on the model and project size.
 
 **Flags for CI / cost saving:**
 - `--quick` — disables W∞ (cross-layer chain analysis). WGAP stays on.
@@ -75,7 +75,9 @@ Fully disables console smoke:
 /fr-security-review:security-project --no-console
 ```
 
-`recon_confidence.ceiling` is forcibly lowered to `medium`. Recon interprets framework config only through the booted console, so without it the config sections (security firewalls / `access_control`, trusted proxies, messenger, twig) come back `partial` with a `config_uninterpreted: <alias>: no_console` reason. Their files are still routed to the workers (and to the WGAP wave), which read the config directly — but the route → firewall / `access_control` mapping is not precomputed.
+`recon_confidence.ceiling` is forcibly lowered to `medium`. Recon interprets framework config only through the booted console, so without it the config sections (security firewalls / `access_control`, trusted proxies, messenger, twig) come back `partial` with a `config_uninterpreted: <alias>: no_console` reason. Their files are still routed to the thematic waves (the security config to W1), whose workers read the config directly — but the route → firewall / `access_control` mapping is not precomputed.
+
+The same happens with a console that boots on **Symfony < 6.3**: `debug:config --format=json` needs 6.3, so recon records `config_uninterpreted: <alias>: console_unsupported` plus a `console_unsupported:` warning naming the console's version, while routes still come from the console and the ceiling stays `high`. The other reasons are `console_failed` (the config query failed), `tree_mismatch` (the console's `security` tree misses what the files declare) and `env_mismatch` (the console's environment differs from production).
 
 `--no-console` does not protect against a vulnerability in the PHP metadata extractor itself (even though it does not require the code), or against extended read-only utilities. If the repo is truly hostile, add a sandbox.
 
