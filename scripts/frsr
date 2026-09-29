@@ -19,12 +19,20 @@ Usage:
 
 Options:
   --harness codex              the only supported harness (default)
-  --review-root <dir>          output dir (default: security-review-codex in cwd)
+  --review-root <dir>          output dir (default: security-review-codex in cwd).
+                               Refused before anything is written if it is the
+                               project root, exists as a non-directory, lies
+                               inside the project without a name starting with
+                               security-review, or is named like a source dir
+                               (src, app, lib, tests, vendor, public, config, ...)
   --project-root <dir>         project to audit (default: current dir)
-  --models high=<id>,fast=<id> model tiers, both required; saved to
-                               <review-root>/.model_map.json and reused on the
-                               next run. Without it, the saved map is used; with
-                               neither, frsr stops. List ids: codex debug models
+  --models high=<id>,fast=<id> model tiers, both required, comma-separated
+                               with no spaces; saved to
+                               <review-root>/.model_map.json on a --go run and
+                               reused on the next one. Without it, the saved map
+                               is used; with neither, frsr stops. A map written
+                               by a pre-5.0 build is ignored. List ids: codex
+                               debug models
   --console-cmd <template>     run the project console via this command (may
                                contain spaces, e.g. "docker compose exec -T php
                                bin/console"); exported as FR_SECURITY_CONSOLE_CMD

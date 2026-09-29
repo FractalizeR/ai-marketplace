@@ -24,7 +24,7 @@ install-launchers: ## Install the `frsr` launcher into BINDIR (default ~/.local/
 	@echo "Installed $(BINDIR)/frsr (repo baked as $(REPO))"
 	@case ":$$PATH:" in *":$(BINDIR):"*) : ;; \
 		*) echo "WARNING: $(BINDIR) is not on PATH — add it to your shell rc" ;; esac
-	@echo "Try: frsr project --harness codex --dry-run"
+	@echo "Try: frsr project --models high=<id>,fast=<id>   (prints the command; add --go to run; ids: codex debug models)"
 
 check: ## Full local validation gate (Codex derivation gates + build + engine + triage + plugin validate + leak check)
 	python3 build/build.py --harness=codex --mode=check
@@ -38,7 +38,7 @@ check: ## Full local validation gate (Codex derivation gates + build + engine + 
 test-build: ## Run the build-tooling test suite (fast)
 	python3 -m unittest discover -s build/tests
 
-test-engine: ## Run the engine test suite (~1660 tests, ~65s)
+test-engine: ## Run the engine test suite (about a minute)
 	python3 -m unittest discover -s security-review/bin/tests
 
 test-triage: ## Run the fr-audit-triage bin/ test suite (fast)

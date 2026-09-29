@@ -47,7 +47,7 @@ Other `make` targets (`make help`): `build-codex` (bundle into `dist/codex`), `i
 ### Driving the audit
 
 - Claude Code: `/fr-security-review:security-project [flags]` (`security-review/commands/security-project.md`). Artifacts go to `security-review-<label>/` in cwd; the label comes from harness self-introspection unless `--label=` or `--review-root=` is passed.
-- Codex: `frsr [project] --models high=<id>,fast=<id> [--console-cmd <tpl>] [--go] -- <orchestrator flags>`. Orchestrator flags (`--quick`, `--no-console`, …) go after `--`; an unknown option before `--` is an error. Without `--go`, `frsr` only prints the prepared command (Codex runs the orchestrator unsandboxed to spawn workers). `--models` is required on the first run for a review root, then reused from `<review_root>/.model_map.json`; ids come from `codex debug models`.
+- Codex: `frsr [project] --models high=<id>,fast=<id> [--console-cmd <tpl>] [--go] -- <orchestrator flags>`. Orchestrator flags (`--quick`, `--no-console`, …) go after `--`; an unknown option before `--` is an error. Without `--go`, `frsr` only prints the prepared command (Codex runs the orchestrator unsandboxed to spawn workers). `--models` (comma-separated, no spaces) is required until a `--go` run saved it to `<review_root>/.model_map.json`, then reused; ids come from `codex debug models`. `frsr` refuses a source-tree-looking `--review-root` before writing anything.
 
 ## Codex derivation (`build/`)
 

@@ -62,9 +62,11 @@ statically. On Codex the operator names both concrete model IDs once:
 frsr project --models high=<id>,fast=<id>     # list the ids with: codex debug models
 ```
 
+On a `--go` run (a dry run writes nothing),
 [`security-review/bin/shared/model_resolver.py`](../security-review/bin/shared/model_resolver.py)
-writes them to `<review_root>/.model_map.json`, and later runs against the same
-review root reuse the saved map. With neither `--models` nor a saved map the run
+saves them to `<review_root>/.model_map.json`, and later runs against the same
+review root reuse the saved map. Write the pair comma-separated with no spaces;
+a map written by a pre-5.0 build (it carries a guessed `provenance`) is ignored. With neither `--models` nor a saved map the run
 stops with that hint — there is no automatic model discovery or guessing, and the
 ids are not validated (a wrong id shows up as crashed waves).
 
@@ -112,10 +114,10 @@ it, so you can run an audit from **any directory**:
 
 ```bash
 frsr project --models high=<id>,fast=<id>          # prints the prepared command; add --go to run
-frsr project -- --quick --no-console              # orchestrator flags go after --
+frsr project --models high=<id>,fast=<id> -- --quick --no-console   # orchestrator flags go after --
 ```
 
-It exports `FR_SECURITY_CORE_ROOT`, saves the model tiers, and invokes Codex. Options:
+It exports `FR_SECURITY_CORE_ROOT`, saves the model tiers (only with `--go`), and invokes Codex. Once a `--go` run has saved the tiers for a review root, later runs may drop `--models`. Options:
 `--review-root`, `--project-root`, `--models high=…,fast=…`, `--console-cmd <tpl>`,
 `--go`, `--dry-run`, `-h/--help` (writes nothing), and `-- <extra>` passthrough to
 the orchestrator. An unknown option before `--` is an error, not a passthrough.
@@ -142,9 +144,10 @@ model tiers → run → permissions).
   up changes without a cachebuster bump + reinstall — `make install-codex` does
   this automatically. `FR_SECURITY_CORE_ROOT` should point at the built
   `dist/codex/plugins/fr-security-review/core` (stable across cachebuster bumps).
-- **`--review-root` is output-only.** The orchestrator rejects a value that looks
-  like a source tree (a past incident clobbered a `src/.gitignore`). Point it at a
-  fresh `security-review-*` directory.
+- **`--review-root` is output-only.** `frsr` and the orchestrator reject a value
+  that looks like a source tree (a past incident clobbered a `src/.gitignore`);
+  `frsr` does so before it writes the model map. Point it at a fresh
+  `security-review-*` directory.
 - **Verify the offline posture before a hostile-repo audit.** Confirm your
   `workspace-write` sandbox disables network (`curl` inside a worker should fail
   to resolve).
@@ -227,7 +230,7 @@ distinct when editing the build.
   are passed as flag-free `key=value` (e.g. `console_mode=off`) precisely to avoid
   this; the agent maps them to `recon_inventory.py` flags. Keep dispatched inputs
   flag-free.
-- **"model tiers are not set".** Pass `frsr … --models high=<id>,fast=<id>` (or
-  `model_resolver.py --models …`) once; it persists to `.model_map.json`. To switch
-  models later, pass `--models` again.
+- **"model tiers are not set".** Pass `frsr … --models high=<id>,fast=<id> --go`
+  (or run `model_resolver.py --models … --review-root <dir>`) once; it persists to
+  `.model_map.json`. To switch models later, pass `--models` again.
 - **`FR_SECURITY_CORE_ROOT` is empty / paths break.** You did not export it. Use `frsr`, or export it in the session where you run the audit.
