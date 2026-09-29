@@ -314,7 +314,8 @@ class ProjectOnly(unittest.TestCase):
 
     def test_recon_gaps_warn_and_feed_wgap(self) -> None:
         # Sanity never stops the run on coverage: it writes recon_gaps.json,
-        # which plan_waves turns into the WGAP wave and dedupe reports.
+        # which dedupe reports and plan_waves reads: config files stay in their
+        # focused waves; WGAP gets only gap files no other slice carries.
         self.assertIn('--gaps-out "<REVIEW_ROOT>/recon_gaps.json"', self.text)
         self.assertIn('--recon-gaps="<REVIEW_ROOT>/recon_gaps.json"', self.text)
         self.assertIn('rm -f "<REVIEW_ROOT>/recon_gaps.json"', self.text)
