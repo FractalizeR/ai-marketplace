@@ -353,9 +353,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--project-root",
         type=Path,
-        default=Path.cwd(),
+        default=None,
         help="Project root that --verdicts-in evidence paths (refute_file) are "
-        "resolved against. Default: cwd.",
+        "resolved against. Default: cwd. In a composite repo (project root != "
+        "cwd) always pass it, or remembered rejections stop rendering.",
     )
     parser.add_argument(
         "--waves-plan",
@@ -390,6 +391,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     review_root = args.output.parent
+    project_root_given = args.project_root is not None
+    if args.project_root is None:
+        args.project_root = Path.cwd()
 
     if args.verdicts_in is not None and args.no_state:
         print("Error: --verdicts-in requires cross-run state; cannot combine with --no-state", file=sys.stderr)
@@ -486,6 +490,14 @@ def main(argv: list[str] | None = None) -> int:
     # project tree, so a removed protection silently drops the mark rather
     # than mis-annotating a regression as "already reviewed".
     prior_resolutions = load_resolutions(review_root) if state_usable else {}
+    if not project_root_given and any(r.refute_file for r in prior_resolutions.values()):
+        print(
+            f"WARNING: --project-root not given; remembered rejections that cite code evidence "
+            f"are re-checked against the current directory ({args.project_root}). If the audited "
+            f"project is not the current directory, they will silently stop rendering; "
+            f"pass --project-root.",
+            file=sys.stderr,
+        )
     render_resolutions = {**active_rejections(prior_resolutions, args.project_root), **verdicts_in_resolutions}
 
     # Resolutions to PERSIST this run: freshly-imported --verdicts-in records.

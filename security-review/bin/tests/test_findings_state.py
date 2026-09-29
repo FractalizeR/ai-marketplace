@@ -633,6 +633,32 @@ class CrossRunResolutionMemoryTests(unittest.TestCase):
         self.assertNotIn("Previously rejected", report_after)
         self.assertIn("`src/Auth/Controller.php:42`", report_after)
 
+    def _plain_run(self, review_root, waves, cwd, *extra):
+        import subprocess
+        return subprocess.run(
+            ["python3", self.CLI, "--input-glob", str(waves / "*.md"),
+             "--output", str(review_root / "REPORT.md"),
+             "--details-dir", str(review_root / "REPORT"), *extra],
+            capture_output=True, text=True, cwd=cwd,
+        )
+
+    def test_missing_project_root_with_evidence_backed_rejections_warns(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root, waves, project_root = self._mk_project(Path(td))
+            self._import_rejection(review_root, waves, project_root)
+            bare = self._plain_run(review_root, waves, td)
+            self.assertEqual(bare.returncode, 0, bare.stderr)
+            self.assertIn("WARNING: --project-root not given", bare.stderr)
+            explicit = self._plain_run(review_root, waves, td, "--project-root", str(project_root))
+            self.assertNotIn("--project-root not given", explicit.stderr)
+
+    def test_missing_project_root_without_any_resolutions_is_silent(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root, waves, _ = self._mk_project(Path(td))
+            bare = self._plain_run(review_root, waves, td)
+            self.assertEqual(bare.returncode, 0, bare.stderr)
+            self.assertNotIn("--project-root not given", bare.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
