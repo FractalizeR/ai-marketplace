@@ -733,8 +733,9 @@ class ResolutionAnnotationTests(unittest.TestCase):
         body = render_finding(1, mf, resolutions=resolutions)
         # DoD 6: the finding itself is NOT suppressed -- title/body still present.
         self.assertIn(f"`{mf.primary.sink_file}:{mf.primary.sink_line}`", body)
-        self.assertIn("Previously rejected", body)
-        self.assertIn("src/Guard.php:3", body)
+        self.assertIn(
+            "Previously rejected (source: `audit-triage`); evidence at `src/Guard.php:3`", body,
+        )
 
     def test_rejected_resolution_present_in_full_split_report(self):
         """Red-if-turned-into-a-filter guard: the finding must still appear
@@ -997,8 +998,8 @@ class AttachedResolutionAnnotationTests(unittest.TestCase):
         )}
         body = render_finding(1, mf, resolutions=resolutions)
         self.assertIn("**Needs validation (attached):**", body)
-        self.assertIn("* **previously_rejected**: Previously rejected; evidence at "
-                       "`src/Guard.php:3`", body)
+        self.assertIn("* **previously_rejected**: Previously rejected (source: `audit-triage`); "
+                       "evidence at `src/Guard.php:3`", body)
 
     def test_tier2_hardening_own_rejection_gets_field_line_mark(self):
         mf = _mk_merged(sink_snippet="code", sink_kind="dql_concat")

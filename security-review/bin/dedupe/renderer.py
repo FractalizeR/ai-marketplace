@@ -121,12 +121,13 @@ def _resolution_note_text(resolution) -> str:
     REPORT.md (see `dedupe.state` module docstring)."""
     refute_file = getattr(resolution, "refute_file", "")
     refute_line = getattr(resolution, "refute_line", 0)
-    if refute_file:
-        return f"Previously rejected; evidence at `{refute_file}:{refute_line}`"
     source = getattr(resolution, "source", "")
+    text = "Previously rejected"
     if source:
-        return f"Previously rejected (source: `{source}`)"
-    return "Previously rejected"
+        text += f" (source: `{source}`)"
+    if refute_file:
+        text += f"; evidence at `{refute_file}:{refute_line}`"
+    return text
 
 
 def _render_resolution_note(resolution) -> str:
