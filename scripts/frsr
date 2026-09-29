@@ -99,6 +99,32 @@ CORE="$PLUGIN/core"
 
 : "${REVIEW_ROOT:=security-review-codex}"
 
+# Mirrors step 0.3 of the orchestrator's review-root guard. It has to run here
+# too: this launcher writes .model_map.json into the review root before the
+# orchestrator ever starts.
+guard_msg="$(python3 - "$PROJECT_ROOT" "$REVIEW_ROOT" <<'PY'
+import os, sys
+project, review = (os.path.realpath(p) for p in sys.argv[1:3])
+name = os.path.basename(review).lower()
+blocked = {
+    "src", "app", "lib", "source", "tests", "test", "spec", "vendor", "node_modules",
+    "public", "web", "bin", "config", "assets", "resources", "var", "storage",
+    "templates", "views", "database", "migrations", "seeders", "scripts", "routes",
+    "build", "dist", "target", "out", "coverage", ".next", ".nuxt", "__pycache__",
+}
+inside = review.startswith(project.rstrip(os.sep) + os.sep)
+if os.path.exists(review) and not os.path.isdir(review):
+    print("it exists and is not a directory")
+elif review == project:
+    print("it is the project root")
+elif inside and not name.startswith("security-review"):
+    print("it is inside the project and its name does not start with 'security-review'")
+elif name in blocked:
+    print("its name is a source-tree directory name")
+PY
+)"
+[ -z "$guard_msg" ] || die "--review-root=$REVIEW_ROOT refused: $guard_msg. It is the output directory, not what to scan; use --scope to narrow the audit, or a name like security-review-codex."
+
 # Reads .high from a tier map that has both tiers, else prints nothing.
 map_high() {
   python3 - "$1" <<'PY' 2>/dev/null || true

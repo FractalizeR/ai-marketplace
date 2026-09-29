@@ -171,6 +171,35 @@ class FrsrTests(unittest.TestCase):
         argv = record.read_text().splitlines()
         self.assertEqual(argv[:3], ["exec", "-m", "big"])
 
+    def test_review_root_source_dir_refused_before_any_write(self):
+        (self.project / "src").mkdir()
+        rc, _, err = self.run_frsr("--go", "--models", "high=a,fast=b", "--review-root", "src")
+        self.assertEqual(rc, 2)
+        self.assertIn("refused", err)
+        self.assertEqual(list((self.project / "src").iterdir()), [])
+
+    def test_review_root_equal_to_project_root_refused(self):
+        rc, _, err = self.run_frsr("--models", "high=a,fast=b", "--review-root", str(self.project))
+        self.assertEqual(rc, 2)
+        self.assertIn("project root", err)
+        self.assert_project_empty()
+
+    def test_review_root_inside_project_without_prefix_refused(self):
+        rc, _, err = self.run_frsr("--models", "high=a,fast=b", "--review-root", "audit-out")
+        self.assertEqual(rc, 2)
+        self.assertIn("does not start with", err)
+
+    def test_review_root_that_is_a_file_refused(self):
+        (self.project / "security-review-x").write_text("x")
+        rc, _, err = self.run_frsr("--models", "high=a,fast=b", "--review-root", "security-review-x")
+        self.assertEqual(rc, 2)
+        self.assertIn("not a directory", err)
+
+    def test_review_root_outside_project_with_prefix_allowed(self):
+        out = self.tmp / "elsewhere" / "security-review-ok"
+        rc, _, err = self.run_frsr("--models", "high=a,fast=b", "--review-root", str(out))
+        self.assertEqual(rc, 0, err)
+
 
 if __name__ == "__main__":
     unittest.main()
