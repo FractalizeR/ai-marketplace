@@ -31,6 +31,7 @@ THIS_DIR = Path(__file__).resolve().parent
 BIN_DIR = THIS_DIR.parent
 PLUGIN_ROOT = BIN_DIR.parent
 RECON = BIN_DIR / "recon_inventory.py"
+FAKE_CONSOLE = THIS_DIR / "symfony" / "fake_console.py"
 
 FIX_MIN = THIS_DIR / "fixtures" / "symfony_minimal"
 FIX_ADM = THIS_DIR / "fixtures" / "symfony_admin"
@@ -162,6 +163,87 @@ class InventoryRecallNoConsole(unittest.TestCase):
         self.assertGreaterEqual(len(items), 3)
         self.assertTrue(any(it["kind"] == "denyAccessUnlessGranted" for it in items))
 
+
+
+
+
+
+
+    def test_auth_layer_pending_with_evidence(self):
+        payload = _section_payload(self.text, "auth_layer")
+        self.assertEqual(payload["status"], "pending_enrichment")
+        self.assertEqual(payload["data"]["evidence_files"], ["config/packages/security.yaml"])
+        self.assertEqual(payload["source_files"], ["config/packages/security.yaml"])
+
+    def test_firewalls_partial_with_evidence(self):
+        payload = _section_payload(self.text, "recon_bags.stack.symfony.firewalls")
+        self.assertEqual(payload["status"], "partial")
+        self.assertEqual(payload["reason"], "config_uninterpreted: security: no_console")
+        self.assertEqual(payload["source_files"], ["config/packages/security.yaml"])
+        self.assertNotIn("firewalls", payload["data"])
+
+    def test_messenger_transports_partial_with_evidence(self):
+        payload = _section_payload(self.text, "recon_bags.stack.symfony.messenger_transports")
+        self.assertEqual(payload["status"], "partial")
+        self.assertEqual(payload["reason"], "config_uninterpreted: framework: no_console")
+        self.assertEqual(payload["source_files"], ["config/packages/messenger.yaml"])
+
+    def test_twig_overrides_partial_with_evidence(self):
+        # twig.yaml sets `autoescape`, which only the console can interpret.
+        payload = _section_payload(self.text, "recon_bags.stack.symfony.twig_overrides")
+        self.assertEqual(payload["status"], "partial")
+        self.assertEqual(payload["reason"], "config_uninterpreted: twig: no_console")
+        self.assertIn("config/packages/twig.yaml", payload["source_files"])
+        self.assertEqual(payload["data"]["evidence_files"], ["config/packages/twig.yaml"])
+        self.assertNotIn("autoescape_default", payload["data"])
+        self.assertGreaterEqual(payload["data"]["raw_filter_count"], 1)
+
+    def test_secrets_password_hasher_unknown_without_tree(self):
+        payload = _section_payload(self.text, "secrets")
+        self.assertEqual(payload["data"]["password_hasher"], "unknown")
+        self.assertIn("config/packages/security.yaml", payload["source_files"])
+
+    def test_serialization_excludes_vendor(self):
+        payload = _section_payload(self.text, "serialization")
+        for it in payload["items"]:
+            self.assertNotIn("vendor/", it["file"], msg=f"vendor leak: {it}")
+
+    def test_secrets_status_pending_enrichment(self):
+        payload = _section_payload(self.text, "secrets")
+        self.assertEqual(payload["status"], "pending_enrichment")
+        self.assertIn("enrichment_hint", payload)
+        # Static collector populates app_secret_in_repo, password_hasher etc.
+        self.assertIn("app_secret_in_repo", payload["data"])
+
+
+    def test_console_disabled_warning_present(self):
+        self.assertIn("console_disabled_by_flag", self.fm["warnings"])
+        self.assertEqual(self.fm["recon_confidence"]["ceiling"], "medium")
+
+    def test_recipe_used_is_symfony(self):
+        self.assertEqual(self.fm["recipe_used"], "symfony")
+        self.assertEqual(self.fm["stack"]["framework"], "symfony")
+
+
+@unittest.skipUnless(shutil.which("php"), "php not on PATH")
+class InventoryRecallWithConsole(unittest.TestCase):
+    """The config sections against symfony_minimal with a stand-in console."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.review_root = Path(cls.tmp.name) / "review"
+        proc = _run_recipe(
+            FIX_MIN, cls.review_root,
+            f"--console-cmd={sys.executable} {FAKE_CONSOLE} minimal",
+        )
+        assert proc.returncode == 0, proc.stderr
+        cls.text = (cls.review_root / "CONTEXT.md").read_text(encoding="utf-8")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
     def test_auth_layer_scalar_with_source_files(self):
         payload = _section_payload(self.text, "auth_layer")
         self.assertEqual(payload["status"], "ok")
@@ -169,9 +251,8 @@ class InventoryRecallNoConsole(unittest.TestCase):
         self.assertEqual(payload["source_files"], ["config/packages/security.yaml"])
 
     def test_auth_layer_provider_name_resolved(self):
-        # Regression: `_first_key_under` used to look at indent==0 only and
-        # missed nested `security: providers:` blocks → provider was always
-        # "unknown". Fixed via `_first_key_under_nested(("security","providers"))`.
+        # Regression: the provider used to be read at indent 0 only and was
+        # always "unknown" for the nested `security: providers:` block.
         payload = _section_payload(self.text, "auth_layer")
         self.assertEqual(payload["data"]["provider"], "app_user_provider")
 
@@ -205,33 +286,12 @@ class InventoryRecallNoConsole(unittest.TestCase):
         self.assertGreaterEqual(payload["data"]["raw_filter_count"], 1)
         self.assertEqual(payload["data"]["autoescape_default"], "name")
 
-    def test_serialization_excludes_vendor(self):
-        payload = _section_payload(self.text, "serialization")
-        for it in payload["items"]:
-            self.assertNotIn("vendor/", it["file"], msg=f"vendor leak: {it}")
-
-    def test_secrets_status_pending_enrichment(self):
-        payload = _section_payload(self.text, "secrets")
-        self.assertEqual(payload["status"], "pending_enrichment")
-        self.assertIn("enrichment_hint", payload)
-        # Static collector populates app_secret_in_repo, password_hasher etc.
-        self.assertIn("app_secret_in_repo", payload["data"])
-
     def test_secrets_password_hasher_is_algorithm_not_subject(self):
-        # Regression: greedy regex `password_hashers:.*?:\s*['\"]?([A-Za-z0-9_]+)`
-        # used to capture the subject FQN (`Symfony` from
-        # `Symfony\...\PasswordAuthenticatedUserInterface`) instead of the
-        # algorithm value (`auto`). Fixed via `_parse_password_hasher`.
+        # Regression: the hasher once came out as the subject FQN (`Symfony`
+        # from `Symfony\...\PasswordAuthenticatedUserInterface`) instead of
+        # the algorithm value (`auto`).
         payload = _section_payload(self.text, "secrets")
         self.assertEqual(payload["data"]["password_hasher"], "auto")
-
-    def test_console_disabled_warning_present(self):
-        self.assertIn("console_disabled_by_flag", self.fm["warnings"])
-        self.assertEqual(self.fm["recon_confidence"]["ceiling"], "medium")
-
-    def test_recipe_used_is_symfony(self):
-        self.assertEqual(self.fm["recipe_used"], "symfony")
-        self.assertEqual(self.fm["stack"]["framework"], "symfony")
 
 
 @unittest.skipUnless(shutil.which("php"), "php not on PATH")
@@ -1144,107 +1204,6 @@ class TripleReviewRegressions(unittest.TestCase):
             self.assertFalse(it.get("file", "").startswith("/"),
                              msg=f"absolute outside-path leaked: {it}")
 
-    def test_m1_yaml_parser_handles_2_space_indent_security_yaml(self):
-        # Claude MEDIUM M1 / Gemini Issue 3: hardcoded indent == 4 / 8 broke
-        # parsing on 2-space indentation. Indent-relative parsers must work.
-        from recon.recipes.symfony import (
-            security_view_from_yaml_text, _parse_access_control, _first_key_under_nested,
-        )
-        text = (
-            "security:\n"
-            "  providers:\n"
-            "    custom_provider:\n"
-            "      entity: { class: App\\Entity\\User }\n"
-            "  firewalls:\n"
-            "    main:\n"
-            "      lazy: true\n"
-            "      stateless: true\n"
-            "      provider: custom_provider\n"
-            "  access_control:\n"
-            "    - { path: ^/api, roles: ROLE_USER }\n"
-        )
-        firewalls = security_view_from_yaml_text(text).firewalls
-        self.assertEqual([fw["name"] for fw in firewalls], ["main"])
-        self.assertEqual(firewalls[0]["stateless"], "true")
-        self.assertEqual(_first_key_under_nested(text, ("security", "providers")),
-                         "custom_provider")
-        ac = _parse_access_control(text)
-        self.assertEqual(len(ac), 1)
-        self.assertEqual(ac[0]["path"], "^/api")
-
-    def test_codex_block_style_access_control(self):
-        # Codex / Gemini: only flow-style `- { path: ..., roles: ... }` was
-        # supported. Block-style (Symfony skeleton's natural form) was lost.
-        from recon.recipes.symfony import _parse_access_control
-        text = (
-            "security:\n"
-            "    access_control:\n"
-            "        - path: ^/admin\n"
-            "          roles: ROLE_ADMIN\n"
-            "        - path: ^/api\n"
-            "          roles: ROLE_USER\n"
-        )
-        ac = _parse_access_control(text)
-        self.assertEqual(len(ac), 2)
-        self.assertEqual(ac[0], {"path": "^/admin", "roles": "ROLE_ADMIN"})
-        self.assertEqual(ac[1], {"path": "^/api", "roles": "ROLE_USER"})
-
-    def test_multiline_flow_style_access_control(self):
-        # Multi-line flow-style `- {\n path: ...,\n roles: ... \n}` must parse
-        # like its single-line counterpart. The accumulator must also reset so a
-        # following single-line flow entry is not swallowed by the open block.
-        from recon.recipes.symfony import _parse_access_control
-        text = (
-            "security:\n"
-            "    access_control:\n"
-            "        - {\n"
-            "            path: ^/admin,\n"
-            "            roles: ROLE_ADMIN\n"
-            "          }\n"
-            "        - { path: ^/pub, roles: PUBLIC_ACCESS }\n"
-        )
-        ac = _parse_access_control(text)
-        self.assertEqual(len(ac), 2)
-        self.assertEqual(ac[0], {"path": "^/admin", "roles": "ROLE_ADMIN"})
-        self.assertEqual(ac[1], {"path": "^/pub", "roles": "PUBLIC_ACCESS"})
-
-    def test_multiline_flow_inline_comment_not_swallowing_next_key(self):
-        # Regression: an inline `# comment` on a line inside a multi-line flow
-        # block used to be joined verbatim with the following line, so
-        # `roles: [...], # or` + `allow_if: ...` produced the invalid key
-        # `# or allow_if`, aborting recon. Comments must be stripped per
-        # physical line before the buffer is joined. (batch security.yaml)
-        from recon.recipes.symfony import _parse_access_control
-        text = (
-            "security:\n"
-            "    access_control:\n"
-            "        - {\n"
-            "            path: ^/api/v1,\n"
-            "            roles: [ROLE_CLIENT, ROLE_ADMIN, ROLE_SERVICE], # or\n"
-            "            allow_if: 'is_granted(\"module_access\")'\n"
-            "          }\n"
-        )
-        ac = _parse_access_control(text)
-        self.assertEqual(len(ac), 1)
-        self.assertEqual(ac[0]["path"], "^/api/v1")
-        self.assertEqual(ac[0]["roles"], "[ROLE_CLIENT, ROLE_ADMIN, ROLE_SERVICE]")
-        self.assertEqual(ac[0]["allow_if"], 'is_granted("module_access")')
-        self.assertNotIn("# or allow_if", ac[0])
-
-    def test_multiline_flow_inline_comment_on_opening_line(self):
-        # The opening `- { ...` line also carries the same risk of a trailing
-        # inline comment swallowing the next buffered line.
-        from recon.recipes.symfony import _parse_access_control
-        text = (
-            "security:\n"
-            "    access_control:\n"
-            "        - { path: ^/admin,  # primary rule\n"
-            "            roles: ROLE_ADMIN }\n"
-        )
-        ac = _parse_access_control(text)
-        self.assertEqual(len(ac), 1)
-        self.assertEqual(ac[0], {"path": "^/admin", "roles": "ROLE_ADMIN"})
-
     def test_m2_classify_kind_does_not_match_app_command(self):
         # Claude MEDIUM M2: `extends_short == "Command"` collided with DDD
         # `App\Domain\Command` base class. FQN-only check fixes this.
@@ -1283,17 +1242,6 @@ class TripleReviewRegressions(unittest.TestCase):
         cls = {"extends": None, "implements": [], "attributes": [],
                "method_attributes": []}
         self.assertIsNone(_classify_kind(cls, {}))
-
-    def test_m3_inline_comments_in_yaml_stripped(self):
-        # Claude MEDIUM M3: trailing ` # comment` was kept as part of the
-        # value, breaking `_classify_dsn` etc.
-        from recon.recipes.symfony import _strip_inline_comment
-        self.assertEqual(_strip_inline_comment("'amqp://x' # comment"), "'amqp://x'")
-        self.assertEqual(_strip_inline_comment("ROLE_USER  # rbac"), "ROLE_USER")
-        # `#` inside quotes must NOT be treated as a comment.
-        self.assertEqual(_strip_inline_comment("'value #1'"), "'value #1'")
-        # A `#` with no leading whitespace must not be split (anchor names).
-        self.assertEqual(_strip_inline_comment("#anchor"), "#anchor")
 
     def test_l3_authz_no_double_report_per_line(self):
         # Claude LOW L3: missing `break` produced duplicate items when a
@@ -1335,55 +1283,7 @@ class TrustedConfigTests(unittest.TestCase):
         (pkg / "framework.yaml").write_text(body, encoding="utf-8")
         return root
 
-    def test_framework_setting_inline_scalar(self):
-        from recon.recipes.symfony import _framework_setting
-        text = "framework:\n    trusted_proxies: '%env(TRUSTED_PROXIES)%'\n"
-        self.assertEqual(_framework_setting(text, "trusted_proxies"), "%env(TRUSTED_PROXIES)%")
-
-    def test_framework_setting_list_form(self):
-        from recon.recipes.symfony import _framework_setting
-        text = (
-            "framework:\n"
-            "    trusted_headers:\n"
-            "        - x-forwarded-for\n"
-            "        - x-forwarded-host\n"
-        )
-        self.assertEqual(_framework_setting(text, "trusted_headers"), "(list)")
-
-    def test_framework_setting_absent(self):
-        from recon.recipes.symfony import _framework_setting
-        text = "framework:\n    secret: '%env(APP_SECRET)%'\n"
-        self.assertIsNone(_framework_setting(text, "trusted_proxies"))
-
-    def test_framework_setting_ignores_key_outside_framework_block(self):
-        from recon.recipes.symfony import _framework_setting
-        # A same-named key under a different top-level block must not leak in.
-        text = "other:\n    trusted_proxies: 1.2.3.4\nframework:\n    secret: x\n"
-        self.assertIsNone(_framework_setting(text, "trusted_proxies"))
-
-    def test_framework_setting_ignores_nested_subblock_key(self):
-        from recon.recipes.symfony import _framework_setting
-        # trusted_proxies nested under a framework sub-block is NOT
-        # framework.trusted_proxies — must not borrow its value.
-        text = (
-            "framework:\n"
-            "    http_client:\n"
-            "        trusted_proxies: 9.9.9.9\n"
-            "    secret: x\n"
-        )
-        self.assertIsNone(_framework_setting(text, "trusted_proxies"))
-
-    def test_framework_setting_strips_inline_comment(self):
-        from recon.recipes.symfony import _framework_setting
-        text = "framework:\n    trusted_proxies: '127.0.0.1' # local only\n"
-        self.assertEqual(_framework_setting(text, "trusted_proxies"), "127.0.0.1")
-
-    def test_framework_setting_inline_flow_list(self):
-        from recon.recipes.symfony import _framework_setting
-        text = "framework:\n    trusted_headers: ['x-forwarded-for']\n"
-        self.assertEqual(_framework_setting(text, "trusted_headers"), "(list)")
-
-    def test_collect_ok_with_source_files(self):
+    def test_collect_partial_with_evidence_without_a_console(self):
         from recon.recipes.symfony import collect_trusted_config
         root = self._write_framework(
             "framework:\n"
@@ -1392,11 +1292,10 @@ class TrustedConfigTests(unittest.TestCase):
             "        - x-forwarded-for\n"
         )
         payload = collect_trusted_config(root)
-        self.assertEqual(payload.status, "ok")
+        self.assertEqual(payload.status, "partial")
+        self.assertEqual(payload.reason, "config_uninterpreted: framework: no_console")
         self.assertEqual(payload.source_files, ["config/packages/framework.yaml"])
-        self.assertEqual(payload.data["trusted_proxies"], "10.0.0.0/8")
-        self.assertEqual(payload.data["trusted_headers"], "(list)")
-        self.assertNotIn("trusted_hosts", payload.data)
+        self.assertEqual(payload.data, {"evidence_files": ["config/packages/framework.yaml"]})
 
     def test_collect_none_when_no_trusted_keys(self):
         from recon.recipes.symfony import collect_trusted_config
@@ -1554,96 +1453,14 @@ class ConsoleRouteFileResolution(unittest.TestCase):
         )
 
 
-class FlowInlineKvQuotedScalars(unittest.TestCase):
-    """A quoted scalar inside a flow mapping carries literal commas and colons.
-    Splitting it produced an empty key, which the CONTEXT.md emitter rejects —
-    recon aborted on any project whose access_control lists CIDRs inline."""
-
-    def test_quoted_comma_list_with_ipv6_loopback_and_anchor(self):
-        line = (
-            "{ path: '^/monitor/health', roles: PUBLIC_ACCESS, "
-            "ips: &internal_networks '127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16' }"
-        )
-        out = recipe_symfony._parse_flow_inline_kv(line)
-        self.assertNotIn("", out)
-        self.assertEqual(out["path"], "^/monitor/health")
-        self.assertEqual(out["roles"], "PUBLIC_ACCESS")
-        self.assertEqual(
-            out["ips"], "127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
-        )
-
-    def test_quoted_env_placeholder_keeps_parens_balanced(self):
-        line = "{ path: ^/api/v1/callback, ips: '%env(INTERNAL_API_ALLOWED_CIDRS)%', roles: ROLE_SERVICE }"
-        out = recipe_symfony._parse_flow_inline_kv(line)
-        self.assertNotIn("", out)
-        self.assertEqual(out["ips"], "%env(INTERNAL_API_ALLOWED_CIDRS)%")
-        self.assertEqual(out["roles"], "ROLE_SERVICE")
-
-    def test_unquoted_entries_unchanged(self):
-        out = recipe_symfony._parse_flow_inline_kv("{ path: ^/admin, roles: ROLE_ADMIN }")
-        self.assertEqual(out, {"path": "^/admin", "roles": "ROLE_ADMIN"})
-
-    def test_escaped_quote_inside_double_quotes_does_not_reopen_the_scalar(self):
-        # Closing on the first `"` flipped the in-string state, so the comma
-        # after it split the value and the next key vanished.
-        out = recipe_symfony._parse_flow_inline_kv(
-            '{ path: "^/a\\"b", roles: ROLE_USER }'
-        )
-        self.assertEqual(out["roles"], "ROLE_USER")
-        self.assertNotIn("", out)
-
-    def test_unclosed_quote_degrades_without_an_empty_key(self):
-        # Malformed input must not reach the CONTEXT.md emitter as an empty
-        # key — that aborts the whole recon rather than one rule.
-        out = recipe_symfony._parse_flow_inline_kv("{ path: '^/a, roles: ROLE_USER }")
-        self.assertNotIn("", out)
-
-    def test_quoted_brace_does_not_close_a_multiline_rule_early(self):
-        # Brace counting was quote-blind, so a `}` inside a quoted value ended
-        # the block mid-rule and the rule disappeared from the inventory.
-        from recon.recipes.symfony import _parse_access_control
-        rules = _parse_access_control(
-            "security:\n"
-            "    access_control:\n"
-            "        - {\n"
-            '            path: "^/api/foo}bar",\n'
-            "            roles: ROLE_USER\n"
-            "          }\n"
-        )
-        self.assertEqual(len(rules), 1)
-        self.assertEqual(rules[0]["path"], "^/api/foo}bar")
-        self.assertEqual(rules[0]["roles"], "ROLE_USER")
-
-    def test_block_style_value_drops_the_anchor_too(self):
-        # The anchor sits on the value in block style just as often as in flow
-        # style; keeping `&name ` would ship the anchor name into CONTEXT.md.
-        from recon.recipes.symfony import _parse_access_control
-        text = (
-            "security:\n"
-            "    access_control:\n"
-            "        - path: ^/internal\n"
-            "          ips: &internal_networks '127.0.0.0/8,::1,10.0.0.0/8'\n"
-        )
-        ac = _parse_access_control(text)
-        self.assertEqual(len(ac), 1)
-        self.assertEqual(ac[0]["ips"], "127.0.0.0/8,::1,10.0.0.0/8")
-
-
 class UnemittableKeysAreDroppedNotFatal(unittest.TestCase):
-    """The rule parsers split free text on the first `:`, so a YAML construct
-    they do not model produces a key the CONTEXT.md emitter refuses — and the
-    refusal used to abort recon, and with it the whole audit, over one rule."""
+    """A key the CONTEXT.md emitter refuses used to abort recon, and with it the
+    whole audit, over one rule."""
 
     def test_merge_key_costs_one_key_not_the_whole_recon(self):
-        from recon.recipes.symfony import _drop_unemittable_keys, _parse_access_control
+        from recon.recipes.symfony import _drop_unemittable_keys
         from recon.yaml_emit import dump_yaml_subset
-        rules = _parse_access_control(
-            "security:\n"
-            "    access_control:\n"
-            "        - path: ^/admin\n"
-            "          <<: *common\n"
-            "          roles: ROLE_ADMIN\n"
-        )
+        rules = [{"path": "^/admin", "<<": "*common", "roles": "ROLE_ADMIN"}]
         self.assertIn("<<", rules[0])
         with self.assertRaises(ValueError):
             dump_yaml_subset({"access_control": rules})
@@ -1654,7 +1471,6 @@ class UnemittableKeysAreDroppedNotFatal(unittest.TestCase):
         self.assertTrue(dump_yaml_subset({"access_control": clean}))
         self.assertEqual(len(warnings), 1)
         self.assertIn("<<", warnings[0])
-        # Source-neutral: the rules may come from the console or php/xml files.
         self.assertTrue(warnings[0].startswith("security config access_control:"), warnings[0])
 
     def test_rule_left_with_no_usable_key_is_dropped_whole(self):
@@ -1674,134 +1490,6 @@ class UnemittableKeysAreDroppedNotFatal(unittest.TestCase):
             _drop_unemittable_keys(rules, rel_hint="access_control", warnings=warnings), rules
         )
         self.assertEqual(warnings, [])
-
-
-class YamlAliasResolution(unittest.TestCase):
-    """An `ips: *name` alias used to reach CONTEXT.md as the literal `*name`,
-    so a worker could not tell that a rule restricts the route to internal
-    networks and had no reason to lower the severity it assigned."""
-
-    def _rules(self, text):
-        from recon.recipes.symfony import _parse_access_control
-        return _parse_access_control(text)
-
-    def test_alias_resolves_to_the_anchor_scalar_in_flow_style(self):
-        rules = self._rules(
-            "security:\n"
-            "    access_control:\n"
-            "        - { path: ^/internal, ips: &internal_networks '127.0.0.0/8,::1' }\n"
-            "        - { path: ^/metrics, ips: *internal_networks }\n"
-        )
-        self.assertEqual([r["ips"] for r in rules], ["127.0.0.0/8,::1", "127.0.0.0/8,::1"])
-
-    def test_alias_resolves_in_block_style_too(self):
-        rules = self._rules(
-            "security:\n"
-            "    access_control:\n"
-            "        - { path: ^/internal, ips: &internal_networks '10.0.0.0/8' }\n"
-            "        - path: ^/probe\n"
-            "          ips: *internal_networks\n"
-        )
-        self.assertEqual(rules[1]["ips"], "10.0.0.0/8")
-
-    def test_anchor_defined_outside_access_control_is_visible(self):
-        rules = self._rules(
-            "parameters:\n"
-            "    internal_cidrs: &internal_networks '192.168.0.0/16'\n"
-            "security:\n"
-            "    access_control:\n"
-            "        - { path: ^/metrics, ips: *internal_networks }\n"
-        )
-        self.assertEqual(rules[0]["ips"], "192.168.0.0/16")
-
-    def test_unknown_alias_stays_literal(self):
-        rules = self._rules(
-            "security:\n"
-            "    access_control:\n"
-            "        - { path: ^/metrics, ips: *never_defined }\n"
-        )
-        self.assertEqual(rules[0]["ips"], "*never_defined")
-
-    def test_non_scalar_anchor_is_not_collected(self):
-        # `&name` on a mapping / sequence / block scalar has no scalar to
-        # substitute; resolving it to a fragment or to the block indicator
-        # itself would be worse than leaving the alias visible.
-        from recon.recipes.symfony import _collect_yaml_anchors
-        anchors = _collect_yaml_anchors(
-            "defaults: &shared { roles: ROLE_ADMIN }\n"
-            "list: &items [a, b]\n"
-            "block: &later\n"
-            "    key: value\n"
-            "folded: &note >-\n"
-            "    some text\n"
-            "literal: &body |\n"
-            "    some text\n"
-            "scalar: &cidrs '10.0.0.0/8'\n"
-        )
-        self.assertEqual([(n, v) for _, n, v in anchors], [("cidrs", "10.0.0.0/8")])
-
-    def test_ampersand_inside_a_quoted_scalar_is_not_an_anchor(self):
-        from recon.recipes.symfony import _collect_yaml_anchors
-        self.assertEqual(_collect_yaml_anchors("path: '^/search&sort=asc'\n"), [])
-
-    def test_ampersand_mid_scalar_is_not_an_anchor(self):
-        # `R&D internal` used to register `D` as an anchor named after a word
-        # fragment, which could then shadow a real anchor of the same name.
-        from recon.recipes.symfony import _collect_yaml_anchors
-        self.assertEqual(_collect_yaml_anchors("note: R&D internal\n"), [])
-
-    def test_block_style_anchor_keeps_the_whole_comma_list(self):
-        # Unquoted commas are literal text outside a flow collection. Stopping
-        # at the first one handed the alias a NARROWER range than the anchor —
-        # the direction that makes a worker understate exposure.
-        rules = self._rules(
-            "security:\n"
-            "    access_control:\n"
-            "        - path: ^/internal\n"
-            "          ips: &internal_networks 127.0.0.0/8,10.0.0.0/8\n"
-            "        - { path: ^/metrics, ips: *internal_networks }\n"
-        )
-        self.assertEqual(rules[0]["ips"], "127.0.0.0/8,10.0.0.0/8")
-        self.assertEqual(rules[1]["ips"], "127.0.0.0/8,10.0.0.0/8")
-
-    def test_alias_takes_the_nearest_anchor_above_it(self):
-        # A document-wide map let the LAST definition win, so this alias
-        # resolved to the allow-all range defined below it.
-        rules = self._rules(
-            "security:\n"
-            "    access_control:\n"
-            "        - { path: ^/a, ips: &n '10.0.0.0/8' }\n"
-            "        - { path: ^/b, ips: *n }\n"
-            "        - { path: ^/c, ips: &n '0.0.0.0/0' }\n"
-        )
-        self.assertEqual([r["ips"] for r in rules],
-                         ["10.0.0.0/8", "10.0.0.0/8", "0.0.0.0/0"])
-
-    def test_alias_above_its_anchor_stays_literal(self):
-        rules = self._rules(
-            "security:\n"
-            "    access_control:\n"
-            "        - { path: ^/b, ips: *n }\n"
-            "        - { path: ^/a, ips: &n '10.0.0.0/8' }\n"
-        )
-        self.assertEqual(rules[0]["ips"], "*n")
-
-    def test_alias_resolves_inside_a_multiline_flow_rule(self):
-        rules = self._rules(
-            "security:\n"
-            "    access_control:\n"
-            "        - { path: ^/a, ips: &n '10.0.0.0/8' }\n"
-            "        - {\n"
-            "            path: ^/b,\n"
-            "            ips: *n\n"
-            "          }\n"
-        )
-        self.assertEqual(rules[1]["ips"], "10.0.0.0/8")
-
-    def test_anchor_with_a_trailing_inline_comment(self):
-        from recon.recipes.symfony import _collect_yaml_anchors
-        anchors = _collect_yaml_anchors("    ips: &n '10.0.0.0/8'  # internal only\n")
-        self.assertEqual([(n, v) for _, n, v in anchors], [("n", "10.0.0.0/8")])
 
 
 if __name__ == "__main__":

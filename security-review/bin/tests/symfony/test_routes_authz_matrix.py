@@ -7,6 +7,7 @@ unavailable on PATH (the emitter calls extract_php_metadata.php for routes).
 
 from __future__ import annotations
 
+import json
 import shutil
 import sys
 import unittest
@@ -20,6 +21,21 @@ sys.path.insert(0, str(BIN_DIR))
 from recon.recipes import symfony as recipe_symfony  # noqa: E402
 
 FIX = THIS_DIR.parent / "fixtures" / "symfony_routes_authz"
+TREE = THIS_DIR.parent / "fixtures" / "symfony_debug_config" / "routes_authz.security.json"
+
+
+class _TreeSession:
+    """Answers `security` with the captured `debug:config` tree."""
+
+    def extension_config(self, alias, *, quiet=False):
+        return json.loads(TREE.read_text(encoding="utf-8"))[alias] if alias == "security" else None
+
+    def kernel_environment(self):
+        return "dev"
+
+
+def _security():
+    return recipe_symfony._resolve_security(FIX, _TreeSession(), [])
 
 
 @unittest.skipUnless(shutil.which("php"), "php not on PATH")
@@ -29,7 +45,7 @@ class RoutesAuthzMatrixEmitter(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.payload = recipe_symfony._build_routes_authz_matrix(
-            FIX, PLUGIN_ROOT, exclude=None, console_router_data=None,
+            FIX, PLUGIN_ROOT, exclude=None, console_router_data=None, security=_security(),
         )
 
     def _items_by_name(self) -> dict:
@@ -122,7 +138,7 @@ class RoutesAuthzMatrixSchemaInvariants(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.payload = recipe_symfony._build_routes_authz_matrix(
-            FIX, PLUGIN_ROOT, exclude=None, console_router_data=None,
+            FIX, PLUGIN_ROOT, exclude=None, console_router_data=None, security=_security(),
         )
 
     def test_each_item_has_contract_keys(self) -> None:

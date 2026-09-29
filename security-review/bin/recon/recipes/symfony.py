@@ -23,9 +23,9 @@ build_inventory pipeline:
     boundary), messenger_transports.
 
 Framework config (security / framework / twig extensions) is read from
-`debug:config <alias>` when the console runs, else from the single yaml file
-that carries it; config spread over php/xml/several files is reported as
-evidence the recipe could not interpret (see `_resolve_config`).
+`debug:config <alias>` when the console runs. Without a console tree the
+files that carry the config are reported as evidence the recipe could not
+interpret, for the recon agent and the workers to read (see `_resolve_config`).
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -553,257 +553,6 @@ def _grep_files(
 
 
 # ---------------------------------------------------------------------------
-# Helpers: minimal Symfony YAML parsers (regex/line-based, NOT PyYAML).
-# ---------------------------------------------------------------------------
-
-
-_FLOW_PAIRS_RE = re.compile(r"\{\s*([^}]+?)\s*\}")
-
-
-def _iter_unquoted(s: str):
-    """Yield `(index, char)` for every character of `s` outside a quoted scalar.
-
-    A backslash escapes the next character inside double quotes. Single quotes
-    carry no escape — YAML doubles the quote instead, which closes and reopens
-    in one step and so leaves this scan's parity intact.
-    """
-    quote = ""
-    i = 0
-    while i < len(s):
-        ch = s[i]
-        if quote:
-            if quote == '"' and ch == "\\":
-                i += 2
-                continue
-            if ch == quote:
-                quote = ""
-            i += 1
-            continue
-        if ch in "'\"":
-            quote = ch
-            i += 1
-            continue
-        yield i, ch
-        i += 1
-
-
-def _flow_depth_delta(s: str) -> int:
-    """Net `{`/`}` nesting contributed by `s`, ignoring braces inside quotes.
-
-    A counted quoted brace closes a multi-line flow block early, and the rule
-    being accumulated is then dropped entirely rather than mis-parsed.
-    """
-    depth = 0
-    for _, ch in _iter_unquoted(s):
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-    return depth
-
-
-def _parse_flow_inline_kv(
-    s: str,
-    anchors: Optional[list[tuple[int, str, str]]] = None,
-    upto_line: int = -1,
-) -> dict[str, str]:
-    """Parse `{ key: value, key2: value2 }` flow-style mapping into dict[str,str].
-    Values are kept as raw strings (caller normalizes)."""
-    inner = s.strip()
-    if not (inner.startswith("{") and inner.endswith("}")):
-        return {}
-    inner = inner[1:-1].strip()
-    # Split on commas that are neither inside brackets nor inside a quoted
-    # scalar. A quoted CIDR list such as '10.0.0.0/8,::1' carries commas and
-    # colons that are literal text; splitting it yields a fragment like `::1`
-    # whose partition(":") gives an empty key, which the CONTEXT.md emitter
-    # rejects.
-    parts: list[str] = []
-    depth = 0
-    last = 0
-    for idx, ch in _iter_unquoted(inner):
-        if ch in "[{(":
-            depth += 1
-        elif ch in "]})":
-            depth -= 1
-        elif ch == "," and depth == 0:
-            parts.append(inner[last:idx].strip())
-            last = idx + 1
-    tail = inner[last:].strip()
-    if tail:
-        parts.append(tail)
-    out: dict[str, str] = {}
-    for p in parts:
-        if ":" not in p:
-            continue
-        k, _, v = p.partition(":")
-        out[k.strip()] = _resolve_yaml_alias(
-            _strip_yaml_quotes(_strip_yaml_anchor(v.strip())), anchors, upto_line
-        )
-    return out
-
-
-_YAML_ANCHOR_RE = re.compile(r"^&[A-Za-z0-9_-]+\s+")
-
-_ANCHOR_NAME_CHARS = frozenset(
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
-)
-# An anchor sits at the start of a node value. Requiring that keeps plain text
-# such as `note: R&D internal` from registering `D` as an anchor name.
-_ANCHOR_BOUNDARY_CHARS = frozenset(":,{[-")
-# `|` and `>` open a block scalar whose body is on the following lines; `*`
-# would chain onto another alias. None of the three is a scalar we can carry.
-_NON_SCALAR_STARTS = frozenset("{[|>*&")
-
-
-def _strip_yaml_anchor(s: str) -> str:
-    """Drop a leading `&name ` anchor so the value, not the anchor, is kept."""
-    return _YAML_ANCHOR_RE.sub("", s, count=1)
-
-
-def _clean_yaml_scalar(
-    raw: str,
-    anchors: Optional[list[tuple[int, str, str]]] = None,
-    upto_line: int = -1,
-) -> str:
-    """Normalize a block-style scalar: inline comment, anchor, quotes, alias."""
-    return _resolve_yaml_alias(
-        _strip_yaml_quotes(_strip_yaml_anchor(_strip_inline_comment(raw.strip()))),
-        anchors,
-        upto_line,
-    )
-
-
-def _collect_yaml_anchors(text: str) -> list[tuple[int, str, str]]:
-    """Every `&name <scalar>` anchor as `(line_index, name, value)`, in order.
-
-    Ordered rather than mapped because YAML binds an alias to the nearest
-    anchor ABOVE it: with the same name defined twice, a map keyed by name
-    would hand the earlier alias the later definition — and for an access rule
-    that can silently widen an address range instead of narrowing it.
-
-    Anchors on a mapping, sequence or block-scalar node carry no scalar to
-    substitute and are left out, so an alias to one stays literal.
-    """
-    anchors: list[tuple[int, str, str]] = []
-    for lineno, raw in enumerate(text.splitlines()):
-        if raw.lstrip().startswith("#"):
-            continue
-        line = _strip_inline_comment(raw)
-        depth = 0
-        prev = ""
-        for i, ch in _iter_unquoted(line):
-            if ch in "{[":
-                depth += 1
-            elif ch in "}]":
-                depth -= 1
-            if ch != "&":
-                if not ch.isspace():
-                    prev = ch
-                continue
-            if prev and prev not in _ANCHOR_BOUNDARY_CHARS:
-                prev = ch
-                continue
-            j = i + 1
-            while j < len(line) and line[j] in _ANCHOR_NAME_CHARS:
-                j += 1
-            name = line[i + 1:j]
-            prev = ch
-            if not name or j >= len(line) or line[j] not in " \t":
-                continue
-            value = _scan_yaml_scalar(line, j, in_flow=depth > 0)
-            if value and value[0] not in _NON_SCALAR_STARTS:
-                anchors.append((lineno, name, _strip_yaml_quotes(value)))
-    return anchors
-
-
-def _scan_yaml_scalar(line: str, start: int, *, in_flow: bool) -> str:
-    """Read one scalar from `line` at `start`.
-
-    Inside a flow collection it ends at the `,`, `}` or `]` that closes it; in
-    block style those are literal text and the scalar runs to end of line —
-    truncating there would hand an alias a narrower value than the anchor.
-    """
-    seg = line[start:]
-    if in_flow:
-        for idx, ch in _iter_unquoted(seg):
-            if ch in ",}]":
-                return seg[:idx].strip()
-    return seg.strip()
-
-
-def _resolve_yaml_alias(
-    value: str,
-    anchors: Optional[list[tuple[int, str, str]]],
-    upto_line: int = -1,
-) -> str:
-    """Substitute a whole-value `*name` alias with its anchor's scalar.
-
-    Only anchors defined at or above `upto_line` are eligible, matching YAML's
-    own rule; a forward reference and an unknown name both stay literal. A
-    wrong value in CONTEXT.md misleads a worker about what a rule allows, while
-    an unresolved `*name` at least reads as unresolved.
-    """
-    if not anchors or not value.startswith("*"):
-        return value
-    name = value[1:]
-    resolved = value
-    for lineno, anchor_name, anchor_value in anchors:
-        if upto_line >= 0 and lineno > upto_line:
-            break
-        if anchor_name == name:
-            resolved = anchor_value
-    return resolved
-
-
-def _strip_yaml_quotes(s: str) -> str:
-    if len(s) >= 2 and ((s[0] == s[-1] == "'") or (s[0] == s[-1] == '"')):
-        return s[1:-1]
-    return s
-
-
-def _yaml_value_at(text: str, top_key: str, sub_key: Optional[str] = None) -> Optional[str]:
-    """Extract a scalar value from a Symfony-style YAML.
-
-    Supports two forms:
-      - `top_key: value` at column 0.
-      - `top_key:` followed by indented `sub_key: value`.
-    Returns None if not found. Quote-stripped.
-    """
-    in_top = False
-    top_indent: Optional[int] = None
-    for raw in text.splitlines():
-        line = raw.rstrip()
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip(" "))
-        stripped = line.strip()
-        if not in_top:
-            m = re.match(rf"^{re.escape(top_key)}\s*:\s*(.*)$", stripped)
-            if m and indent == 0:
-                tail = m.group(1).strip()
-                if sub_key is None:
-                    if tail:
-                        return _strip_yaml_quotes(tail)
-                    in_top = True
-                    top_indent = indent
-                    continue
-                if tail:
-                    # `top_key: scalar` but caller wants nested — mismatch.
-                    return None
-                in_top = True
-                top_indent = indent
-        else:
-            if indent <= (top_indent or 0):
-                # Left the block.
-                break
-            m = re.match(rf"^{re.escape(sub_key)}\s*:\s*(.+)$", stripped)
-            if m:
-                return _strip_yaml_quotes(m.group(1).strip())
-    return None
-
-
-# ---------------------------------------------------------------------------
 # Sub-section collectors.
 # ---------------------------------------------------------------------------
 
@@ -1286,8 +1035,9 @@ def collect_data_access(
 
 
 _AUTH_LAYER_HINT = (
-    "The security config lives in files the recipe could not interpret without "
-    "the console (PHP/XML, several files, or a prod-only override). Read each file "
+    "The security config was not interpreted: the console gave no tree for it "
+    "(no console, a failed `debug:config`, or a tree that misses what the files "
+    "declare). Read each file "
     "in data.evidence_files and fill data with the schema keys: kind "
     "(session|stateless|jwt|oauth), provider (first user provider name, or "
     "unknown), mfa (true|false), summary (one line). Never copy secret values "
@@ -1314,12 +1064,6 @@ def collect_auth_layer_and_firewalls(
             SectionPayload(status="unknown", reason=reason, source_files=[]),
         )
 
-    fw_data: dict = {}
-    if view is not None and view.firewalls:
-        fw_data["firewalls"] = view.firewalls
-    if view is not None and view.access_control:
-        fw_data["access_control"] = view.access_control
-
     if res.mode == "uninterpreted":
         return (
             SectionPayload(
@@ -1331,17 +1075,22 @@ def collect_auth_layer_and_firewalls(
             SectionPayload(
                 status="partial",
                 reason=_uninterpreted_reason(res),
-                data={"evidence_files": evidence, **fw_data},
+                data={"evidence_files": evidence},
                 source_files=evidence,
             ),
         )
 
+    fw_data: dict = {}
+    if view.firewalls:
+        fw_data["firewalls"] = view.firewalls
+    if view.access_control:
+        fw_data["access_control"] = view.access_control
+
     status = "partial" if res.env_gap else "ok"
-    if res.mode == "tree" and (fw_data or view.provider != "unknown"):
+    if fw_data or view.provider != "unknown":
         _note_unlocated(res, warnings)
-    via = "debug:config security" if res.mode == "tree" else Path(evidence[0]).name
     summary = (
-        f"{view.kind.title()} auth via {via}; provider={view.provider}; "
+        f"{view.kind.title()} auth via debug:config security; provider={view.provider}; "
         f"firewalls={len(view.firewalls)}; access_control rules={len(view.access_control)}"
     )
     auth_layer = SectionPayload(
@@ -1377,64 +1126,6 @@ def collect_auth_layer_and_firewalls(
     return auth_layer, firewalls_payload
 
 
-def _framework_setting(text: str, sub_key: str) -> Optional[str]:
-    """Value of `framework: -> sub_key:` from framework.yaml.
-
-    Inline scalar (`trusted_proxies: '%env(TRUSTED_PROXIES)%'`) → its
-    inline-comment-stripped, quote-stripped string. `[]`, `''`, `~`, `null`
-    → None (unset). List form — block
-    (`trusted_headers:` then indented `- x-forwarded-for`) or inline flow
-    (`['x-forwarded-for']`) — → the marker `"(list)"` (the bag is a hint; the
-    worker reads the routed source_file for the exact items). Absent — or a
-    bare key with no value and no children — → None.
-
-    Matches only **direct children** of the top-level `framework:` block: a
-    same-named key nested under a sub-block (e.g. `framework: http_client:
-    trusted_proxies:`) is ignored, so the recorded value is never borrowed from
-    an unrelated setting.
-    """
-    lines = text.splitlines()
-    in_fw = False
-    child_indent: Optional[int] = None
-    for i, raw in enumerate(lines):
-        line = raw.rstrip()
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip(" "))
-        stripped = line.strip()
-        if not in_fw:
-            if indent == 0 and re.match(r"^framework\s*:\s*$", stripped):
-                in_fw = True
-            continue
-        if indent == 0:
-            break  # left the framework: block
-        if child_indent is None:
-            child_indent = indent  # first direct child fixes the level
-        if indent != child_indent:
-            continue  # nested deeper than a direct child — not framework.<key>
-        m = re.match(rf"^{re.escape(sub_key)}\s*:\s*(.*)$", stripped)
-        if not m:
-            continue
-        tail = _strip_inline_comment(m.group(1).strip()).strip()
-        if tail:
-            # An empty list / string / null is the option left unset — the
-            # processed tree reports it as the default, not as a value.
-            if re.fullmatch(r"\[\s*\]|''|\"\"|~|null", tail, re.I):
-                return None
-            # Inline flow-list → the same "(list)" marker as the block form.
-            if tail.startswith("["):
-                return "(list)"
-            return _strip_yaml_quotes(tail)
-        # Empty tail → value lives on following more-indented lines.
-        for nxt in lines[i + 1:]:
-            nl = nxt.rstrip()
-            if not nl.strip() or nl.lstrip().startswith("#"):
-                continue
-            if (len(nl) - len(nl.lstrip(" "))) <= child_indent:
-                break  # nothing indented under the key → treat as unset
-            return "(list)"
-        return None
-    return None
 
 
 def collect_trusted_config(
@@ -1452,27 +1143,12 @@ def collect_trusted_config(
       - no `framework:` config at all → `unknown` (bag present in the
         skeleton, not routed; `scalar_source_files` routes ok|partial only).
       - ≥1 trusted_* key → `ok` (data + source_files → routed); `partial`
-        when the keys sit in files the recipe cannot interpret.
+        when the keys sit in files the console gave no tree for.
       - framework configured, no trusted_* key → `none` (safe default).
     See stacks/symfony/auth.md → "Request trust boundary".
     """
     sink = warnings if warnings is not None else []
-
-    def tree_misses_static(tree: dict, yaml_texts, _evidence) -> bool:
-        # Only a non-default scalar the yaml sets can be compared: a "(list)"
-        # marker hides its items, and php/xml values are not parsed at all.
-        if elide_defaults(trusted_config_view_from_tree(tree)).settings:
-            return False
-        return any(
-            v != "(list)"
-            for _, text in yaml_texts
-            for v in elide_defaults(trusted_config_view_from_yaml_text(text)).settings.values()
-        )
-
-    res = _resolve_config(
-        project_root, session, "framework", TRUSTED_SUBTREE_KEYS, sink,
-        tree_misses_static=tree_misses_static,
-    )
+    res = _resolve_config(project_root, session, "framework", TRUSTED_SUBTREE_KEYS, sink)
     if res.mode == "absent":
         declared = _alias_declared(project_root, "framework")
         if declared:
@@ -1485,20 +1161,13 @@ def collect_trusted_config(
             status="unknown", reason=_absent_reason("framework"), source_files=[],
         )
     if res.mode == "uninterpreted":
-        merged: dict[str, str] = {}
-        for _, text in res.yaml_texts:
-            for k, v in trusted_config_view_from_yaml_text(text).settings.items():
-                merged.setdefault(k, v)
         return SectionPayload(
             status="partial",
             reason=_uninterpreted_reason(res),
-            data={"evidence_files": res.evidence, **merged},
+            data={"evidence_files": res.evidence},
             source_files=res.evidence,
         )
-    if res.mode == "tree":
-        data = elide_defaults(trusted_config_view_from_tree(res.tree)).settings
-    else:
-        data = trusted_config_view_from_yaml_text(res.yaml_texts[0][1]).settings
+    data = elide_defaults(trusted_config_view_from_tree(res.tree)).settings
     if data:
         _note_unlocated(res, sink)
         return SectionPayload(
@@ -1517,104 +1186,10 @@ def collect_trusted_config(
     )
 
 
-def _first_key_under_nested(text: str, path: tuple[str, ...]) -> Optional[str]:
-    """Find the first child key inside a nested-block YAML path.
-
-    Example: path=("security", "providers") on
-        security:
-            providers:
-                app_user_provider:
-                    entity: ...
-    returns "app_user_provider".
-
-    Indent-relative: works with any consistent step (2 / 4 / 8 spaces).
-    Skips comments and blank lines. Returns None on miss.
-    """
-    if not path:
-        return None
-    cursor = 0
-    parent_indent: Optional[int] = None  # indent of `path[cursor-1]:` line
-    expect = path[cursor]
-    for raw in text.splitlines():
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        indent = len(raw) - len(raw.lstrip(" "))
-        stripped = raw.strip()
-        if cursor == 0:
-            # Look for top-level key (indent 0, first segment of path).
-            if indent == 0 and stripped.startswith(expect + ":"):
-                parent_indent = indent
-                cursor += 1
-                if cursor < len(path):
-                    expect = path[cursor]
-            continue
-        # We are inside a parent block; require indent > parent_indent.
-        if indent <= parent_indent:
-            return None
-        if cursor < len(path):
-            # Looking for the next named key in the path.
-            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:", stripped)
-            if m and m.group(1) == expect:
-                parent_indent = indent
-                cursor += 1
-                if cursor < len(path):
-                    expect = path[cursor]
-            continue
-        # Cursor exhausted — first child key under the deepest segment.
-        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:", stripped)
-        if m:
-            return m.group(1)
-    return None
 
 
-def _strip_inline_comment(s: str) -> str:
-    """Strip ` # ...` inline comment, but only when `#` is preceded by
-    whitespace and lies outside string quotes.
-
-    Whole-line comments are filtered upstream by `raw.lstrip().startswith("#")`,
-    so a `#` at position 0 here is part of the value (anchor / literal hash),
-    not a comment marker.
-    """
-    in_quote: Optional[str] = None
-    for i, ch in enumerate(s):
-        if in_quote is not None:
-            if ch == in_quote:
-                in_quote = None
-            continue
-        if ch in "'\"":
-            in_quote = ch
-            continue
-        if ch == "#" and i > 0 and s[i - 1] in " \t":
-            return s[:i].rstrip()
-    return s
 
 
-def _enter_nested_block(text: str, path: tuple[str, ...]) -> Optional[tuple[int, int]]:
-    """Find a block at `path` (e.g. ("security", "firewalls")) and return
-    (start_line_index, parent_indent) — `start_line_index` is the line right
-    after the deepest path segment header, `parent_indent` is the indent of
-    that header. Returns None if any segment is missing.
-    """
-    lines = text.splitlines()
-    cursor = 0
-    parent_indent = -1  # indent of segment[cursor-1] header (-1 = pre-root)
-    for i, raw in enumerate(lines):
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        indent = len(raw) - len(raw.lstrip(" "))
-        stripped = raw.strip()
-        # Have we left the block we were searching in?
-        if cursor > 0 and indent <= parent_indent:
-            return None
-        # Match the next path segment.
-        if indent == (parent_indent + (0 if cursor == 0 else 1)) or (cursor == 0 and indent == 0) or (cursor > 0 and indent > parent_indent):
-            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:", stripped)
-            if m and m.group(1) == path[cursor]:
-                parent_indent = indent
-                cursor += 1
-                if cursor == len(path):
-                    return (i + 1, indent)
-    return None
 
 
 def _drop_unemittable_keys(
@@ -1622,12 +1197,10 @@ def _drop_unemittable_keys(
 ) -> list[dict[str, str]]:
     """Drop keys the CONTEXT.md emitter would refuse, recording each one.
 
-    These parsers build keys by splitting free text on the first `:`, so any
-    YAML construct they do not model — a merge key `<<`, a quoted key, a
-    complex key — reaches the emitter as an invalid key and raises there. That
-    aborts recon, and with it the audit, over one rule the recipe simply did
-    not understand. Costing one key instead keeps the blast radius local, and
-    the warning keeps the loss visible in CONTEXT.md.
+    A processed tree may carry keys the emitter's grammar rejects; letting one
+    reach it would raise there and abort recon, and with it the audit, over one
+    rule the recipe simply cannot represent. Costing one key instead keeps the
+    blast radius local, and the warning keeps the loss visible in CONTEXT.md.
     """
     out: list[dict[str, str]] = []
     for rule in rules:
@@ -1643,111 +1216,16 @@ def _drop_unemittable_keys(
     return out
 
 
-_ACCESS_CONTROL_FLOW_RE = re.compile(r"^\s*-\s*(\{.*\})\s*$")
 
 
-def _parse_access_control(text: str) -> list[dict[str, str]]:
-    """Extract access_control rules.
-
-    Supports both forms:
-      - flow-style single-line:  `- { path: ^/admin, roles: ROLE_ADMIN }`
-      - flow-style multi-line:   `- {\n    path: ^/admin,\n    roles: ROLE_ADMIN\n  }`
-      - block-style: `- path: ^/admin\n      roles: ROLE_ADMIN`
-    Indent-relative.
-    """
-    block = _enter_nested_block(text, ("security", "access_control"))
-    if block is None:
-        return []
-    start_idx, access_indent = block
-    # Anchors are collected from the whole document: an `ips: *internal` rule
-    # routinely aliases an anchor defined in another block (or another rule).
-    anchors = _collect_yaml_anchors(text)
-    lines = text.splitlines()
-    out: list[dict[str, str]] = []
-    cur: dict[str, str] = {}
-    cur_active = False
-    # Accumulator for multi-line flow-style blocks (`- {\n...\n}`).
-    flow_buf: list[str] = []
-    flow_depth = 0  # brace nesting depth (>0 means inside a flow block)
-    for offset, raw in enumerate(lines[start_idx:]):
-        lineno = start_idx + offset
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        indent = len(raw) - len(raw.lstrip(" "))
-        if indent <= access_indent and flow_depth == 0:
-            break
-        stripped = raw.strip()
-        # If we are inside a multi-line flow block, accumulate lines. Strip any
-        # inline `# comment` per physical line BEFORE buffering: the lines are
-        # later joined with spaces, so an un-stripped trailing comment would
-        # swallow the following line (`roles: [...], # or` + `allow_if: ...`
-        # -> `# or allow_if`, an invalid key).
-        if flow_depth > 0:
-            clean = _strip_inline_comment(stripped)
-            flow_buf.append(clean)
-            flow_depth += _flow_depth_delta(clean)
-            if flow_depth <= 0:
-                # Block closed — join and parse.
-                full = " ".join(flow_buf)
-                parsed = _parse_flow_inline_kv(full, anchors, lineno)
-                if parsed:
-                    out.append(parsed)
-                flow_buf = []
-                flow_depth = 0
-            continue
-        # Flow-style entry on a single line: `- { ... }`.
-        m = _ACCESS_CONTROL_FLOW_RE.match(raw)
-        if m:
-            if cur_active:
-                out.append(cur)
-                cur, cur_active = {}, False
-            parsed = _parse_flow_inline_kv(m.group(1), anchors, lineno)
-            if parsed:
-                out.append(parsed)
-            continue
-        # Multi-line flow block starting with `- {` (no closing `}` on same line).
-        if stripped.startswith("- {"):
-            if cur_active:
-                out.append(cur)
-                cur, cur_active = {}, False
-            tail = _strip_inline_comment(stripped[2:])  # strip leading `- ` + inline comment
-            flow_buf = [tail]
-            # Count brace depth; `{` opens it, `}` closes it.
-            flow_depth = _flow_depth_delta(tail)
-            if flow_depth <= 0:
-                # Edge case: somehow closed on the same line without matching regex.
-                parsed = _parse_flow_inline_kv(" ".join(flow_buf), anchors, lineno)
-                if parsed:
-                    out.append(parsed)
-                flow_buf = []
-                flow_depth = 0
-            continue
-        # Block-style: `- key: value` starts a new rule; subsequent indented
-        # `key: value` lines extend the same rule.
-        if stripped.startswith("- "):
-            if cur_active:
-                out.append(cur)
-            cur, cur_active = {}, True
-            kv = stripped[2:]
-            if ":" in kv:
-                k, _, v = kv.partition(":")
-                cur[k.strip()] = _clean_yaml_scalar(v, anchors, lineno)
-            continue
-        if cur_active and ":" in stripped:
-            k, _, v = stripped.partition(":")
-            cur[k.strip()] = _clean_yaml_scalar(v, anchors, lineno)
-    if cur_active:
-        out.append(cur)
-    return out
 
 
 # ---------------------------------------------------------------------------
 # Normalized config views.
 #
-# The processed tree from `debug:config <alias>` and the frozen text parsers
-# above both normalize into the same whitelisted, string-valued views, so what
-# reaches CONTEXT.md does not depend on where it was read from. Views never
-# carry a raw tree; secret-like leaves are redacted on the way in.
+# The processed tree from `debug:config <alias>` is normalized into whitelisted,
+# string-valued views. Views never carry a raw tree; secret-like leaves are
+# redacted on the way in.
 # ---------------------------------------------------------------------------
 
 
@@ -1790,9 +1268,6 @@ _FIREWALL_DEFAULTS: dict[str, frozenset[str]] = {
     f"logout{_NESTED_KEY_SEP}path": frozenset({"/logout"}),
 }
 
-# Keys whose yaml value may be a flow list; any other key keeps its raw text
-# (a `path:` / `pattern:` regex may legitimately start with `[`).
-_LIST_VALUED_KEYS = frozenset({"methods", "required_badges", "custom_authenticators", "roles", "ips"})
 
 # Literals that carry no secret even under a secret-like key.
 _NON_SECRET_LITERALS = frozenset({"", "~", "null", "true", "false"})
@@ -1814,28 +1289,8 @@ def _canonical_list(items: list[str]) -> str:
     return "[" + ", ".join(items) + "]"
 
 
-def _split_flow_list(raw: str) -> list[str]:
-    inner = raw.strip()[1:-1]
-    parts: list[str] = []
-    depth = 0
-    last = 0
-    for idx, ch in _iter_unquoted(inner):
-        if ch in "[{(":
-            depth += 1
-        elif ch in "]})":
-            depth -= 1
-        elif ch == "," and depth == 0:
-            parts.append(inner[last:idx])
-            last = idx + 1
-    parts.append(inner[last:])
-    return [_strip_yaml_quotes(p.strip()) for p in parts if p.strip()]
 
 
-def _yaml_leaf(key: str, raw: str) -> str:
-    raw = _redact(key, raw)
-    if key in _LIST_VALUED_KEYS and raw.startswith("[") and raw.endswith("]"):
-        return _canonical_list(_split_flow_list(raw))
-    return raw
 
 
 def _tree_scalar(value: Any) -> str:
@@ -1875,9 +1330,6 @@ class TrustedConfigView:
 @dataclass
 class MessengerTransportView:
     transports: list[dict[str, str]]
-    # Raw retry_strategy children per transport (yaml side only), so that
-    # `elide_defaults` can tell an explicitly-spelled default from a real change.
-    retry_values: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -1900,89 +1352,10 @@ def _security_kind(firewalls: list[dict[str, str]]) -> str:
     return "session"
 
 
-@dataclass
-class _YamlChild:
-    key: str
-    inline: str
-    items: list[str] = field(default_factory=list)
-    children: dict[str, str] = field(default_factory=dict)
 
 
-def _yaml_firewall_children(text: str) -> list[tuple[str, list[_YamlChild]]]:
-    """Depth-aware walk of `security: firewalls:`: each firewall's options,
-    with the children nested under an option kept apart from it."""
-    block = _enter_nested_block(text, ("security", "firewalls"))
-    if block is None:
-        return []
-    start_idx, firewalls_indent = block
-    out: list[tuple[str, list[_YamlChild]]] = []
-    children: Optional[list[_YamlChild]] = None
-    name_indent: Optional[int] = None
-    child_indent: Optional[int] = None
-    grandchild_indent: Optional[int] = None
-    cur: Optional[_YamlChild] = None
-    for raw in text.splitlines()[start_idx:]:
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        indent = len(raw) - len(raw.lstrip(" "))
-        if indent <= firewalls_indent:
-            break
-        stripped = raw.strip()
-        if name_indent is None:
-            name_indent = indent
-        if indent == name_indent and stripped.endswith(":"):
-            children = []
-            out.append((stripped[:-1].strip(), children))
-            child_indent = grandchild_indent = None
-            cur = None
-            continue
-        if children is None or indent <= name_indent:
-            continue
-        if child_indent is None:
-            child_indent = indent
-        if indent == child_indent:
-            if stripped.startswith("- "):
-                if cur is not None:
-                    cur.items.append(_clean_yaml_scalar(stripped[2:]))
-                continue
-            if ":" in stripped:
-                k, _, v = stripped.partition(":")
-                cur = _YamlChild(k.strip(), _strip_yaml_quotes(_strip_inline_comment(v.strip())))
-                children.append(cur)
-                grandchild_indent = None
-            continue
-        if cur is None:
-            continue
-        if stripped.startswith("- "):
-            cur.items.append(_clean_yaml_scalar(stripped[2:]))
-            continue
-        if grandchild_indent is None:
-            grandchild_indent = indent
-        if indent == grandchild_indent and ":" in stripped:
-            k, _, v = stripped.partition(":")
-            cur.children[k.strip()] = _clean_yaml_scalar(v)
-    return out
 
 
-def _firewall_from_yaml(name: str, children: list[_YamlChild]) -> dict[str, str]:
-    fw: dict[str, str] = {"name": name}
-    for ch in children:
-        if ch.key in _FIREWALL_LEAF_KEYS:
-            if not ch.inline and ch.items:
-                fw[ch.key] = _canonical_list([_redact(ch.key, i) for i in ch.items])
-            else:
-                fw[ch.key] = _yaml_leaf(ch.key, ch.inline)
-            continue
-        if ch.inline.lower() == "false":
-            continue
-        fw[ch.key] = "true"
-        nested = dict(ch.children)
-        if ch.inline.startswith("{"):
-            nested.update(_parse_flow_inline_kv(ch.inline))
-        for leaf in _FIREWALL_NESTED_LEAVES.get(ch.key, ()):
-            if leaf in nested:
-                fw[f"{ch.key}{_NESTED_KEY_SEP}{leaf}"] = _yaml_leaf(f"{ch.key}.{leaf}", nested[leaf])
-    return fw
 
 
 def _firewall_from_tree(name: str, node: dict) -> dict[str, str]:
@@ -2017,23 +1390,6 @@ def _password_hasher_from_tree(hashers: Any) -> Optional[str]:
     return None
 
 
-def security_view_from_yaml_text(text: str, warnings: Optional[list[str]] = None) -> SecurityView:
-    sink = warnings if warnings is not None else []
-    firewalls = _drop_unemittable_keys(
-        [_firewall_from_yaml(name, ch) for name, ch in _yaml_firewall_children(text)],
-        rel_hint="firewalls", warnings=sink,
-    )
-    access_control = _drop_unemittable_keys(
-        [{k: _yaml_leaf(k, v) for k, v in rule.items()} for rule in _parse_access_control(text)],
-        rel_hint="access_control", warnings=sink,
-    )
-    return SecurityView(
-        kind=_security_kind(firewalls),
-        provider=_first_key_under_nested(text, ("security", "providers")) or "unknown",
-        firewalls=firewalls,
-        access_control=access_control,
-        password_hasher=_parse_password_hasher(text),
-    )
 
 
 def security_view_from_tree(tree: dict, warnings: Optional[list[str]] = None) -> SecurityView:
@@ -2073,13 +1429,6 @@ _TRUSTED_DEFAULTS: dict[str, frozenset[tuple[str, ...]]] = {
 }
 
 
-def trusted_config_view_from_yaml_text(text: str) -> TrustedConfigView:
-    settings: dict[str, str] = {}
-    for key in TRUSTED_SUBTREE_KEYS:
-        val = _framework_setting(text, key)
-        if val is not None:
-            settings[key] = val
-    return TrustedConfigView(settings)
 
 
 def trusted_config_view_from_tree(tree: dict) -> TrustedConfigView:
@@ -2089,8 +1438,8 @@ def trusted_config_view_from_tree(tree: dict) -> TrustedConfigView:
         if value is None or value == "" or (isinstance(value, (list, dict)) and not value):
             continue
         if isinstance(value, list):
-            # The "(list)" marker (as `_framework_setting` renders a yaml list)
-            # hides the items, so a default list has to be dropped here.
+            # The "(list)" marker hides the items, so a default list has to be
+            # dropped here.
             if tuple(_tree_scalar(v) for v in value) in _TRUSTED_DEFAULTS.get(key, frozenset()):
                 continue
             settings[key] = "(list)"
@@ -2115,56 +1464,8 @@ def _retry_is_default(values: dict[str, str]) -> bool:
     )
 
 
-def _yaml_messenger_retry_values(text: str) -> dict[str, dict[str, str]]:
-    """`retry_strategy` children per transport, from the same block
-    `_parse_messenger_transports` reads."""
-    block = _enter_nested_block(text, ("framework", "messenger", "transports"))
-    if block is None:
-        return {}
-    start_idx, transports_indent = block
-    out: dict[str, dict[str, str]] = {}
-    name_indent: Optional[int] = None
-    cur_name: Optional[str] = None
-    retry_indent: Optional[int] = None
-    child_indent: Optional[int] = None
-    for raw in text.splitlines()[start_idx:]:
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        indent = len(raw) - len(raw.lstrip(" "))
-        if indent <= transports_indent:
-            break
-        stripped = raw.strip()
-        if name_indent is None:
-            name_indent = indent
-        if indent == name_indent:
-            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:", stripped)
-            cur_name = m.group(1) if m else None
-            retry_indent = child_indent = None
-            continue
-        if cur_name is None:
-            continue
-        if retry_indent is not None and indent > retry_indent:
-            if child_indent is None:
-                child_indent = indent
-            if indent == child_indent and ":" in stripped:
-                k, _, v = stripped.partition(":")
-                out[cur_name][k.strip()] = _clean_yaml_scalar(v)
-            continue
-        retry_indent = None
-        if stripped.startswith("retry_strategy:"):
-            _, _, v = stripped.partition(":")
-            inline = _strip_inline_comment(v.strip())
-            out[cur_name] = dict(_parse_flow_inline_kv(inline)) if inline.startswith("{") else {}
-            retry_indent = indent
-            child_indent = None
-    return out
 
 
-def messenger_view_from_yaml_text(text: str) -> MessengerTransportView:
-    return MessengerTransportView(
-        transports=_parse_messenger_transports(text),
-        retry_values=_yaml_messenger_retry_values(text),
-    )
 
 
 def messenger_view_from_tree(tree: dict) -> MessengerTransportView:
@@ -2188,10 +1489,6 @@ def messenger_view_from_tree(tree: dict) -> MessengerTransportView:
     return MessengerTransportView(transports=transports)
 
 
-def twig_view_from_yaml_text(text: str) -> Optional[TwigView]:
-    """None when this file does not set `autoescape`."""
-    v = _yaml_value_at(text, "twig", "autoescape")
-    return TwigView(v) if v is not None else None
 
 
 def twig_view_from_tree(tree: dict) -> TwigView:
@@ -2201,9 +1498,8 @@ def twig_view_from_tree(tree: dict) -> TwigView:
 
 
 def elide_defaults(view):
-    """Drop values equal to the bundle default, so a tree (which spells out
-    every default) and a yaml file (which spells out only what the author
-    wrote) compare equal."""
+    """Drop values equal to the bundle default: a processed tree spells out
+    every default, which would otherwise bury what the author changed."""
     if isinstance(view, SecurityView):
         return replace(
             view,
@@ -2224,12 +1520,7 @@ def elide_defaults(view):
         out: list[dict[str, str]] = []
         for t in view.transports:
             item = dict(t)
-            retry = item.get("retry_strategy")
-            if retry == "default" or (
-                retry == "configured"
-                and item.get("name") in view.retry_values
-                and _retry_is_default(view.retry_values[item["name"]])
-            ):
+            if item.get("retry_strategy") == "default":
                 item.pop("retry_strategy")
             out.append(item)
         return MessengerTransportView(transports=out)
@@ -2237,7 +1528,7 @@ def elide_defaults(view):
 
 
 # ---------------------------------------------------------------------------
-# Config resolution: console tree → single yaml file → evidence only.
+# Config resolution: console tree, else evidence only.
 # ---------------------------------------------------------------------------
 
 
@@ -2247,25 +1538,23 @@ class _ConfigResolution:
 
     mode:
       tree          — `debug:config <alias>` (authoritative for the console's env).
-      yaml          — exactly one yaml evidence file, no prod-only override:
-                      the frozen text parser reads it.
-      uninterpreted — evidence exists but is php/xml, spread over several
-                      files, overridden for prod only, or the console's tree
-                      does not reflect it.
+      uninterpreted — evidence exists but there is no usable tree: no console,
+                      a failed `debug:config`, or a tree that does not reflect
+                      the evidence. The files are the source; nothing is parsed.
       absent        — no file under config/** carries the section's keys.
     `env_gap` holds the `config_env_*` warning(s) when the tree came from an
     env whose view differs from production (prod-only overrides it did not
     load, or dev-only overrides it did).
+    `why` names the uninterpreted cause: no_console | console_failed |
+    tree_mismatch | env_mismatch.
     """
 
     alias: str
     mode: str
     evidence: list[str]
     tree: Optional[dict] = None
-    yaml_texts: list[tuple[str, str]] = field(default_factory=list)
     env_gap: Optional[str] = None
-    # The console answered, but its tree lacks what the evidence declares.
-    tree_mismatch: bool = False
+    why: str = ""
 
 
 def _alias_declared(project_root: Path, alias: str) -> list[str]:
@@ -2295,18 +1584,12 @@ def _resolve_config(
     subtree_keys: tuple[str, ...],
     warnings: list[str],
     *,
-    tree_misses_static: Optional[Callable[[dict, list[tuple[str, str]], list[str]], bool]] = None,
+    tree_misses_static: Optional[Callable[[dict], bool]] = None,
 ) -> _ConfigResolution:
-    """`tree_misses_static(tree, yaml_texts, evidence)` — True when the console
-    answered but its tree lacks what the static evidence declares (e.g.
-    prod-only rules under a dev console): "found but not understood"."""
+    """`tree_misses_static(tree)` — True when the console answered but its
+    tree lacks what the static evidence declares (e.g. prod-only rules under a
+    dev console): "found but not understood"."""
     ev = find_config_evidence(project_root, alias, subtree_keys)
-    yaml_texts: list[tuple[str, str]] = []
-    for rel in ev.files:
-        if rel.endswith((".yaml", ".yml")):
-            text = _read_text_safe(project_root / rel)
-            if text is not None:
-                yaml_texts.append((rel, text))
 
     tree: Optional[dict] = None
     env_gap: Optional[str] = None
@@ -2322,17 +1605,19 @@ def _resolve_config(
         env_gap = _env_gaps(session, ev, alias, warnings)
         if not ev.files and ev.dev_files and session.kernel_environment() == "dev":
             # Configured only for dev and read in dev: those files are the source.
-            return _ConfigResolution(alias, "tree", list(ev.dev_files), tree, [], env_gap)
-        if not (ev.files and tree_misses_static and tree_misses_static(tree, yaml_texts, ev.files)):
-            return _ConfigResolution(alias, "tree", ev.files, tree, yaml_texts, env_gap)
+            return _ConfigResolution(alias, "tree", list(ev.dev_files), tree, env_gap)
+        if not (ev.files and tree_misses_static and tree_misses_static(tree)):
+            return _ConfigResolution(alias, "tree", ev.files, tree, env_gap)
         return _ConfigResolution(
-            alias, "uninterpreted", ev.files, None, yaml_texts, env_gap, tree_mismatch=True,
+            alias, "uninterpreted", ev.files, None, env_gap,
+            why="env_mismatch" if env_gap else "tree_mismatch",
         )
     if not ev.files:
         return _ConfigResolution(alias, "absent", [])
-    if len(ev.files) == 1 and len(yaml_texts) == 1 and not ev.prod_override:
-        return _ConfigResolution(alias, "yaml", ev.files, None, yaml_texts)
-    return _ConfigResolution(alias, "uninterpreted", ev.files, None, yaml_texts)
+    return _ConfigResolution(
+        alias, "uninterpreted", ev.files, None,
+        why="no_console" if session is None else "console_failed",
+    )
 
 
 def _note_unlocated(res: _ConfigResolution, warnings: list[str]) -> None:
@@ -2348,27 +1633,18 @@ def _absent_reason(alias: str) -> str:
 
 
 def _uninterpreted_reason(res: _ConfigResolution) -> str:
-    if res.tree_mismatch:
-        return (
-            f"{res.alias} config in source_files is missing from the console's tree "
-            f"({res.env_gap or 'not loaded in its env'}); read source_files"
-        )
-    return (
-        f"{res.alias} config not interpreted without the console (php/xml, several "
-        "files, or a prod-only override); read source_files"
-    )
+    return f"config_uninterpreted: {res.alias}: {res.why}"
 
 
 @dataclass
 class _SecurityConfig:
     resolution: _ConfigResolution
-    # tree / yaml: the interpreted view. uninterpreted: whatever the frozen
-    # parser got from the yaml evidence files (possibly empty). absent: None.
+    # tree: the interpreted view. uninterpreted / absent: None.
     view: Optional[SecurityView]
 
     @property
     def interpreted(self) -> bool:
-        return self.resolution.mode in ("tree", "yaml")
+        return self.resolution.mode == "tree"
 
 
 _SECURITY_RULE_KEYS: tuple[str, ...] = ("firewalls", "access_control")
@@ -2377,7 +1653,7 @@ _SECURITY_RULE_KEYS: tuple[str, ...] = ("firewalls", "access_control")
 def _resolve_security(
     project_root: Path, session: Optional[ConsoleSession], warnings: list[str],
 ) -> _SecurityConfig:
-    def tree_misses_static(tree: dict, _yaml_texts, _evidence) -> bool:
+    def tree_misses_static(tree: dict) -> bool:
         return not (tree.get("firewalls") or tree.get("access_control")) and bool(
             find_config_evidence(project_root, "security", _SECURITY_RULE_KEYS).files
         )
@@ -2392,18 +1668,6 @@ def _resolve_security(
             # A registered bundle with nothing configured: the tree is defaults only.
             return _SecurityConfig(_ConfigResolution("security", "absent", []), None)
         return _SecurityConfig(res, view)
-    if res.mode == "yaml":
-        return _SecurityConfig(res, security_view_from_yaml_text(res.yaml_texts[0][1], warnings))
-    if res.mode == "uninterpreted":
-        views = [security_view_from_yaml_text(text, warnings) for _, text in res.yaml_texts]
-        firewalls = [fw for v in views for fw in v.firewalls]
-        return _SecurityConfig(res, SecurityView(
-            kind=_security_kind(firewalls),
-            provider=next((v.provider for v in views if v.provider != "unknown"), "unknown"),
-            firewalls=firewalls,
-            access_control=[rule for v in views for rule in v.access_control],
-            password_hasher=next((v.password_hasher for v in views if v.password_hasher), None),
-        ))
     return _SecurityConfig(res, None)
 
 
@@ -2792,7 +2056,7 @@ def collect_secrets(
             "Promote real secrets into items with status=ok."
         ),
         data=data,
-        source_files=[".env", *security.resolution.evidence],
+        source_files=[*([".env"] if dotenv_committed else []), *security.resolution.evidence],
     )
 
 
@@ -3068,15 +2332,8 @@ def collect_twig_overrides(
     autoescape_default: Optional[str] = "name"  # Symfony default
     if res.mode == "tree":
         autoescape_default = twig_view_from_tree(res.tree).autoescape_default
-    elif res.mode in ("yaml", "uninterpreted"):
-        found = next(
-            (v for _, text in res.yaml_texts if (v := twig_view_from_yaml_text(text)) is not None),
-            None,
-        )
-        if found is not None:
-            autoescape_default = found.autoescape_default
-        elif res.mode == "uninterpreted":
-            autoescape_default = None
+    elif res.mode == "uninterpreted":
+        autoescape_default = None
     source_files: list[str] = list(res.evidence)
 
     # |raw filter occurrences in templates/. Use \|raw\b to skip false-positive
@@ -3129,39 +2386,20 @@ def collect_messenger_transports(
     warnings: Optional[list[str]] = None,
 ) -> SectionPayload:
     sink = warnings if warnings is not None else []
-    def tree_misses_static(tree: dict, yaml_texts, _evidence) -> bool:
-        # A php/xml `messenger` mention may configure only buses/routing.
-        if messenger_view_from_tree(tree).transports:
-            return False
-        return any(_parse_messenger_transports(text) for _, text in yaml_texts)
-
-    res = _resolve_config(
-        project_root, session, "framework", MESSENGER_SUBTREE_KEYS, sink,
-        tree_misses_static=tree_misses_static,
-    )
+    res = _resolve_config(project_root, session, "framework", MESSENGER_SUBTREE_KEYS, sink)
     if res.mode == "absent":
         return SectionPayload(
             status="none", reason=_absent_reason("messenger"), source_files=[],
         )
     if res.mode == "uninterpreted":
-        transports = [
-            t for _, text in res.yaml_texts for t in _parse_messenger_transports(text)
-        ]
-        data: dict = {"evidence_files": res.evidence}
-        if transports:
-            data["transports"] = transports
         return SectionPayload(
             status="partial",
             reason=_uninterpreted_reason(res),
-            data=data,
+            data={"evidence_files": res.evidence},
             source_files=res.evidence,
         )
-    if res.mode == "tree":
-        # Not elided: `retry_strategy` is already a default/configured verdict,
-        # and keeping it keeps the item shape of the yaml shorthand form.
-        transports = messenger_view_from_tree(res.tree).transports
-    else:
-        transports = messenger_view_from_yaml_text(res.yaml_texts[0][1]).transports
+    # Not elided: `retry_strategy` is already a default/configured verdict.
+    transports = messenger_view_from_tree(res.tree).transports
     if not transports and res.env_gap:
         return SectionPayload(
             status="partial", reason=res.env_gap,
@@ -3170,10 +2408,7 @@ def collect_messenger_transports(
     if not transports:
         return SectionPayload(
             status="none",
-            reason=(
-                "no messenger transports configured" if res.mode == "tree"
-                else "messenger config present but no transports section parsed"
-            ),
+            reason="no messenger transports configured",
             source_files=res.evidence,
         )
     _note_unlocated(res, sink)
@@ -3185,108 +2420,10 @@ def collect_messenger_transports(
     )
 
 
-def _parse_password_hasher(text: str) -> Optional[str]:
-    """Find the value of the first child entry under
-    `security: password_hashers: <subject>: <value>`.
-
-    Symfony's password_hashers maps subject (FQN/interface) → algorithm
-    string ("auto", "bcrypt", ...). We want the algorithm, not the subject.
-    """
-    block = _enter_nested_block(text, ("security", "password_hashers"))
-    if block is None:
-        return None
-    start_idx, hashers_indent = block
-    lines = text.splitlines()
-    for raw in lines[start_idx:]:
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        indent = len(raw) - len(raw.lstrip(" "))
-        if indent <= hashers_indent:
-            return None
-        stripped = raw.strip()
-        if ":" not in stripped:
-            continue
-        # First entry: scalar form `<subject>: <value>` OR block form
-        # `<subject>:` followed by indented `algorithm: ...`.
-        _, _, value = stripped.partition(":")
-        value = _strip_inline_comment(value.strip())
-        if value:
-            return _strip_yaml_quotes(value)
-        # Block form — return value of `algorithm:` key inside subject block.
-        return _read_block_algorithm(lines, start_idx + 1, indent)
-    return None
 
 
-def _read_block_algorithm(lines: list[str], start: int, parent_indent: int) -> Optional[str]:
-    for raw in lines[start:]:
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        indent = len(raw) - len(raw.lstrip(" "))
-        if indent <= parent_indent:
-            return None
-        stripped = raw.strip()
-        if stripped.startswith("algorithm:"):
-            _, _, v = stripped.partition(":")
-            return _strip_yaml_quotes(_strip_inline_comment(v.strip()))
-    return None
 
 
-def _parse_messenger_transports(text: str) -> list[dict[str, str]]:
-    """Extract transports list from `framework: messenger: transports:` block.
-
-    Indent-relative — accepts any consistent indentation step (2 / 4 / 8).
-    """
-    block = _enter_nested_block(text, ("framework", "messenger", "transports"))
-    if block is None:
-        return []
-    start_idx, transports_indent = block
-    lines = text.splitlines()
-    transports: list[dict[str, str]] = []
-    cur_name: Optional[str] = None
-    cur: dict[str, str] = {}
-    name_indent: Optional[int] = None  # indent of `<transport_name>:` lines
-
-    for raw in lines[start_idx:]:
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        indent = len(raw) - len(raw.lstrip(" "))
-        if indent <= transports_indent:
-            break
-        stripped = raw.strip()
-        if name_indent is None:
-            name_indent = indent
-        if indent == name_indent:
-            if cur_name is not None:
-                transports.append({"name": cur_name, **cur})
-                cur = {}
-            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$", stripped)
-            if not m:
-                cur_name = None
-                continue
-            cur_name = m.group(1)
-            tail = _strip_inline_comment(m.group(2).strip())
-            if tail:
-                # name: 'sync://' or name: 'doctrine://default'
-                cur["dsn_type"] = _classify_dsn(_strip_yaml_quotes(tail))
-                cur["retry_strategy"] = "default"
-                transports.append({"name": cur_name, **cur})
-                cur_name, cur = None, {}
-            continue
-        if indent > name_indent and cur_name is not None:
-            if stripped.startswith("dsn:"):
-                _, _, v = stripped.partition(":")
-                v = _strip_inline_comment(v.strip())
-                cur["dsn_type"] = _classify_dsn(_strip_yaml_quotes(v))
-            elif stripped.startswith("retry_strategy:"):
-                cur["retry_strategy"] = "configured"
-            elif stripped.startswith("serializer:"):
-                _, _, v = stripped.partition(":")
-                v = _strip_inline_comment(v.strip())
-                if v:
-                    cur["serializer"] = _strip_yaml_quotes(v)
-    if cur_name is not None:
-        transports.append({"name": cur_name, **cur})
-    return transports
 
 
 def _classify_dsn(dsn: str) -> str:
@@ -3540,7 +2677,7 @@ def _build_routes_authz_matrix(
     interpreted = security.interpreted
     firewalls: list[dict[str, str]] = []
     access_control: list[dict[str, str]] = []
-    if interpreted and security.view is not None:
+    if interpreted:
         firewalls = security.view.firewalls
         access_control = security.view.access_control
         sources.extend(sec_evidence)
@@ -3676,7 +2813,7 @@ def _build_routes_authz_matrix(
             source_files=sorted(src_files),
         )
     if not interpreted and security.resolution.mode != "absent":
-        reason = "access_control_not_interpreted"
+        reason = f"{_uninterpreted_reason(security.resolution)}; access_control_not_interpreted"
         if security.resolution.env_gap:
             reason += f" ({security.resolution.env_gap})"
         return SectionPayload(

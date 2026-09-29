@@ -113,75 +113,60 @@ def _frontmatter(text: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# View parity
+# Views from real `debug:config` trees
 # ---------------------------------------------------------------------------
 
 
-SECURITY_PARITY = (
-    ("minimal", "symfony_minimal"),
-    ("dvwa", "symfony_dvwa"),
-    ("admin", "symfony_admin"),
-    ("routes_authz", "symfony_routes_authz"),
-    ("sonata_admin", "symfony_sonata_admin"),
-    ("flex", "symfony_flex"),
-)
-FRAMEWORK_PARITY = (
-    ("minimal", "symfony_minimal"),
-    ("dvwa", "symfony_dvwa"),
-    ("flex", "symfony_flex"),
+SECURITY_CASES = (
+    ("minimal", "stateless", "auto", 3),
+    ("dvwa", "stateless", "plaintext", 3),
+    ("admin", "session", None, 1),
+    ("routes_authz", "stateless", None, 2),
+    ("sonata_admin", "session", None, 1),
+    ("flex", "session", "auto", 3),
 )
 
 
-class ViewParity(unittest.TestCase):
+class TreeViews(unittest.TestCase):
     def test_security_view(self):
-        for case, fixture in SECURITY_PARITY:
+        for case, kind, hasher, rules in SECURITY_CASES:
             with self.subTest(case=case):
-                from_tree = sf.elide_defaults(sf.security_view_from_tree(_tree(case, "security")))
-                from_yaml = sf.elide_defaults(sf.security_view_from_yaml_text(_yaml(fixture, "security.yaml")))
-                self.assertEqual(from_tree, from_yaml)
-
-    def test_security_kind_part_of_parity(self):
-        expected = {"minimal": "stateless", "dvwa": "stateless", "admin": "session",
-                    "routes_authz": "stateless", "sonata_admin": "session", "flex": "session"}
-        for case, fixture in SECURITY_PARITY:
-            with self.subTest(case=case):
-                self.assertEqual(sf.security_view_from_tree(_tree(case, "security")).kind, expected[case])
-                self.assertEqual(
-                    sf.security_view_from_yaml_text(_yaml(fixture, "security.yaml")).kind, expected[case],
-                )
+                view = sf.elide_defaults(sf.security_view_from_tree(_tree(case, "security")))
+                self.assertEqual(view.kind, kind)
+                self.assertEqual(view.password_hasher, hasher)
+                self.assertEqual(len(view.access_control), rules)
+                self.assertEqual(view.provider, "in_memory" if case == "routes_authz" else "app_user_provider")
 
     def test_messenger_view(self):
-        for case, fixture in FRAMEWORK_PARITY:
+        expected = {
+            "minimal": [{"name": "async", "dsn_type": "env"}, {"name": "sync", "dsn_type": "sync"}],
+            "dvwa": [{"name": "async", "dsn_type": "doctrine",
+                      "serializer": "messenger.transport.native_php_serializer"}],
+            "flex": [{"name": "async", "dsn_type": "amqp"}, {"name": "failed", "dsn_type": "doctrine"},
+                     {"name": "sync", "dsn_type": "sync"}],
+        }
+        for case, transports in expected.items():
             with self.subTest(case=case):
-                from_tree = sf.elide_defaults(sf.messenger_view_from_tree(_tree(case, "framework")))
-                from_yaml = sf.elide_defaults(sf.messenger_view_from_yaml_text(_yaml(fixture, "messenger.yaml")))
-                self.assertEqual(from_tree.transports, from_yaml.transports)
+                view = sf.elide_defaults(sf.messenger_view_from_tree(_tree(case, "framework")))
+                self.assertEqual(view.transports, transports)
 
     def test_trusted_config_view(self):
-        for case, fixture in FRAMEWORK_PARITY:
+        expected = {
+            "minimal": {}, "dvwa": {},
+            "flex": {"trusted_proxies": "10.0.0.0/8", "trusted_headers": "(list)"},
+        }
+        for case, settings in expected.items():
             with self.subTest(case=case):
-                from_tree = sf.elide_defaults(sf.trusted_config_view_from_tree(_tree(case, "framework")))
-                from_yaml = sf.elide_defaults(sf.trusted_config_view_from_yaml_text(_yaml(fixture, "framework.yaml")))
-                self.assertEqual(from_tree, from_yaml)
+                view = sf.elide_defaults(sf.trusted_config_view_from_tree(_tree(case, "framework")))
+                self.assertEqual(view.settings, settings)
 
     def test_empty_trusted_lists_mean_unset(self):
-        text = (
-            "framework:\n"
-            "    secret: '%env(APP_SECRET)%'\n"
-            "    trusted_proxies: []\n"
-            "    trusted_hosts: []\n"
-            "    session: true\n"
-        )
-        from_tree = sf.elide_defaults(sf.trusted_config_view_from_tree(_tree("empty_trusted", "framework")))
-        from_yaml = sf.elide_defaults(sf.trusted_config_view_from_yaml_text(text))
-        self.assertEqual(from_tree, sf.TrustedConfigView({}))
-        self.assertEqual(from_yaml, from_tree)
+        view = sf.elide_defaults(sf.trusted_config_view_from_tree(_tree("empty_trusted", "framework")))
+        self.assertEqual(view, sf.TrustedConfigView({}))
 
     def test_twig_view(self):
-        from_tree = sf.twig_view_from_tree(_tree("flex", "twig"))
-        # Flex twig.yaml sets no autoescape → the default applies on both sides.
-        self.assertIsNone(sf.twig_view_from_yaml_text(_yaml("symfony_flex", "twig.yaml")))
-        self.assertEqual(from_tree, sf.TwigView("name"))
+        # Flex twig.yaml sets no autoescape → the default applies.
+        self.assertEqual(sf.twig_view_from_tree(_tree("flex", "twig")), sf.TwigView("name"))
 
 
 class SecretSnippetMasking(unittest.TestCase):
@@ -253,6 +238,23 @@ class SecretSnippetMasking(unittest.TestCase):
 
 
 class CanonicalFirewallRendering(unittest.TestCase):
+    def test_list_values_render_bare_or_bracketed(self):
+        tree = {"access_control": [
+            {"path": "^/a", "roles": ["ROLE_A"]},
+            {"path": "^/b", "roles": ["ROLE_B", "ROLE_C"]},
+            {"path": "[a-z]+", "roles": ["ROLE_D"]},
+        ]}
+        rules = sf.security_view_from_tree(tree).access_control
+        self.assertEqual(rules[0]["roles"], "ROLE_A")
+        self.assertEqual(rules[1]["roles"], "[ROLE_B, ROLE_C]")
+        self.assertEqual(rules[2]["path"], "[a-z]+")
+
+    def test_kind_from_factory_keys(self):
+        jwt = {"firewalls": {"api": {"stateless": True, "jwt": {}}}}
+        self.assertEqual(sf.security_view_from_tree(jwt).kind, "jwt")
+        oauth = {"firewalls": {"main": {"custom_authenticators": ["App\\Security\\GoogleOAuthAuthenticator"]}}}
+        self.assertEqual(sf.security_view_from_tree(oauth).kind, "oauth")
+
     def test_rich_firewall_nested_nodes_render_as_presence_plus_listed_leaves(self):
         view = sf.elide_defaults(sf.security_view_from_tree(_tree("flex", "security")))
         main = next(fw for fw in view.firewalls if fw["name"] == "main")
@@ -270,27 +272,13 @@ class CanonicalFirewallRendering(unittest.TestCase):
             "switch_user": "true",
         })
 
-    def test_explicit_default_kept_on_yaml_side_until_elided(self):
-        raw = sf.security_view_from_yaml_text(_yaml("symfony_flex", "security.yaml"))
-        main = next(fw for fw in raw.firewalls if fw["name"] == "main")
-        self.assertEqual(main["stateless"], "false")
-        self.assertNotIn("stateless", next(
-            fw for fw in sf.elide_defaults(raw).firewalls if fw["name"] == "main"
-        ))
 
-    def test_factory_children_no_longer_flattened_into_the_firewall(self):
-        raw = sf.security_view_from_yaml_text(_yaml("symfony_flex", "security.yaml"))
-        main = next(fw for fw in raw.firewalls if fw["name"] == "main")
-        for leaked in ("login_path", "check_path", "csrf_token_id", "password_parameter",
-                       "secret", "lifetime", "max_attempts"):
-            self.assertNotIn(leaked, main)
 
-    def test_nested_secret_never_in_either_view(self):
-        for view in (sf.security_view_from_tree(_tree("flex", "security")),
-                     sf.security_view_from_yaml_text(_yaml("symfony_flex", "security.yaml"))):
-            dumped = json.dumps([view.firewalls, view.access_control])
-            self.assertNotIn("s3cr3t", dumped)
-            self.assertNotIn("remember_secret", dumped)
+    def test_nested_secret_never_in_the_view(self):
+        view = sf.security_view_from_tree(_tree("flex", "security"))
+        dumped = json.dumps([view.firewalls, view.access_control])
+        self.assertNotIn("s3cr3t", dumped)
+        self.assertNotIn("remember_secret", dumped)
 
     def test_redaction_is_an_explicit_key_list(self):
         self.assertEqual(sf._redact("csrf_token_id", "authenticate"), "authenticate")
@@ -300,38 +288,6 @@ class CanonicalFirewallRendering(unittest.TestCase):
         self.assertEqual(sf._redact("secret", "%env(APP_SECRET)%"), "%env(APP_SECRET)%")
         self.assertEqual(sf._redact("password", "false"), "false")
 
-    def test_list_values_render_one_way_on_both_sides(self):
-        text = (
-            "security:\n"
-            "    access_control:\n"
-            "        - { path: ^/a, roles: [ROLE_A] }\n"
-            "        - { path: ^/b, roles: ['ROLE_B', \"ROLE_C\"] }\n"
-            "        - { path: '[a-z]+', roles: ROLE_D }\n"
-        )
-        rules = sf.security_view_from_yaml_text(text).access_control
-        self.assertEqual(rules[0]["roles"], "ROLE_A")
-        self.assertEqual(rules[1]["roles"], "[ROLE_B, ROLE_C]")
-        # Only list-valued keys are normalized; a path regex stays verbatim.
-        self.assertEqual(rules[2]["path"], "[a-z]+")
-
-    def test_kind_ignores_comments_mentioning_jwt(self):
-        text = (
-            "security:\n"
-            "    # TODO: migrate to lexik jwt / oauth later\n"
-            "    firewalls:\n"
-            "        main:\n"
-            "            lazy: true\n"
-        )
-        self.assertEqual(sf.security_view_from_yaml_text(text).kind, "session")
-
-    def test_kind_from_factory_keys(self):
-        jwt = "security:\n    firewalls:\n        api:\n            stateless: true\n            jwt: ~\n"
-        self.assertEqual(sf.security_view_from_yaml_text(jwt).kind, "jwt")
-        oauth = (
-            "security:\n    firewalls:\n        main:\n"
-            "            custom_authenticators:\n                - App\\Security\\GoogleOAuthAuthenticator\n"
-        )
-        self.assertEqual(sf.security_view_from_yaml_text(oauth).kind, "oauth")
 
 
 # ---------------------------------------------------------------------------
@@ -370,12 +326,20 @@ class FlexFixtureNoConsole(_ReconRun):
     fixture = FIX_FLEX
     extra = ("--no-console",)
 
-    def test_every_config_section_ok(self):
-        self.assertEqual(_section(self.text, "auth_layer")["status"], "ok")
-        for key in ("firewalls", "trusted_config", "messenger_transports",
-                    "twig_overrides", "routes_authz_matrix"):
+    def test_config_sections_are_uninterpreted_without_a_tree(self):
+        self.assertEqual(_section(self.text, "auth_layer")["status"], "pending_enrichment")
+        for key in ("firewalls", "trusted_config", "messenger_transports", "routes_authz_matrix"):
             with self.subTest(bag=key):
-                self.assertEqual(_bag(self.text, key)["status"], "ok")
+                bag = _bag(self.text, key)
+                self.assertEqual(bag["status"], "partial")
+                self.assertTrue(bag["reason"].startswith("config_uninterpreted: "), bag["reason"])
+                self.assertTrue(bag["source_files"])
+
+    def test_default_twig_yaml_is_not_evidence(self):
+        # Flex twig.yaml sets no `autoescape`: the default holds, nothing to read.
+        bag = _bag(self.text, "twig_overrides")
+        self.assertEqual(bag["status"], "ok")
+        self.assertEqual(bag["data"]["autoescape_default"], "name")
 
     def test_multi_file_framework_picks_only_the_subtree_file(self):
         self.assertEqual(_bag(self.text, "trusted_config")["source_files"],
@@ -383,9 +347,11 @@ class FlexFixtureNoConsole(_ReconRun):
         self.assertEqual(_bag(self.text, "messenger_transports")["source_files"],
                          ["config/packages/messenger.yaml"])
 
-    def test_when_test_and_packages_test_ignored(self):
-        self.assertEqual(_bag(self.text, "trusted_config")["data"]["trusted_proxies"], "10.0.0.0/8")
-        self.assertEqual(_section(self.text, "secrets")["data"]["password_hasher"], "auto")
+    def test_when_test_and_packages_test_are_not_evidence(self):
+        bag = _bag(self.text, "trusted_config")
+        self.assertEqual(bag["data"]["evidence_files"], ["config/packages/framework.yaml"])
+        self.assertNotIn("trusted_proxies", bag["data"])
+        self.assertEqual(_section(self.text, "secrets")["data"]["password_hasher"], "unknown")
 
     def test_no_secret_literals(self):
         self.assert_no_secret_literals()
@@ -458,7 +424,10 @@ class PhpConfigNoConsole(_ReconRun):
     def test_matrix_items_flag_access_control_unknown(self):
         bag = _bag(self.text, "routes_authz_matrix")
         self.assertEqual(bag["status"], "partial")
-        self.assertEqual(bag["reason"], "access_control_not_interpreted")
+        self.assertEqual(
+            bag["reason"],
+            "config_uninterpreted: security: no_console; access_control_not_interpreted",
+        )
         self.assertTrue(bag["items"])
         for item in bag["items"]:
             self.assertIs(item["access_control_interpreted"], False)
@@ -468,8 +437,19 @@ class PhpConfigNoConsole(_ReconRun):
         for rel in PHP_EVIDENCE:
             self.assertIn(rel, bag["source_files"])
 
-    def test_secrets_routes_the_security_evidence(self):
-        self.assertEqual(_section(self.text, "secrets")["source_files"], [".env", *PHP_EVIDENCE])
+    def test_secrets_routes_the_security_evidence_without_a_missing_dotenv(self):
+        self.assertEqual(_section(self.text, "secrets")["source_files"], PHP_EVIDENCE)
+
+    def test_secrets_routes_dotenv_when_the_file_exists(self):
+        with tempfile.TemporaryDirectory() as td:
+            project = Path(td) / "proj"
+            shutil.copytree(FIX_PHP, project)
+            (project / ".env").write_text("APP_ENV=dev\n", encoding="utf-8")
+            review_root = Path(td) / "review"
+            proc = _run_recon(project, review_root, "--no-console")
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            secrets = _section((review_root / "CONTEXT.md").read_text(encoding="utf-8"), "secrets")
+        self.assertEqual(secrets["source_files"], [".env", *PHP_EVIDENCE])
 
     def test_php_config_credential_is_a_masked_candidate(self):
         cands = _section(self.text, "secrets")["data"]["candidates"]
@@ -596,9 +576,7 @@ class ProdOverridePolicy(unittest.TestCase):
         auth, fw = sf.collect_auth_layer_and_firewalls(self.root, warnings)
         self.assertEqual(auth.status, "pending_enrichment")
         self.assertEqual(fw.status, "partial")
-        self.assertEqual(fw.data["evidence_files"], ["config/packages/security.yaml"])
-        # The frozen parser still contributes what it read from the yaml evidence.
-        self.assertEqual(fw.data["firewalls"], [{"name": "main", "lazy": "true"}])
+        self.assertEqual(fw.data, {"evidence_files": ["config/packages/security.yaml"]})
 
 
 _MAIN_FW_TREE = {"firewalls": {"main": {"lazy": True}}, "access_control": [
@@ -700,7 +678,7 @@ class FoundButNotUnderstood(unittest.TestCase):
         self.assertEqual(auth.source_files, ["config/packages/security.yaml"])
         self.assertEqual(fw.status, "partial")
         self.assertEqual(fw.data["evidence_files"], ["config/packages/security.yaml"])
-        self.assertIn("missing from the console's tree", fw.reason)
+        self.assertEqual(fw.reason, "config_uninterpreted: security: env_mismatch")
         self.assertFalse(cfg.interpreted)
         self.assertTrue(any(w.startswith("config_env_dev_only: security") for w in warnings))
 
@@ -757,11 +735,73 @@ class FoundButNotUnderstood(unittest.TestCase):
         cfg = sf._resolve_security(root, _FakeSession({"security": {"firewalls": {}, "access_control": []}}), [])
         payload = sf._build_routes_authz_matrix(root, PLUGIN_ROOT, security=cfg)
         self.assertEqual(payload.status, "partial")
-        self.assertTrue(payload.reason.startswith("access_control_not_interpreted (config_env_dev_only"))
+        self.assertTrue(payload.reason.startswith(
+            "config_uninterpreted: security: env_mismatch; access_control_not_interpreted (config_env_dev_only"
+        ))
         for item in payload.items:
             self.assertIs(item["access_control_interpreted"], False)
             self.assertIsNone(item["firewall"])
             self.assertIsNone(item["matched_access_control"])
+
+
+class EveryBagUninterpretedWithoutATree(unittest.TestCase):
+    """No tree + evidence on disk is found-but-not-understood for every bag:
+    `partial`, the evidence files routed, and a `config_uninterpreted:` reason."""
+
+    FILES = {
+        "config/packages/security.yaml": "security:\n    firewalls:\n        main:\n            lazy: true\n",
+        "config/packages/framework.yaml": "framework:\n    trusted_proxies: '10.0.0.0/8'\n",
+        "config/packages/messenger.yaml": (
+            "framework:\n    messenger:\n        transports:\n            async: '%env(DSN)%'\n"
+        ),
+        "config/packages/twig.yaml": "twig:\n    autoescape: false\n",
+    }
+
+    def _bags(self, session):
+        root = _project(self.FILES)
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        warnings: list[str] = []
+        cfg = sf._resolve_security(root, session, warnings)
+        _, firewalls = sf.collect_auth_layer_and_firewalls(root, warnings, security=cfg)
+        return {
+            "firewalls": (firewalls, "security", "config/packages/security.yaml"),
+            "trusted_config": (
+                sf.collect_trusted_config(root, session=session, warnings=warnings),
+                "framework", "config/packages/framework.yaml",
+            ),
+            "messenger_transports": (
+                sf.collect_messenger_transports(root, session=session, warnings=warnings),
+                "framework", "config/packages/messenger.yaml",
+            ),
+            "twig_overrides": (
+                sf.collect_twig_overrides(root, session=session, warnings=warnings),
+                "twig", "config/packages/twig.yaml",
+            ),
+        }
+
+    def _check(self, session, why):
+        for name, (payload, alias, evidence) in self._bags(session).items():
+            with self.subTest(bag=name):
+                self.assertEqual(payload.status, "partial")
+                self.assertEqual(payload.reason, f"config_uninterpreted: {alias}: {why}")
+                self.assertIn(evidence, payload.source_files)
+                self.assertEqual(payload.data["evidence_files"], [evidence])
+
+    def test_no_console(self):
+        self._check(None, "no_console")
+
+    def test_console_answered_nothing(self):
+        self._check(_FakeSession({}), "console_failed")
+
+    @unittest.skipUnless(shutil.which("php"), "php not on PATH")
+    def test_routes_authz_matrix(self):
+        root = _project({})
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        shutil.copytree(FIXTURES / "symfony_routes_authz", root, dirs_exist_ok=True)
+        payload = sf._build_routes_authz_matrix(root, PLUGIN_ROOT, security=sf._resolve_security(root, None, []))
+        self.assertEqual(payload.status, "partial")
+        self.assertTrue(payload.reason.startswith("config_uninterpreted: security: no_console"), payload.reason)
+        self.assertIn("config/packages/security.yaml", payload.source_files)
 
 
 class DevOverridePolicy(unittest.TestCase):
@@ -831,13 +871,6 @@ class TrustedTreeMismatch(unittest.TestCase):
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         return sf.collect_trusted_config(root, session=_FakeSession({"framework": tree}), warnings=[])
 
-    def test_non_default_value_missing_from_tree_is_not_understood(self):
-        payload = self._payload(
-            {"config/packages/framework.yaml": "framework:\n    trusted_proxies: '10.0.0.0/8'\n"},
-            {"trusted_proxies": ["%env(default::SYMFONY_TRUSTED_PROXIES)%"]},
-        )
-        self.assertEqual(payload.status, "partial")
-        self.assertIn("missing from the console's tree", payload.reason)
 
     def test_default_or_empty_values_are_none(self):
         default_tree = {
@@ -953,7 +986,7 @@ class NoneVersusUnknown(unittest.TestCase):
         root = self._root({"config/packages/framework.yaml": (
             "framework:\n    trusted_proxies: []\n    trusted_hosts: ''\n    trusted_headers: ~\n"
         )})
-        payload = sf.collect_trusted_config(root)
+        payload = sf.collect_trusted_config(root, session=_FakeSession({"framework": {}}))
         self.assertEqual(payload.status, "none")
         self.assertEqual(payload.reason, "no trusted_proxies/hosts/headers configured")
 
@@ -996,7 +1029,7 @@ class GeneratedReferenceIgnored(unittest.TestCase):
         self.root = Path(self._tmp.name)
         (self.root / "config" / "packages").mkdir(parents=True)
         (self.root / "config" / "reference.php").write_text(_GENERATED_REFERENCE)
-        (self.root / "config" / "packages" / "twig.yaml").write_text("twig:\n    file_name_pattern: '*.twig'\n")
+        (self.root / "config" / "packages" / "twig.yaml").write_text("twig:\n    autoescape: html\n")
 
     def test_not_evidence_for_any_alias(self):
         from recon.recipes import _symfony_introspection as intro
@@ -1008,9 +1041,9 @@ class GeneratedReferenceIgnored(unittest.TestCase):
                 self.assertNotIn("config/reference.php",
                                  intro.find_config_evidence(self.root, alias, keys).files)
 
-    def test_twig_stays_ok_and_security_absent(self):
+    def test_twig_evidence_excludes_the_reference_and_security_is_absent(self):
         twig = sf.collect_twig_overrides(self.root)
-        self.assertEqual(twig.status, "ok")
+        self.assertEqual(twig.status, "partial")
         self.assertEqual(twig.source_files, ["config/packages/twig.yaml"])
         auth, _ = sf.collect_auth_layer_and_firewalls(self.root, [])
         self.assertEqual(auth.status, "unknown")
@@ -1021,7 +1054,7 @@ class GeneratedReferenceIgnored(unittest.TestCase):
     def test_hand_written_reference_php_still_counts(self):
         (self.root / "config" / "reference.php").write_text(
             "<?php\nuse Symfony\\Config\\TwigConfig;\n"
-            "return static function (TwigConfig $twig): void {\n    $twig->strictVariables(true);\n};\n"
+            "return static function (TwigConfig $twig): void {\n    $twig->autoescape('html');\n};\n"
         )
         from recon.recipes import _symfony_introspection as intro
         self.assertIn("config/reference.php",

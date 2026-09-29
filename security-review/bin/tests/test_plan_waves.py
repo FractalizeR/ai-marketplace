@@ -2510,6 +2510,36 @@ class PartialSectionRouting(unittest.TestCase):
         sf = ctx.scalar_source_files("recon_bags.stack.symfony.admin_authz_coverage")
         self.assertEqual(sf, ["src/Admin/BarController.php"])
 
+    def test_pending_enrichment_scalar_source_files_are_routed(self):
+        ctx = self._ctx({"auth_layer": {
+            "status": "pending_enrichment",
+            "data": {"evidence_files": ["config/packages/security.yaml"]},
+            "source_files": ["config/packages/security.yaml"],
+        }})
+        self.assertEqual(ctx.scalar_source_files("auth_layer"), ["config/packages/security.yaml"])
+
+    def test_pending_auth_layer_puts_the_security_config_into_w1(self):
+        p = _build_context(
+            framework="symfony",
+            attack_surface="status: ok\nitems: []",
+            auth_layer=textwrap.dedent("""\
+                status: pending_enrichment
+                data:
+                  evidence_files:
+                    - config/packages/security.yaml
+                source_files:
+                  - config/packages/security.yaml
+            """).strip(),
+        )
+        try:
+            plan = pw.build_plan(pw.parse_context(p), plugin_root=PLUGIN_ROOT)
+            w1 = [s for s in plan if s["wave_id"] == "W1"]
+            self.assertTrue(w1, "W1 expected (pending auth_layer names the security config)")
+            collected = {f for s in w1 for f in s["target_files"]}
+            self.assertIn("config/packages/security.yaml", collected)
+        finally:
+            p.unlink()
+
     def test_unknown_section_still_not_routed(self):
         # Control: unknown/none/pending remain unrouted (only ok|partial route).
         ctx = self._ctx({"recon_bags": {"addon": {"easyadmin": {"crud_controllers": {

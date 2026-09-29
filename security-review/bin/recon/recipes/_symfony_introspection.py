@@ -302,10 +302,11 @@ SECURITY_SUBTREE_KEYS: tuple[str, ...] = ("firewalls", "access_control", "provid
 TRUSTED_SUBTREE_KEYS: tuple[str, ...] = ("trusted_proxies", "trusted_hosts", "trusted_headers")
 # framework: messenger_transports.
 MESSENGER_SUBTREE_KEYS: tuple[str, ...] = ("messenger",)
-# twig: twig_overrides. Empty on purpose — any file declaring `twig:` is
-# evidence: a default Flex `twig.yaml` never sets `autoescape` (and TwigBundle 8
-# no longer accepts it), yet it is still the file that configures twig.
-TWIG_SUBTREE_KEYS: tuple[str, ...] = ()
+# twig: twig_overrides. Only a file that sets `autoescape` is evidence: a
+# default Flex `twig.yaml` never does (and TwigBundle 8 no longer accepts it),
+# and without a console tree it would otherwise turn nearly every project
+# `partial` for a setting that is at its default.
+TWIG_SUBTREE_KEYS: tuple[str, ...] = ("autoescape",)
 
 
 # ---------------------------------------------------------------------------

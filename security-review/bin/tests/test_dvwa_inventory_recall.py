@@ -25,6 +25,7 @@ THIS_DIR = Path(__file__).resolve().parent
 BIN_DIR = THIS_DIR.parent
 FIX_DVWA = THIS_DIR / "fixtures" / "symfony_dvwa"
 RECON = BIN_DIR / "recon_inventory.py"
+FAKE_CONSOLE = THIS_DIR / "symfony" / "fake_console.py"
 
 sys.path.insert(0, str(BIN_DIR))
 from validate_context import parse_yaml_subset, FRONTMATTER_RE  # noqa: E402
@@ -209,59 +210,17 @@ class DvwaInventoryRecall(unittest.TestCase):
         self.assertIn("OrderCrudController", payload["data"]["crud_controllers_with_voter"])
 
     # ------------------------------------------------------------------
-    # twig_overrides — autoescape: false (DVWA-03 anchor)
+    # twig_overrides — autoescape: false (DVWA-03 anchor). Without a console
+    # nothing interprets the value, so the file is routed as evidence instead.
     # ------------------------------------------------------------------
 
-    def test_twig_overrides_records_global_autoescape_off(self):
+    def test_twig_overrides_routes_the_autoescape_file(self):
         payload = _section_payload(self.text,
                                    "recon_bags.stack.symfony.twig_overrides")
-        self.assertIsNotNone(payload)
-        # twig_overrides is a scalar section — `data` is its keyed payload.
-        data = payload.get("data", {})
-        # Recipe stores the raw value; either the literal `false` or the string `"false"`.
-        autoescape = data.get("autoescape_default")
-        self.assertIn(autoescape, (False, "false"),
-                      f"twig.yaml autoescape: false not surfaced (got {autoescape!r})")
+        self.assertEqual(payload["status"], "partial")
+        self.assertIn("config/packages/twig.yaml", payload["source_files"])
+        self.assertEqual(payload["data"]["evidence_files"], ["config/packages/twig.yaml"])
 
-    # ------------------------------------------------------------------
-    # messenger_transports — section is collected (DVWA-07 reinforcement chain).
-    # Recipe captures `name`, `dsn_type` and `serializer` per transport so the
-    # worker can detect `native_php_serializer` from the inventory directly.
-    # ------------------------------------------------------------------
-
-    def test_messenger_transports_records_native_php_serializer(self):
-        payload = _section_payload(self.text,
-                                   "recon_bags.stack.symfony.messenger_transports")
-        self.assertIsNotNone(payload)
-        data = payload.get("data", {})
-        transports = data.get("transports") or []
-        async_transport = next((t for t in transports if t.get("name") == "async"), None)
-        self.assertIsNotNone(async_transport,
-                             f"async transport not found in {transports!r}")
-        self.assertEqual(
-            async_transport.get("serializer"),
-            "messenger.transport.native_php_serializer",
-            f"serializer field missing/incorrect: {async_transport!r}",
-        )
-
-    # ------------------------------------------------------------------
-    # auth_layer — stateless firewall + plaintext hasher (DVWA-14, DVWA-15)
-    # ------------------------------------------------------------------
-
-    def test_auth_layer_kind_is_stateless(self):
-        payload = _section_payload(self.text, "auth_layer")
-        self.assertEqual(payload["status"], "ok")
-        self.assertEqual(payload["data"]["kind"], "stateless")
-
-    def test_secrets_section_reports_plaintext_password_hasher(self):
-        """DVWA-14 anchor in security.yaml. Recipe encodes password_hasher
-        directly in `secrets.data.password_hasher`."""
-        payload = _section_payload(self.text, "secrets")
-        self.assertIsNotNone(payload)
-        # Section is in pending_enrichment for the candidate-classification flow,
-        # but the password_hasher field is filled deterministically.
-        data = payload.get("data", {})
-        self.assertEqual(data.get("password_hasher"), "plaintext")
 
     def test_secrets_candidates_include_yaml_resident_stripe_key(self):
         """DVWA-10 anchor: `sk_live_...` lives in `config/services.yaml`.
@@ -278,6 +237,51 @@ class DvwaInventoryRecall(unittest.TestCase):
             yaml_hit,
             f"yaml-resident sk_live_ secret missed; got {candidates!r}",
         )
+
+
+@unittest.skipUnless(shutil.which("php"), "php not on PATH")
+class DvwaConfigFromTree(unittest.TestCase):
+    """The config-derived anchors, read through a stand-in console."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.review_root = Path(cls.tmp.name) / "review"
+        proc = subprocess.run(
+            [sys.executable, str(RECON), str(FIX_DVWA),
+             "--recipe", "symfony", "--review-root", str(cls.review_root),
+             f"--console-cmd={sys.executable} {FAKE_CONSOLE} dvwa"],
+            capture_output=True, text=True, timeout=90,
+        )
+        assert proc.returncode == 0, proc.stderr
+        cls.text = (cls.review_root / "CONTEXT.md").read_text(encoding="utf-8")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_messenger_transports_records_native_php_serializer(self):
+        """DVWA-07 anchor: the worker detects `native_php_serializer` from the inventory."""
+        payload = _section_payload(self.text,
+                                   "recon_bags.stack.symfony.messenger_transports")
+        transports = payload.get("data", {}).get("transports") or []
+        async_transport = next((t for t in transports if t.get("name") == "async"), None)
+        self.assertIsNotNone(async_transport, f"async transport not found in {transports!r}")
+        self.assertEqual(
+            async_transport.get("serializer"),
+            "messenger.transport.native_php_serializer",
+            f"serializer field missing/incorrect: {async_transport!r}",
+        )
+
+    def test_auth_layer_kind_is_stateless(self):
+        payload = _section_payload(self.text, "auth_layer")
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["data"]["kind"], "stateless")
+
+    def test_secrets_section_reports_plaintext_password_hasher(self):
+        """DVWA-14 anchor: `secrets.data.password_hasher` is filled from the tree."""
+        payload = _section_payload(self.text, "secrets")
+        self.assertEqual(payload.get("data", {}).get("password_hasher"), "plaintext")
 
 
 if __name__ == "__main__":

@@ -601,11 +601,15 @@ class ParsedContext:
         return len(self.section_items(path)) > 0
 
     def scalar_source_files(self, path: str) -> list[str]:
-        """Return source_files of a scalar-shape section (status ok|partial), else []."""
+        """Return source_files of a scalar-shape section (status ok|partial|
+        pending_enrichment), else []."""
         payload = self.payload_at(path)
         # `partial` routes like `ok` (see section_items) — e.g. a partial
         # admin_authz_coverage still lists the admin controllers to audit.
-        if not payload or payload.get("status") not in ("ok", "partial"):
+        # `pending_enrichment` routes too: the recon utility already knows the
+        # files (the security config, `.env`), so a section the recon agent
+        # never enriched must not drop them from the workers' scope.
+        if not payload or payload.get("status") not in ("ok", "partial", "pending_enrichment"):
             return []
         # Distinguish list-shape (has `items`) from scalar (has `data` /
         # `source_files`). Scalar sections in schema v2 carry source_files.

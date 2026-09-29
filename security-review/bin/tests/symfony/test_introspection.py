@@ -656,7 +656,7 @@ class FindConfigEvidenceXml(unittest.TestCase):
 
 
 class FindConfigEvidenceAliasOnly(unittest.TestCase):
-    """Empty subtree_keys (TWIG_SUBTREE_KEYS): declaring the alias is enough."""
+    """Empty subtree_keys (subtree_keys=()): declaring the alias is enough."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -673,7 +673,7 @@ class FindConfigEvidenceAliasOnly(unittest.TestCase):
             "    twig:\n"
             "        strict_variables: true\n"
         )
-        ev = intro.find_config_evidence(self.root, "twig", intro.TWIG_SUBTREE_KEYS)
+        ev = intro.find_config_evidence(self.root, "twig", ())
         self.assertEqual(ev.files, ["config/packages/twig.yaml"])
         self.assertFalse(ev.prod_override)
 
@@ -681,14 +681,14 @@ class FindConfigEvidenceAliasOnly(unittest.TestCase):
         (self.root / "config" / "packages" / "twig_test.yaml").write_text(
             "when@test:\n    twig:\n        strict_variables: true\n"
         )
-        ev = intro.find_config_evidence(self.root, "twig", intro.TWIG_SUBTREE_KEYS)
+        ev = intro.find_config_evidence(self.root, "twig", ())
         self.assertEqual(ev.files, [])
 
     def test_when_prod_declaration_sets_prod_override(self):
         (self.root / "config" / "packages" / "twig.yaml").write_text(
             "when@prod:\n    twig:\n        cache: true\n"
         )
-        ev = intro.find_config_evidence(self.root, "twig", intro.TWIG_SUBTREE_KEYS)
+        ev = intro.find_config_evidence(self.root, "twig", ())
         self.assertEqual(ev.files, ["config/packages/twig.yaml"])
         self.assertTrue(ev.prod_override)
 
@@ -705,8 +705,42 @@ class FindConfigEvidenceAliasOnly(unittest.TestCase):
             '    <twig:config strict-variables="true"/>\n'
             '</container>\n'
         )
-        ev = intro.find_config_evidence(self.root, "twig", intro.TWIG_SUBTREE_KEYS)
+        ev = intro.find_config_evidence(self.root, "twig", ())
         self.assertEqual(ev.files, ["config/packages/twig.php", "config/packages/twig.xml"])
+
+
+class TwigEvidenceNeedsAutoescape(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        (self.root / "config" / "packages").mkdir(parents=True)
+
+    def test_default_flex_twig_yaml_is_not_evidence(self):
+        (self.root / "config" / "packages" / "twig.yaml").write_text(
+            "twig:\n    file_name_pattern: '*.twig'\n"
+        )
+        ev = intro.find_config_evidence(self.root, "twig", intro.TWIG_SUBTREE_KEYS)
+        self.assertEqual(ev.files, [])
+
+    def test_file_setting_autoescape_is_evidence_in_any_format(self):
+        pkg = self.root / "config" / "packages"
+        (pkg / "twig.yaml").write_text("twig:\n    autoescape: false\n")
+        (pkg / "twig.php").write_text(
+            "<?php\nuse Symfony\\Config\\TwigConfig;\n"
+            "return static function (TwigConfig $twig): void {\n    $twig->autoescape('html');\n};\n"
+        )
+        (pkg / "twig.xml").write_text(
+            '<?xml version="1.0" encoding="UTF-8" ?>\n'
+            '<container xmlns="http://symfony.com/schema/dic/services"\n'
+            '    xmlns:twig="http://symfony.com/schema/dic/twig">\n'
+            '    <twig:config autoescape="false"/>\n'
+            '</container>\n'
+        )
+        ev = intro.find_config_evidence(self.root, "twig", intro.TWIG_SUBTREE_KEYS)
+        self.assertEqual(
+            ev.files, ["config/packages/twig.php", "config/packages/twig.xml", "config/packages/twig.yaml"],
+        )
 
 
 class FindConfigEvidenceMisc(unittest.TestCase):
