@@ -620,6 +620,53 @@ class LoadVerdictsInTests(unittest.TestCase):
                 compute_evidence_hash("src/Guard.php", 2, project_root),
             )
 
+    def _evidence_import(self, td: Path, **entry):
+        payload = self._valid_payload("deadbeef")
+        payload["verdicts"][0].update(entry)
+        path = self._write(td, payload)
+        return load_verdicts_in(
+            path, valid_sink_hashes={"abcd1234", "nohash00"},
+            findings_json_sha256="deadbeef", project_root=td,
+        )
+
+    def test_nohash_sentinel_verdict_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(VerdictsInError) as ctx:
+                self._evidence_import(Path(td), sink_hash="nohash00")
+            self.assertIn("nohash00", str(ctx.exception))
+
+    def test_evidence_in_missing_file_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(VerdictsInError) as ctx:
+                self._evidence_import(Path(td), refute_file="src/Gone.php", refute_line=2)
+            self.assertIn("cannot be located", str(ctx.exception))
+
+    def test_evidence_line_out_of_range_or_blank_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "src").mkdir()
+            (root / "src" / "Guard.php").write_text("<?php\n\ndeny();\n")
+            for line in (2, 99):
+                with self.assertRaises(VerdictsInError):
+                    self._evidence_import(root, refute_file="src/Guard.php", refute_line=line)
+
+    def test_evidence_absolute_path_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            outside = root / "outside.php"
+            outside.write_text("<?php\ndeny();\n")
+            with self.assertRaises(VerdictsInError) as ctx:
+                self._evidence_import(root, refute_file=str(outside), refute_line=2)
+            self.assertIn("relative path", str(ctx.exception))
+
+    def test_evidence_parent_traversal_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "project"
+            root.mkdir()
+            (Path(td) / "secret.php").write_text("<?php\ndeny();\n")
+            with self.assertRaises(VerdictsInError):
+                self._evidence_import(root, refute_file="../secret.php", refute_line=2)
+
 
 class ContinuationBaselineTests(unittest.TestCase):
     """A second dedupe pass over the same wave files re-states one run. Diffing

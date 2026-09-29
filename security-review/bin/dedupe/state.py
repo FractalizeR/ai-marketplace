@@ -69,6 +69,8 @@ _READABLE_SCHEMA_VERSIONS = (1, 2)
 
 _RESOLUTION_VERDICTS = ("rejected", "reaffirmed")
 
+_NO_HASH = _sink_hash_from_snippet("")
+
 
 # Evidence-content hash: the cross-run invalidation key for a remembered
 # rejection. A hash of the CONTENT at file:line, not of the location — a
@@ -483,6 +485,12 @@ _VERDICTS_IN_OPTIONAL_ENTRY_KEYS = frozenset({"condition_keys", "refute_file", "
 _VERDICTS_IN_ENTRY_KEYS = _VERDICTS_IN_REQUIRED_ENTRY_KEYS | _VERDICTS_IN_OPTIONAL_ENTRY_KEYS
 
 
+def _is_unsafe_evidence_path(rel: str) -> bool:
+    if rel.startswith(("/", "\\")) or (len(rel) > 1 and rel[1] == ":"):
+        return True
+    return ".." in rel.replace("\\", "/").split("/")
+
+
 def load_verdicts_in(
     path: Path,
     *,
@@ -503,9 +511,9 @@ def load_verdicts_in(
     immediately (current file content) so the mark can later be
     auto-invalidated by `active_rejections` exactly like a refute-pass one.
 
-    Raises `VerdictsInError` — with every offending item enumerated, not
-    just the first — on any schema violation, unknown field, unknown
-    sink_hash, duplicate sink_hash, or a stale `findings_json_sha256`.
+    Raises `VerdictsInError` on any schema violation, unknown field, unknown
+    or sentinel sink_hash, duplicate sink_hash, a stale `findings_json_sha256`,
+    or cited evidence that is an absolute / `..` path or cannot be located.
     """
     try:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -550,6 +558,12 @@ def load_verdicts_in(
 
         if not isinstance(sink_hash, str) or not sink_hash:
             raise VerdictsInError(f"{path}: verdicts[{i}].sink_hash missing/invalid")
+        if sink_hash == _NO_HASH:
+            # Collision key shared by every finding without a usable snippet:
+            # a verdict on it would annotate all of them.
+            raise VerdictsInError(
+                f"{path}: verdicts[{i}].sink_hash is the {_NO_HASH!r} sentinel, not a real finding identity"
+            )
         if verdict not in _RESOLUTION_VERDICTS:
             raise VerdictsInError(
                 f"{path}: verdicts[{i}].verdict must be one of {_RESOLUTION_VERDICTS}, got {verdict!r}"
@@ -576,7 +590,19 @@ def load_verdicts_in(
                 raise VerdictsInError(f"{path}: verdicts[{i}].refute_file missing/invalid")
             if not isinstance(refute_line, int) or refute_line <= 0:
                 raise VerdictsInError(f"{path}: verdicts[{i}].refute_line must be a positive int")
+            if _is_unsafe_evidence_path(refute_file):
+                raise VerdictsInError(
+                    f"{path}: verdicts[{i}].refute_file must be a relative path inside the project "
+                    f"(no absolute path, no '..'): {refute_file!r}"
+                )
             evidence_hash = compute_evidence_hash(refute_file, refute_line, project_root)
+            if evidence_hash == _NO_HASH:
+                # The sentinel would equal itself on every later run, so the
+                # mark could never be invalidated by a change in the code.
+                raise VerdictsInError(
+                    f"{path}: verdicts[{i}]: no code at {refute_file}:{refute_line} "
+                    f"(missing file, out-of-range or blank line) -- evidence cannot be located"
+                )
 
         parsed.append((sink_hash, Resolution(
             verdict=verdict,
