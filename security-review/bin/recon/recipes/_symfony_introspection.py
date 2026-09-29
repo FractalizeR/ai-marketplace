@@ -318,9 +318,9 @@ TWIG_SUBTREE_KEYS: tuple[str, ...] = ("autoescape",)
 class Evidence:
     files: list[str]
     prod_override: bool
-    # Set by `config/packages/dev/**`, `when@dev` and dev-conditional php/xml
-    # blocks; those files stay out of `files` (not production posture) but
-    # shape a console tree read in the dev env.
+    # Set by `config/packages/dev/**` and yaml `when@dev`; those files stay
+    # out of `files` (not production posture) but shape a console tree read in
+    # the dev env.
     dev_override: bool = False
     # `config/packages/dev/**` files that are evidence on their own — the
     # source when the console reads the dev env and nothing else configures it.
@@ -497,78 +497,11 @@ def _singularize(word: str) -> str:
     return word
 
 
-def _balanced_block(text: str, pos: int, open_ch: str, close_ch: str) -> str:
-    """Text of the first `open_ch … close_ch` block at or after `pos`
-    (quote-aware, nesting-aware); "" when there is none."""
-    start = text.find(open_ch, pos)
-    if start < 0:
-        return ""
-    depth = 0
-    quote = ""
-    i = start
-    while i < len(text):
-        ch = text[i]
-        if quote:
-            if ch == "\\":
-                i += 2
-                continue
-            if ch == quote:
-                quote = ""
-        elif ch in "'\"":
-            quote = ch
-        elif ch == open_ch:
-            depth += 1
-        elif ch == close_ch:
-            depth -= 1
-            if depth == 0:
-                return text[start:i + 1]
-        i += 1
-    return text[start:]
-
-
 def _php_alias_call_re(alias: str) -> re.Pattern:
     a = re.escape(alias)
     return re.compile(
         rf"(?:->extension|loadFromExtension|prependExtensionConfig)\(\s*['\"]{a}['\"]"
     )
-
-
-def _php_env_conditional(text: str, alias: str, env: str) -> bool:
-    """True when an `<env>`-conditional block itself configures `alias`:
-    a `#[When('<env>')]` config closure; a `'when@<env>' => [...]` entry whose
-    array holds the alias; or an `if` on `$env` / `->env()` against '<env>'
-    whose body calls the alias extension / its ConfigBuilder variable or
-    holds the alias key. An unrelated env branch does not count."""
-    e = re.escape(env)
-    if re.search(rf"#\[\s*(?:\\?[\w\\]*\\)?When\(\s*(?:env\s*:\s*)?['\"]{e}['\"]", text):
-        return True
-    a = re.escape(alias)
-    alias_key = re.compile(rf"['\"]{a}['\"]\s*=>")
-    alias_call = _php_alias_call_re(alias)
-    builder = _PHP_BUILDER_BY_ALIAS.get(alias)
-    builder_var = re.search(rf"\b{re.escape(builder)}\s+\$(\w+)", text) if builder else None
-    var_call = re.compile(rf"\${builder_var.group(1)}\s*->") if builder_var else None
-
-    def configures(block: str) -> bool:
-        return bool(
-            alias_key.search(block) or alias_call.search(block)
-            or (var_call is not None and var_call.search(block))
-        )
-
-    for m in re.finditer(rf"['\"]when@{e}['\"]\s*=>", text):
-        if configures(_balanced_block(text, m.end(), "[", "]")):
-            return True
-    # Ternaries and `match ($env)` are not recognised: they carry no `{…}` body
-    # to scope the check to, and over-matching them would flag unrelated code.
-    env_expr = r"(?:\$env\b|->env\(\)|->getParameter\(\s*['\"]kernel\.environment['\"]\s*\))"
-    comparison = re.compile(
-        rf"{env_expr}\s*[!=]==?\s*['\"]{e}['\"]"
-        rf"|['\"]{e}['\"]\s*[!=]==?\s*(?:\$\w+)?{env_expr}"
-    )
-    for m in comparison.finditer(text):
-        if configures(_balanced_block(text, m.end(), "{", "}")):
-            return True
-    return False
 
 
 def _php_evidence(text: str, alias: str, subtree_keys: tuple[str, ...]) -> _FileEvidence:
@@ -579,7 +512,8 @@ def _php_evidence(text: str, alias: str, subtree_keys: tuple[str, ...]) -> _File
     merely contains the key. Subtree key present as a builder method call —
     camelCase or its ConfigBuilder singular (prototyped-node methods are
     singular, e.g. `->firewall('main')` for the `firewalls` key) — or an array
-    key (snake_case or camelCase). Env flags: `_php_env_conditional`.
+    key (snake_case or camelCase). An env-conditional block sets no env flag:
+    only yaml `when@<env>` and the `packages/{dev,prod}/` directories do.
     """
     builder = _PHP_BUILDER_BY_ALIAS.get(alias)
     a = re.escape(alias)
@@ -602,11 +536,7 @@ def _php_evidence(text: str, alias: str, subtree_keys: tuple[str, ...]) -> _File
             break
     if not found:
         return _FileEvidence()
-    return _FileEvidence(
-        found=True,
-        prod=_php_env_conditional(text, alias, "prod"),
-        dev=_php_env_conditional(text, alias, "dev"),
-    )
+    return _FileEvidence(found=True)
 
 
 # --- XML heuristic ---------------------------------------------------------
@@ -652,7 +582,7 @@ def _xml_evidence(text: str, alias: str, subtree_keys: tuple[str, ...]) -> _File
     from their yaml key — `<firewall>`, `<provider>`, `<password-hasher>`,
     `<rule>` for access_control; FrameworkBundle's trusted_* and twig's
     autoescape are attributes on `<config>`, not elements). A
-    `<when env="prod|dev">` element flags the whole file.
+    `<when env="…">` element sets no env flag.
     """
     schema = re.escape(_XML_SCHEMA_BY_ALIAS.get(alias, alias))
     alias_present = bool(
@@ -666,20 +596,7 @@ def _xml_evidence(text: str, alias: str, subtree_keys: tuple[str, ...]) -> _File
     )
     if not found:
         return _FileEvidence()
-    return _FileEvidence(
-        found=True,
-        prod=_xml_env_conditional(text, alias, "prod"),
-        dev=_xml_env_conditional(text, alias, "dev"),
-    )
-
-
-def _xml_env_conditional(text: str, alias: str, env: str) -> bool:
-    """A `<when env="<env>">` element whose body configures `alias`."""
-    for m in re.finditer(rf"<when\s+env\s*=\s*[\"']{re.escape(env)}[\"']\s*>(.*?)</when>", text, re.S):
-        body = m.group(1)
-        if re.search(rf"<{re.escape(alias)}:", body) or re.search(r"<config\b", body):
-            return True
-    return False
+    return _FileEvidence(found=True)
 
 
 def find_config_evidence(project_root: Path, alias: str, subtree_keys: tuple[str, ...]) -> Evidence:
@@ -689,10 +606,10 @@ def find_config_evidence(project_root: Path, alias: str, subtree_keys: tuple[str
     project_root-relative, sorted, posix.
 
     `config/packages/test/**` is skipped entirely (by filename).
-    `config/packages/dev/**` files and dev-conditional blocks never enter
+    `config/packages/dev/**` files and yaml `when@dev` blocks never enter
     `files` but set `dev_override`. `config/packages/prod/**` files and
-    prod-conditional blocks (`when@prod`, php/xml env checks) set
-    `prod_override`.
+    yaml `when@prod` blocks set `prod_override`; php/xml env conditionals are
+    not recognised.
     """
     config_root = project_root / "config"
     if not config_root.is_dir():

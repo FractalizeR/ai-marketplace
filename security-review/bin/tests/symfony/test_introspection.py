@@ -453,72 +453,27 @@ class FindConfigEvidenceEnvConditionalPhpXml(unittest.TestCase):
         (self.root / "config" / "packages" / name).write_text(body)
         return intro.find_config_evidence(self.root, "security", intro.SECURITY_SUBTREE_KEYS)
 
-    def test_php_env_comparison_sets_prod(self):
-        ev = self._ev("security.php", (
+    def test_php_and_xml_env_conditionals_set_no_env_flag(self):
+        php = self._ev("security.php", (
             "<?php\nreturn static function (ContainerConfigurator $container): void {\n"
             "    if ('prod' === $container->env()) {\n"
             "        $container->extension('security', ['firewalls' => ['main' => ['lazy' => true]]]);\n"
+            "    }\n    if ('dev' === $container->env()) {\n"
+            "        $container->extension('security', ['firewalls' => ['main' => ['security' => false]]]);\n"
             "    }\n};\n"
         ))
-        self.assertTrue(ev.prod_override)
-
-    def test_php_when_prod_array_key_sets_prod(self):
-        ev = self._ev("security.php", (
-            "<?php\nreturn App::config(['when@prod' => ['security' => ['firewalls' => []]]]);\n"
-        ))
-        self.assertTrue(ev.prod_override)
-
-    def test_php_when_attribute_sets_dev(self):
-        ev = self._ev("security_dev.php", (
-            "<?php\nreturn #[When(env: 'dev')] static function (ContainerConfigurator $c): void {\n"
-            "    $c->extension('security', ['firewalls' => ['main' => ['security' => false]]]);\n};\n"
-        ))
-        self.assertTrue(ev.dev_override)
-        self.assertFalse(ev.prod_override)
-
-    def test_xml_when_element_sets_prod(self):
-        ev = self._ev("security.xml", (
+        self.assertEqual(php.files, ["config/packages/security.php"])
+        xml = self._ev("security.xml", (
             '<?xml version="1.0" encoding="UTF-8" ?>\n'
             '<container xmlns="http://symfony.com/schema/dic/services"\n'
             '    xmlns:security="http://symfony.com/schema/dic/security">\n'
-            '    <when env="prod">\n'
-            '        <security:config><security:firewall name="main"/></security:config>\n'
-            '    </when>\n</container>\n'
+            '    <when env="prod"><security:config><security:firewall name="main"/></security:config></when>\n'
+            '</container>\n'
         ))
-        self.assertTrue(ev.prod_override)
-
-    def test_get_parameter_kernel_environment_comparison_sets_prod(self):
-        ev = self._ev("security.php", (
-            "<?php\nreturn static function (ContainerConfigurator $c): void {\n"
-            "    if ('prod' === $c->getParameter('kernel.environment')) {\n"
-            "        $c->extension('security', ['firewalls' => ['main' => ['lazy' => true]]]);\n"
-            "    }\n};\n"
-        ))
-        self.assertTrue(ev.prod_override)
-
-    def test_xml_single_quoted_when_sets_prod(self):
-        ev = self._ev("security.xml", (
-            "<?xml version='1.0' encoding='UTF-8' ?>\n"
-            "<container xmlns='http://symfony.com/schema/dic/services'\n"
-            "    xmlns:security='http://symfony.com/schema/dic/security'>\n"
-            "    <when env='prod'>\n"
-            "        <security:config><security:firewall name='main'/></security:config>\n"
-            "    </when>\n</container>\n"
-        ))
-        self.assertEqual(ev.files, ["config/packages/security.xml"])
-        self.assertTrue(ev.prod_override)
-
-    def test_unrelated_env_branch_does_not_count(self):
-        (self.root / "config" / "packages" / "framework.php").write_text(
-            "<?php\nreturn static function (ContainerConfigurator $container): void {\n"
-            "    $container->extension('framework', ['messenger' => ['transports' => ['async' => 'sync://']]]);\n"
-            "    if ($container->env() === 'prod') {\n"
-            "        $container->services()->set('app.cache_warmer', 'App\\\\CacheWarmer');\n"
-            "    }\n};\n"
-        )
-        ev = intro.find_config_evidence(self.root, "framework", intro.MESSENGER_SUBTREE_KEYS)
-        self.assertEqual(ev.files, ["config/packages/framework.php"])
-        self.assertFalse(ev.prod_override)
+        self.assertIn("config/packages/security.xml", xml.files)
+        for ev in (php, xml):
+            self.assertFalse(ev.prod_override)
+            self.assertFalse(ev.dev_override)
 
     def test_service_argument_with_alias_key_is_not_evidence(self):
         (self.root / "config" / "services.php").write_text(
@@ -529,27 +484,6 @@ class FindConfigEvidenceEnvConditionalPhpXml(unittest.TestCase):
         ev = intro.find_config_evidence(self.root, "security", intro.SECURITY_SUBTREE_KEYS)
         self.assertEqual(ev.files, [])
         self.assertFalse(ev.dev_override)
-
-    def test_alias_configured_inside_env_branch_counts(self):
-        ev = self._ev("security.php", (
-            "<?php\nreturn static function (ContainerConfigurator $container): void {\n"
-            "    $container->extension('security', ['firewalls' => ['main' => ['lazy' => true]]]);\n"
-            "    if ('dev' === $container->env()) {\n"
-            "        $container->extension('security', ['firewalls' => ['main' => ['security' => false]]]);\n"
-            "    }\n};\n"
-        ))
-        self.assertTrue(ev.dev_override)
-        self.assertFalse(ev.prod_override)
-
-    def test_xml_when_block_without_alias_does_not_count(self):
-        ev = self._ev("security.xml", (
-            '<?xml version="1.0" encoding="UTF-8" ?>\n'
-            '<container xmlns="http://symfony.com/schema/dic/services"\n'
-            '    xmlns:security="http://symfony.com/schema/dic/security">\n'
-            '    <security:config><security:firewall name="main"/></security:config>\n'
-            '    <when env="prod"><services><service id="app.x"/></services></when>\n</container>\n'
-        ))
-        self.assertFalse(ev.prod_override)
 
     def test_dev_dir_files_listed_separately(self):
         dev = self.root / "config" / "packages" / "dev"
