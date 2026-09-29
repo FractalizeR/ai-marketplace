@@ -555,8 +555,8 @@ def _validate_payload_shape(
             res.errors.append(f"Section '{section_id}': scalar-type status=ok requires 'data'")
         elif not isinstance(data, dict):
             res.errors.append(f"Section '{section_id}': 'data' must be a mapping")
-        # M7: scalar sections must declare `source_files` (rev 3.4 mode=changes
-        # channel 2). Allows plan_waves to detect config-only diffs.
+        # Scalar sections must declare `source_files` so plan_waves can route
+        # the config files behind them.
         sf = payload.get("source_files")
         if sf is None:
             res.errors.append(
