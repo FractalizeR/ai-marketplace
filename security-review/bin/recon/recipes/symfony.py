@@ -2272,45 +2272,6 @@ def _alias_declared(project_root: Path, alias: str) -> list[str]:
     return find_config_evidence(project_root, alias, ()).files
 
 
-_BUNDLE_ALIASES: dict[str, str] = {
-    "FrameworkBundle": "framework",
-    "SecurityBundle": "security",
-    "TwigBundle": "twig",
-}
-
-
-_BUNDLES_MAP_RE = re.compile(
-    r"^\s*<\?php\s*(?:declare\s*\([^)]*\)\s*;\s*)?return\s*\[(?P<body>.*)\]\s*;\s*$", re.S,
-)
-_BUNDLE_ENTRY = r"\\?[\w\\]+::class\s*=>\s*\[[^\[\]]*\]"
-_BUNDLES_BODY_RE = re.compile(rf"\s*(?:{_BUNDLE_ENTRY}\s*,\s*)*(?:{_BUNDLE_ENTRY}\s*,?\s*)?")
-
-
-def _strip_php_comments(text: str) -> str:
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
-    return re.sub(r"(?m)(?://|#(?!\[)).*$", "", text)
-
-
-def _registered_aliases(project_root: Path) -> Optional[frozenset[str]]:
-    """Extension aliases whose bundle `config/bundles.php` registers, or None
-    when the file is absent or not a plain literal `return [Bundle::class =>
-    [...], ...];` map (array_merge, require, variables…): then the registered
-    set is unknown and every alias is asked quietly."""
-    text = _read_text_safe(project_root / "config" / "bundles.php")
-    if text is None:
-        return None
-    m = _BUNDLES_MAP_RE.match(_strip_php_comments(text))
-    if m is None:
-        return None
-    body = m.group("body")
-    if not _BUNDLES_BODY_RE.fullmatch(body):
-        return None
-    return frozenset(
-        alias for bundle, alias in _BUNDLE_ALIASES.items()
-        if re.search(rf"\b{bundle}::class\b", body)
-    )
-
-
 def _env_gaps(session: ConsoleSession, ev, alias: str, warnings: list[str]) -> Optional[str]:
     if not (ev.prod_override or ev.dev_override):
         return None
@@ -2352,9 +2313,11 @@ def _resolve_config(
     if session is not None:
         # Evidence never gates the console: config in forms the static
         # heuristic misses (MicroKernel, bundle prepends) still reaches it.
-        registered = _registered_aliases(project_root)
-        if registered is None or alias in registered:
-            tree = session.extension_config(alias, quiet=registered is None)
+        # Quiet only when the alias has no config anywhere: an unregistered
+        # bundle is then an expected answer, a failure with evidence is not.
+        # Judged on alias-level evidence because the session caches the first
+        # caller's result and its quietness.
+        tree = session.extension_config(alias, quiet=not _alias_declared(project_root, alias))
     if tree is not None:
         env_gap = _env_gaps(session, ev, alias, warnings)
         if not ev.files and ev.dev_files and session.kernel_environment() == "dev":

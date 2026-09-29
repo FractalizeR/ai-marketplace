@@ -190,8 +190,8 @@ class ConsoleSession:
         and any other failure all surface the same way: `None` + a warning
         (`run_console_command` already folds them into one failure shape).
         Never passes `--resolve-env`. `quiet` suppresses the failure warning —
-        for an alias asked speculatively (bundle registration unknown), where
-        "not registered" is an expected answer, not a problem.
+        for an alias with no config anywhere in the project, where "not
+        registered" is an expected answer, not a problem.
         """
         if alias in self._config_cache:
             return self._config_cache[alias]

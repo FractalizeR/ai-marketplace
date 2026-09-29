@@ -601,16 +601,6 @@ class ProdOverridePolicy(unittest.TestCase):
         self.assertEqual(fw.data["firewalls"], [{"name": "main", "lazy": "true"}])
 
 
-_BUNDLES_ALL = (
-    "<?php\nreturn [\n"
-    "    Symfony\\Bundle\\FrameworkBundle\\FrameworkBundle::class => ['all' => true],\n"
-    "    Symfony\\Bundle\\SecurityBundle\\SecurityBundle::class => ['all' => true],\n"
-    "    Symfony\\Bundle\\TwigBundle\\TwigBundle::class => ['all' => true],\n"
-    "];\n"
-)
-_BUNDLES_NO_TWIG = _BUNDLES_ALL.replace(
-    "    Symfony\\Bundle\\TwigBundle\\TwigBundle::class => ['all' => true],\n", ""
-)
 _MAIN_FW_TREE = {"firewalls": {"main": {"lazy": True}}, "access_control": [
     {"path": "^/admin", "roles": ["ROLE_ADMIN"]},
 ]}
@@ -632,28 +622,20 @@ class ConsoleNotGatedByEvidence(unittest.TestCase):
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         return root
 
-    def test_registered_bundle_asked_without_any_config_file(self):
+    def test_alias_asked_without_any_config_file(self):
         # e.g. security configured in MicroKernel::configureContainer() in src/.
-        root = self._root({"config/bundles.php": _BUNDLES_ALL})
+        root = self._root({})
         session = _FakeSession({"security": _MAIN_FW_TREE})
         warnings: list[str] = []
         cfg = sf._resolve_security(root, session, warnings)
         auth, fw = sf.collect_auth_layer_and_firewalls(root, warnings, security=cfg)
-        self.assertIn(("security", False), session.asked)
+        self.assertIn(("security", True), session.asked)
         self.assertEqual(auth.status, "ok")
         self.assertEqual(auth.source_files, [])
         self.assertEqual(fw.status, "ok")
         self.assertEqual(warnings, ["config_source_files_not_located: security"])
 
-    def test_unregistered_bundle_not_asked(self):
-        root = self._root({"config/bundles.php": _BUNDLES_NO_TWIG})
-        session = _FakeSession({})
-        payload = sf.collect_twig_overrides(root, session=session, warnings=[])
-        self.assertEqual(session.asked, [])
-        self.assertEqual(payload.status, "ok")
-        self.assertEqual(payload.data["autoescape_default"], "name")
-
-    def test_no_bundles_php_asks_quietly(self):
+    def test_alias_without_evidence_asked_quietly(self):
         root = self._root({})
         session = _FakeSession({})
         warnings: list[str] = []
@@ -695,7 +677,7 @@ class FoundButNotUnderstood(unittest.TestCase):
     """The console answered, but its tree lacks what static evidence declares."""
 
     def _root(self, files):
-        root = _project({"config/bundles.php": _BUNDLES_ALL, **files})
+        root = _project({**files})
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         return root
 
@@ -784,8 +766,7 @@ class FoundButNotUnderstood(unittest.TestCase):
 
 class DevOverridePolicy(unittest.TestCase):
     def _root(self, files):
-        root = _project({"config/bundles.php": _BUNDLES_ALL,
-                         "config/packages/security.yaml": "security:\n    firewalls:\n        main:\n            lazy: true\n",
+        root = _project({"config/packages/security.yaml": "security:\n    firewalls:\n        main:\n            lazy: true\n",
                          **files})
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         return root
@@ -834,7 +815,7 @@ class ProdDirectoryPolicy(unittest.TestCase):
 
 class RegisteredBundleEmptyTree(unittest.TestCase):
     def test_security_bundle_with_nothing_configured_is_unknown(self):
-        root = _project({"config/bundles.php": _BUNDLES_ALL})
+        root = _project({})
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         warnings: list[str] = []
         cfg = sf._resolve_security(root, _FakeSession({"security": {"firewalls": {}, "access_control": []}}), warnings)
@@ -846,7 +827,7 @@ class RegisteredBundleEmptyTree(unittest.TestCase):
 
 class TrustedTreeMismatch(unittest.TestCase):
     def _payload(self, files, tree):
-        root = _project({"config/bundles.php": _BUNDLES_ALL, **files})
+        root = _project({**files})
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         return sf.collect_trusted_config(root, session=_FakeSession({"framework": tree}), warnings=[])
 
@@ -875,7 +856,7 @@ class TrustedTreeMismatch(unittest.TestCase):
                 self.assertEqual(payload.reason, "no trusted_proxies/hosts/headers configured")
 
     def test_php_messenger_without_transports_is_none(self):
-        root = _project({"config/bundles.php": _BUNDLES_ALL, "config/packages/messenger.php": (
+        root = _project({"config/packages/messenger.php": (
             "<?php\n$container->extension('framework', ['messenger' => ['default_bus' => 'command.bus']]);\n"
         )})
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
@@ -885,48 +866,61 @@ class TrustedTreeMismatch(unittest.TestCase):
         self.assertEqual(payload.status, "none")
 
 
-class BundlesPhpParsing(unittest.TestCase):
-    def _aliases(self, body):
-        root = _project({"config/bundles.php": body})
-        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
-        return sf._registered_aliases(root)
+class EmptyBundlesPhpStillAsksConsole(unittest.TestCase):
+    """Synthetic layout: `config/bundles.php` is a literal empty map while the
+    real registry lives elsewhere (e.g. `config/api/bundles.php`)."""
 
-    def test_commented_entries_ignored(self):
-        self.assertEqual(self._aliases(
+    FILES = {
+        "config/bundles.php": "<?php\n\nreturn [];\n",
+        "config/api/bundles.php": (
             "<?php\nreturn [\n"
             "    Symfony\\Bundle\\FrameworkBundle\\FrameworkBundle::class => ['all' => true],\n"
-            "    // Symfony\\Bundle\\SecurityBundle\\SecurityBundle::class => ['all' => true],\n"
-            "    /* Symfony\\Bundle\\TwigBundle\\TwigBundle::class => ['all' => true], */\n"
+            "    Symfony\\Bundle\\SecurityBundle\\SecurityBundle::class => ['all' => true],\n"
+            "    Symfony\\Bundle\\TwigBundle\\TwigBundle::class => ['all' => true],\n"
             "];\n"
-        ), frozenset({"framework"}))
+        ),
+        "config/packages/security.yaml": "security:\n    firewalls:\n        main:\n            lazy: true\n",
+    }
 
-    def test_multi_env_entries_parse(self):
-        self.assertEqual(self._aliases(
-            "<?php\n\nreturn [\n"
-            "    Symfony\\Bundle\\TwigBundle\\TwigBundle::class => ['dev' => true, 'test' => true],\n];\n"
-        ), frozenset({"twig"}))
-
-    def test_non_literal_map_is_unknown(self):
-        for body in (
-            "<?php\nreturn array_merge(require __DIR__.'/bundles_base.php', [Foo\\Bar::class => ['all' => true]]);\n",
-            "<?php\n$b = [Symfony\\Bundle\\FrameworkBundle\\FrameworkBundle::class => ['all' => true]];\nreturn $b;\n",
-            "<?php\nreturn [...require __DIR__.'/base.php', Foo\\Bar::class => ['all' => true]];\n",
-        ):
-            with self.subTest(body=body):
-                self.assertIsNone(self._aliases(body))
-
-    def test_non_literal_map_asks_quietly(self):
-        root = _project({"config/bundles.php": "<?php\nreturn array_merge(require __DIR__.'/b.php', []);\n"})
+    def _root(self, files):
+        root = _project(files)
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        return root
+
+    def test_every_alias_is_asked_and_the_tree_wins(self):
+        root = self._root(self.FILES)
+        session = _FakeSession({
+            "security": _MAIN_FW_TREE,
+            "framework": {"trusted_proxies": ["10.0.0.0/8"]},
+            "twig": {"autoescape": "html"},
+        })
+        warnings: list[str] = []
+        cfg = sf._resolve_security(root, session, warnings)
+        sf.collect_trusted_config(root, session=session, warnings=warnings)
+        sf.collect_twig_overrides(root, session=session, warnings=warnings)
+        self.assertEqual({alias for alias, _ in session.asked}, {"security", "framework", "twig"})
+        self.assertEqual(cfg.resolution.mode, "tree")
+        _, fw = sf.collect_auth_layer_and_firewalls(root, warnings, security=cfg)
+        self.assertEqual([f["name"] for f in fw.data["firewalls"]], ["main"])
+
+    def test_non_literal_map_asks_the_same_aliases(self):
+        files = dict(self.FILES)
+        files["config/bundles.php"] = "<?php\nreturn array_merge(require __DIR__.'/api/bundles.php', []);\n"
+        root = self._root(files)
+        session = _FakeSession({"security": _MAIN_FW_TREE})
+        sf._resolve_security(root, session, [])
+        self.assertIn("security", {alias for alias, _ in session.asked})
+
+    def test_failed_console_with_evidence_is_not_quiet(self):
+        root = self._root(self.FILES)
         session = _FakeSession({})
-        sf.collect_twig_overrides(root, session=session, warnings=[])
-        self.assertEqual(session.asked, [("twig", True)])
+        sf._resolve_security(root, session, [])
+        self.assertEqual(session.asked, [("security", False)])
 
 
 class DevOnlySource(unittest.TestCase):
     def test_dev_dir_files_are_source_under_dev_console(self):
         root = _project({
-            "config/bundles.php": _BUNDLES_ALL,
             "config/packages/dev/security.yaml": "security:\n    firewalls:\n        main:\n            lazy: true\n",
         })
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
