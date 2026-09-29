@@ -4,6 +4,7 @@ a source root symlinked into a dot-directory is still parsed.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import stat
@@ -118,15 +119,30 @@ class _ShimPath(unittest.TestCase):
 
 
 class NoPhpOnPath(_ShimPath):
-    def test_sanity_fails_with_the_extractor_cause(self):
+    def test_sanity_warns_with_the_extractor_cause(self):
         text, sanity = _recon_and_sanity(self.project, self.tmp / "review", {"PATH": str(self.bin)})
-        self.assertEqual(sanity.returncode, 1, sanity.stdout + sanity.stderr)
+        self.assertEqual(sanity.returncode, 0, sanity.stdout + sanity.stderr)
         self.assertIn(
-            "sanity[extractor]: attack_surface not collected — "
+            "WARNING: sanity[extractor]: attack_surface not collected — "
             "extractor_failed: routes: php executable not found on PATH",
             sanity.stderr,
         )
         self.assertEqual(_level(text), "low")
+
+    def test_gaps_file_carries_the_extractor_failed_sections_and_their_files(self):
+        _, _ = _recon_and_sanity(self.project, self.tmp / "review", {"PATH": str(self.bin)})
+        out = self.tmp / "recon_gaps.json"
+        sanity = _run([str(VALIDATE), "--review-root", str(self.tmp / "review"), "--sanity",
+                       "--project-root", str(self.project), "--gaps-out", str(out)],
+                      {"PATH": str(self.bin)})
+        self.assertEqual(sanity.returncode, 0, sanity.stderr)
+        items = json.loads(out.read_text())["items"]
+        failed = {i["section_path"]: i for i in items if i["kind"] == "extractor_failed"}
+        self.assertIn("attack_surface", failed)
+        self.assertIn("recon_bags.stack.symfony.forms", failed)  # probe-less: SOURCE_ROOTS glob
+        self.assertTrue(failed["recon_bags.stack.symfony.forms"]["files"])
+        self.assertTrue(all(i["files"] == sorted(i["files"]) for i in items))
+        self.assertEqual(items, sorted(items, key=lambda i: (i["kind"], i["section_path"], i["label"])))
 
 
 class TimeoutFailsFast(_ShimPath):
@@ -141,7 +157,7 @@ class TimeoutFailsFast(_ShimPath):
         self.assertGreaterEqual(text.count("skipped after earlier timeout"), 5)
         self.assertIn("extractor_failed: routes: extract_php_metadata --kind=routes timed out after 1s", text)
         self.assertIn("extractor_failed: class: skipped after earlier timeout", text)
-        self.assertEqual(sanity.returncode, 1)
+        self.assertEqual(sanity.returncode, 0, sanity.stderr)
         self.assertIn("timed out after 1s", sanity.stderr)
         self.assertEqual(_level(text), "low")
 

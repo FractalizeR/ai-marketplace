@@ -626,7 +626,7 @@ class SanityProbesIntegration(unittest.TestCase):
             errs = [e for e in res.errors if "missing" in e.lower()]
             self.assertEqual(errs, [])
 
-    def test_low_coverage_above_20pct_errors(self):
+    def test_low_coverage_warns_and_records_a_gap_without_failing(self):
         # Declare only 1 of 3 controllers → ~67% diff.
         body = (
             "## Attack Surface\n<!-- section_id: attack_surface -->\n\n"
@@ -643,7 +643,14 @@ class SanityProbesIntegration(unittest.TestCase):
             review_root = Path(td) / "review"
             write_context(review_root, VALID_FRONTMATTER_V2, body)
             res = vc.sanity_check(review_root, project_root=FIX_MIN)
-            self.assertFalse(res.ok(), msg=f"unexpectedly clean: {res.warnings}")
+            self.assertTrue(res.ok(), msg=f"errors: {res.errors}")
+            self.assertTrue(any("filesystem matches" in w for w in res.warnings), res.warnings)
+            gap = [g for g in res.gaps if g["label"] == "HTTP controllers"][0]
+            self.assertEqual((gap["kind"], gap["section_path"]), ("coverage", "attack_surface"))
+            self.assertEqual((gap["declared"], gap["found"]), (1, 3))
+            self.assertEqual(gap["missing_pct"], 66.7)
+            self.assertEqual(gap["files"], ["src/Controller/AuthController.php",
+                                            "src/Controller/UserController.php"])
 
     def test_hallucination_warns(self):
         body = (
@@ -855,8 +862,9 @@ class SanityProbeContentFilter(unittest.TestCase):
 
             res = vc.sanity_check(review_root, project_root=project,
                                   recipe_loader=lambda _name: FakeRecipe())
-            self.assertFalse(res.ok(),
-                             msg="without content_filter the noisy probe should error")
+            self.assertTrue(res.ok(), msg=res.errors)
+            self.assertEqual([g["kind"] for g in res.gaps], ["coverage"],
+                             msg="without content_filter the noisy probe should record a gap")
 
     def test_abstract_command_base_not_a_coverage_gap(self):
         # Regression: an abstract `*Command.php` base (extends Symfony Command)
@@ -1004,7 +1012,8 @@ class SanityProbeContentFilter(unittest.TestCase):
             write_context(review_root, VALID_FRONTMATTER_V2, body)
             res = vc.sanity_check(review_root, project_root=project,
                                   recipe_loader=lambda _name: FakeRecipe())
-            self.assertFalse(res.ok(),
+            self.assertEqual([(g["kind"], g["files"]) for g in res.gaps],
+                             [("coverage", ["src/Repository/BaseRepository.php"])],
                              msg="data_access probe must still flag the abstract base as missing")
 
     def _context_with_attack_surface(self, items_yaml: str) -> str:
@@ -1093,7 +1102,8 @@ class SanityProbeContentFilter(unittest.TestCase):
                           self._context_with_attack_surface(items))
             res = vc.sanity_check(review_root, project_root=project,
                                   recipe_loader=lambda _name: FakeRecipe())
-            self.assertFalse(res.ok(),
+            self.assertEqual([(g["kind"], g["files"]) for g in res.gaps],
+                             [("coverage", ["src/Admin/Controller/ClientController.php"])],
                              msg="single-kind filter should flag the admin controller")
 
     def test_listener_content_filter_excludes_doctrine_and_messenger(self):
@@ -1245,6 +1255,334 @@ class CliContract(unittest.TestCase):
             # Recipe-driven sanity probes complete successfully on the
             # minimal fixture (full coverage from static-only inventory).
             self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Gap collector: --sanity never fails on coverage, it records recon_gaps.json.
+# ---------------------------------------------------------------------------
+
+
+def _fake_recipe(probes, source_roots=("src",)):
+    class FakeRecipe:
+        EXCLUDE_PATHS = ("tests/",)
+        SOURCE_ROOTS = source_roots
+
+        @staticmethod
+        def sanity_probes():
+            return list(probes)
+
+    return FakeRecipe()
+
+
+class GapCollector(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.project = Path(self._tmp.name) / "project"
+        self.review_root = Path(self._tmp.name) / "review"
+
+    def php(self, *rels: str, body: str = "<?php\nclass X {}\n") -> None:
+        for rel in rels:
+            p = self.project / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(body, encoding="utf-8")
+
+    def context(self, overrides: dict[str, str], bags: str = "", extra_fm: str = "") -> None:
+        """Every core section is an `unknown` stub unless overridden by a yaml body."""
+        body = ""
+        for sid in vc.CORE_SECTIONS_V2:
+            yaml_body = overrides.get(sid, 'status: unknown\nreason: "stub"')
+            body += f"## {sid}\n<!-- section_id: {sid} -->\n\n```yaml\n{yaml_body}\n```\n\n"
+        if bags:
+            body += f"## Recon Bags\n<!-- section_id: recon_bags -->\n\n```yaml\n{bags}\n```\n\n"
+        write_context(self.review_root, VALID_FRONTMATTER_V2 + extra_fm, body)
+
+    def sanity(self, probes=(), source_roots=("src",)):
+        return vc.sanity_check(self.review_root, project_root=self.project,
+                               recipe_loader=lambda _n: _fake_recipe(probes, source_roots))
+
+    @staticmethod
+    def probe(path, glob, label, **kw):
+        from recon.types import SanityProbe
+        return SanityProbe(section_path=path, glob_patterns=[glob], label=label, **kw)
+
+    def by_kind(self, res, kind):
+        return [g for g in res.gaps if g["kind"] == kind]
+
+    # --- extractor_failed ---
+
+    def test_extractor_failed_with_probe_lists_the_glob_per_probe(self):
+        self.php("src/A/OneController.php", "src/A/TwoController.php", "src/A/SyncCommand.php")
+        self.context({"attack_surface": 'status: partial\nreason: "extractor_failed: class: boom"\nitems: []'})
+        res = self.sanity([
+            self.probe("attack_surface", "src/**/*Controller.php", "HTTP controllers"),
+            self.probe("attack_surface", "src/**/*Command.php", "CLI commands"),
+        ])
+        self.assertTrue(res.ok(), res.errors)
+        items = self.by_kind(res, "extractor_failed")
+        self.assertEqual([(g["label"], g["files"]) for g in items], [
+            ("CLI commands", ["src/A/SyncCommand.php"]),
+            ("HTTP controllers", ["src/A/OneController.php", "src/A/TwoController.php"]),
+        ])
+        self.assertEqual(items[0]["reason"], "extractor_failed: class: boom")
+        self.assertEqual(items[0]["status"], "partial")
+        self.assertIn("sanity[extractor]: attack_surface not collected — extractor_failed: class: boom",
+                      res.warnings)
+        # No parallel coverage item for the same section.
+        self.assertEqual(self.by_kind(res, "coverage"), [])
+
+    def test_extractor_failed_subtracts_what_the_section_did_declare(self):
+        self.php("src/A/OneController.php", "src/A/TwoController.php")
+        self.context({"attack_surface": (
+            'status: partial\nreason: "extractor_failed: class: boom"\n'
+            'items:\n  - kind: http_route\n    file: src/A/OneController.php')})
+        res = self.sanity([self.probe("attack_surface", "src/**/*Controller.php", "HTTP controllers",
+                                      kind_filter="http_route")])
+        self.assertEqual(self.by_kind(res, "extractor_failed")[0]["files"], ["src/A/TwoController.php"])
+
+    def test_extractor_failed_without_probe_falls_back_to_source_roots(self):
+        self.php("src/Form/AType.php", "src/Deep/Er/B.php", "app/Other.php", "tests/T.php",
+                 "src/.cache/Hidden.php")
+        self.context({}, bags=(
+            "stack:\n  symfony:\n    forms:\n      status: partial\n"
+            '      reason: "extractor_failed: forms: boom"\n      items: []'))
+        res = self.sanity()
+        (item,) = res.gaps
+        self.assertEqual((item["kind"], item["section_path"], item["label"]),
+                         ("extractor_failed", "recon_bags.stack.symfony.forms", "forms"))
+        self.assertEqual(item["files"], ["src/Deep/Er/B.php", "src/Form/AType.php"])
+
+    # --- uninterpreted ---
+
+    def test_config_uninterpreted_uses_existing_evidence_files(self):
+        self.php("src/Any.php")
+        (self.project / "config").mkdir()
+        (self.project / "config" / "security.yaml").write_text("security: ~\n")
+        self.context({}, bags=(
+            "stack:\n  symfony:\n    firewalls:\n      status: partial\n"
+            '      reason: "config_uninterpreted: security: no_console"\n'
+            "      data:\n        evidence_files:\n          - config/security.yaml\n"
+            "          - config/gone.yaml\n      source_files:\n        - config/security.yaml"))
+        res = self.sanity()
+        (item,) = res.gaps
+        self.assertEqual(item["kind"], "uninterpreted")
+        self.assertEqual(item["files"], ["config/security.yaml"])
+        self.assertEqual(item["reason"], "config_uninterpreted: security: no_console")
+        self.assertTrue(any(w.startswith("sanity[config]: recon_bags.stack.symfony.firewalls")
+                            for w in res.warnings))
+
+    def test_config_uninterpreted_without_evidence_falls_back_to_source_roots(self):
+        self.php("src/Any.php")
+        self.context({}, bags=(
+            "stack:\n  symfony:\n    trusted_config:\n      status: partial\n"
+            '      reason: "config_uninterpreted: framework: console_failed"\n'
+            "      data:\n        evidence_files: []\n      source_files: []"))
+        (item,) = self.sanity().gaps
+        self.assertEqual(item["files"], ["src/Any.php"])
+
+    def test_pending_list_section_uses_its_source_files(self):
+        self.php("src/Any.php", "src/Own.php")
+        self.context({"serialization": (
+            "status: pending_enrichment\nitems: []\nsource_files:\n  - src/Own.php")})
+        (item,) = self.sanity().gaps
+        self.assertEqual((item["kind"], item["section_path"], item["files"]),
+                         ("uninterpreted", "serialization", ["src/Own.php"]))
+        self.assertEqual(item["reason"], "pending_enrichment")
+
+    def test_pending_list_section_without_source_files_uses_probe_then_source_roots(self):
+        self.php("src/Repo/UserRepository.php", "src/Other.php")
+        self.context({
+            "data_access": "status: pending_enrichment\nitems: []",
+            "serialization": "status: pending_enrichment\nitems: []",
+        })
+        res = self.sanity([self.probe("data_access", "src/**/*Repository.php", "Repos")])
+        got = {g["section_path"]: g["files"] for g in res.gaps}
+        self.assertEqual(got, {
+            "data_access": ["src/Repo/UserRepository.php"],
+            "serialization": ["src/Other.php", "src/Repo/UserRepository.php"],
+        })
+
+    def test_scalar_pending_section_is_not_a_gap(self):
+        self.php("src/Any.php")
+        self.context({"secrets": "status: pending_enrichment\ndata:\n  candidates: []\nsource_files:\n  - .env"})
+        self.assertEqual(self.sanity().gaps, [])
+
+    # --- coverage ---
+
+    def _controllers_context(self, status: str, declared: int) -> None:
+        items = "".join(f"\n  - kind: http_route\n    file: src/C{i:02d}Controller.php"
+                        for i in range(declared))
+        self.context({"attack_surface": f"status: {status}\nitems:{items}" if declared
+                      else f"status: {status}\nitems: []"})
+
+    def test_ok_section_threshold_is_five_percent(self):
+        self.php(*(f"src/C{i:02d}Controller.php" for i in range(20)))
+        probe = self.probe("attack_surface", "src/*Controller.php", "HTTP controllers")
+        self._controllers_context("ok", 19)  # exactly 5 % missing
+        res = self.sanity([probe])
+        self.assertEqual((res.gaps, res.warnings), ([], []))
+        self._controllers_context("ok", 18)  # 10 %
+        res = self.sanity([probe])
+        (item,) = res.gaps
+        self.assertEqual((item["kind"], item["declared"], item["found"], item["missing_pct"]),
+                         ("coverage", 18, 20, 10.0))
+        self.assertEqual(item["files"], ["src/C18Controller.php", "src/C19Controller.php"])
+        self.assertTrue(res.ok())
+
+    def test_partial_and_unknown_sections_report_any_missing(self):
+        self.php(*(f"src/C{i:02d}Controller.php" for i in range(20)))
+        probe = self.probe("attack_surface", "src/*Controller.php", "HTTP controllers")
+        for status, declared in (("partial", 19), ("unknown", 0)):
+            with self.subTest(status=status):
+                self._controllers_context(status, declared)
+                (item,) = self.sanity([probe]).gaps
+                self.assertEqual((item["kind"], item["status"], len(item["files"])),
+                                 ("coverage", status, 20 - declared))
+
+    def test_none_status_and_coverage_false_probes_are_skipped(self):
+        self.php("src/AController.php")
+        self._controllers_context("none", 0)
+        self.assertEqual(self.sanity([self.probe(
+            "attack_surface", "src/*Controller.php", "HTTP controllers")]).gaps, [])
+        self._controllers_context("ok", 0)
+        self.assertEqual(self.sanity([self.probe(
+            "attack_surface", "src/*Controller.php", "HTTP controllers", coverage=False)]).gaps, [])
+
+    def test_user_exclude_removes_files_from_every_kind(self):
+        self.php("src/Legacy/OldController.php", "src/Legacy/Sub/DeepController.php",
+                 "src/Keep/NewController.php", "src/Gen/GeneratedX.php", "src/Keep/K.php")
+        self.context({"attack_surface": 'status: ok\nitems: []',
+                      "serialization": "status: pending_enrichment\nitems: []"},
+                     extra_fm="\nexclude_paths_user:\n  - src/Legacy\n  - src/Gen*")
+        res = self.sanity([self.probe("attack_surface", "src/**/*Controller.php", "HTTP controllers")])
+        got = {g["kind"]: g["files"] for g in res.gaps}
+        self.assertEqual(got["coverage"], ["src/Keep/NewController.php"])
+        self.assertEqual(got["uninterpreted"], ["src/Keep/K.php", "src/Keep/NewController.php"])
+
+    def test_items_are_sorted_by_kind_section_label(self):
+        self.php("src/AController.php", "src/BCommand.php")
+        self.context({
+            "attack_surface": "status: ok\nitems: []",
+            "serialization": "status: pending_enrichment\nitems: []",
+        }, bags=(
+            "stack:\n  symfony:\n    forms:\n      status: partial\n"
+            '      reason: "extractor_failed: forms: x"\n      items: []'))
+        res = self.sanity([
+            self.probe("attack_surface", "src/*Controller.php", "Z probe"),
+            self.probe("attack_surface", "src/*Command.php", "A probe"),
+        ])
+        self.assertEqual([(g["kind"], g["section_path"], g["label"]) for g in res.gaps], [
+            ("coverage", "attack_surface", "A probe"),
+            ("coverage", "attack_surface", "Z probe"),
+            ("extractor_failed", "recon_bags.stack.symfony.forms", "forms"),
+            ("uninterpreted", "serialization", "serialization"),
+        ])
+
+    def test_no_project_root_still_reports_the_sections_without_files(self):
+        self.context({"attack_surface": 'status: partial\nreason: "extractor_failed: class: x"\nitems: []'})
+        res = vc.sanity_check(self.review_root, project_root=None,
+                              recipe_loader=lambda _n: _fake_recipe([]))
+        self.assertTrue(res.ok())
+        self.assertEqual([(g["kind"], g["files"]) for g in res.gaps], [("extractor_failed", [])])
+
+    def test_bad_project_root_is_an_error(self):
+        self.context({})
+        res = vc.sanity_check(self.review_root, project_root=self.project / "nope",
+                              recipe_loader=lambda _n: _fake_recipe([]))
+        self.assertFalse(res.ok())
+
+    # --- shape of the recipes' SOURCE_ROOTS ---
+
+    def test_every_main_recipe_declares_source_roots(self):
+        from recon.recipes import generic_php, laravel, symfony
+        self.assertEqual(symfony.SOURCE_ROOTS, ("src", "app"))
+        self.assertEqual(laravel.SOURCE_ROOTS, ("app",))
+        self.assertEqual(generic_php.SOURCE_ROOTS, ("src", "app"))
+
+
+class GapsFileCli(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+        self.review_root = self.tmp / "review"
+
+    def run_cli(self, *args: str):
+        return subprocess.run(
+            [sys.executable, str(VALIDATE), "--review-root", str(self.review_root), *args],
+            capture_output=True, text=True, timeout=60,
+        )
+
+    def recon(self):
+        subprocess.run(
+            [sys.executable, str(RECON), str(FIX_MIN), "--recipe", "symfony",
+             "--review-root", str(self.review_root), "--no-console"],
+            check=True, capture_output=True, timeout=60,
+        )
+
+    def test_empty_gaps_file_is_written(self):
+        self.recon()
+        out = self.tmp / "out" / "recon_gaps.json"
+        proc = self.run_cli("--sanity", "--project-root", str(FIX_MIN), "--gaps-out", str(out))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        doc = json.loads(out.read_text())
+        self.assertEqual(doc["schema_version"], 1)
+        self.assertIsInstance(doc["items"], list)
+
+    def test_large_gap_exits_zero_and_lands_in_the_file(self):
+        project = self.tmp / "project"
+        for i in range(10):
+            (project / "src").mkdir(parents=True, exist_ok=True)
+            (project / "src" / f"C{i}Controller.php").write_text("<?php\nclass X {}\n")
+        (project / "composer.json").write_text("{}")
+        body = ""
+        for sid in vc.CORE_SECTIONS_V2:
+            y = ("status: ok\nitems:\n  - kind: http_route\n    file: src/C0Controller.php"
+                 if sid == "attack_surface" else 'status: unknown\nreason: "stub"')
+            body += f"## {sid}\n<!-- section_id: {sid} -->\n\n```yaml\n{y}\n```\n\n"
+        write_context(self.review_root, VALID_FRONTMATTER_V2, body)
+        out = self.tmp / "gaps.json"
+        proc = self.run_cli("--sanity", "--project-root", str(project), "--gaps-out", str(out))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("90% missing", proc.stderr)
+        items = json.loads(out.read_text())["items"]
+        (item,) = [i for i in items if i["label"] == "HTTP controllers"]
+        self.assertEqual((item["kind"], item["declared"], item["found"], item["missing_pct"]),
+                         ("coverage", 1, 10, 90.0))
+        self.assertEqual(len(item["files"]), 9)
+
+    def test_output_is_deterministic(self):
+        self.recon()
+        a, b = self.tmp / "a.json", self.tmp / "b.json"
+        for out in (a, b):
+            self.run_cli("--sanity", "--project-root", str(FIX_MIN), "--gaps-out", str(out))
+        self.assertEqual(a.read_bytes(), b.read_bytes())
+
+    def test_broken_frontmatter_exits_1_and_still_writes_an_empty_file(self):
+        write_context(self.review_root, "schema_version: 1", "")
+        out = self.tmp / "gaps.json"
+        proc = self.run_cli("--sanity", "--gaps-out", str(out))
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(json.loads(out.read_text()), {"schema_version": 1, "items": []})
+
+    def test_stale_gaps_file_is_overwritten(self):
+        self.recon()
+        out = self.tmp / "gaps.json"
+        out.write_text('{"schema_version": 1, "items": [{"stale": true}]}')
+        self.run_cli("--sanity", "--project-root", str(FIX_MIN), "--gaps-out", str(out))
+        self.assertNotIn("stale", out.read_text())
+
+    def test_gaps_out_requires_sanity(self):
+        self.recon()
+        proc = self.run_cli("--gaps-out", str(self.tmp / "g.json"))
+        self.assertEqual(proc.returncode, 2)
+
+    def test_exclude_paths_user_must_be_a_list_of_strings(self):
+        with tempfile.TemporaryDirectory() as td:
+            fm = VALID_FRONTMATTER_V2 + "\nexclude_paths_user: legacy"
+            p = write_context(Path(td), fm, all_core_sections_pending())
+            res = vc.validate_context_file(p)
+            self.assertTrue(any("exclude_paths_user" in e for e in res.errors), res.errors)
 
 
 # ---------------------------------------------------------------------------

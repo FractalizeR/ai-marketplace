@@ -139,6 +139,10 @@ EXCLUDE_PATHS: tuple[str, ...] = (
 # attack surface — it's schema-only.
 PHP_SCAN_ROOTS: tuple[str, ...] = ("app",)
 
+# Roots the sanity gap collector globs for `*.php` when a section has no probe
+# of its own (validate_context.py --sanity --gaps-out).
+SOURCE_ROOTS: tuple[str, ...] = PHP_SCAN_ROOTS
+
 
 # ---------------------------------------------------------------------------
 # Detect: weighted signals.

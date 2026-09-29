@@ -6,22 +6,22 @@ Validations:
   2. Sections — every required core section present with anchor; valid status
      and shape (list or scalar). recon_bags bag validated against
      `RECON_BAGS_SCHEMA` of the recipe in `recipe_used`.
-  3. Sanity probes — recipe-driven (probes from recipe.sanity_probes()):
-     - Hallucination: declared files that don't exist on disk.
-     - Coverage diff ladder (rev 3.5):
-         diff ≤ 5 %    → ok
-         5–20 %        → warning
-         > 20 %        → error
-  4. Ceiling policy: if frontmatter.recon_confidence.ceiling == "medium",
-     level cannot be "high".
+  3. Sanity (`--sanity`) — recipe-driven, never fatal: a gap in recon coverage
+     is a WARNING on stderr plus a record in the optional `--gaps-out` file
+     (`recon_gaps.json`, schema_version 1), which feeds the WGAP follow-up wave.
+       - hallucinated files: declared files that don't exist on disk;
+       - coverage: files matched by a recipe probe glob but missing from the
+         section (`ok` sections: more than 5 % missing);
+       - extractor_failed / config_uninterpreted sections, and list sections
+         the agent left in pending_enrichment.
+     `recon_confidence` is display-only and is not checked against anything.
 
 Exit codes:
-  0 — valid (warnings allowed)
-  1 — invalid (errors)
-  2 — usage error
+  0 — valid (warnings and gaps allowed)
+  1 — CONTEXT.md is structurally invalid (or --project-root is not a directory)
+  2 — usage error / CONTEXT.md missing
 
-stdlib only. Backward-compat exports preserved for plan_waves until S5:
-  SECTIONS, SECTION_TYPE_LIST, SECTION_TYPE_SCALAR — legacy v1 mapping.
+stdlib only.
 """
 
 from __future__ import annotations
@@ -329,6 +329,7 @@ FUTURE_FRAMEWORK_KEYS_3_4: frozenset[str] = frozenset()
 class ValidationResult:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    gaps: list[dict] = field(default_factory=list)
 
     def ok(self) -> bool:
         return not self.errors
@@ -471,6 +472,11 @@ def _validate_frontmatter_v2(text: str, res: ValidationResult) -> Optional[dict]
     # it and must keep validating.
     if "environment" in fm:
         _validate_environment_block(fm.get("environment"), res)
+
+    # exclude_paths_user (optional): the user's --exclude globs, read by sanity.
+    eu = fm.get("exclude_paths_user")
+    if eu is not None and not (isinstance(eu, list) and all(isinstance(x, str) for x in eu)):
+        res.errors.append("exclude_paths_user must be a list of strings")
 
     # sources_used / missing_sections.
     for key in ("sources_used", "missing_sections"):
@@ -742,9 +748,13 @@ def _load_recipe_schema(recipe_used: str, recipe_loader=None):
 # ---------------------------------------------------------------------------
 
 
-# Coverage diff ladder (rev 3.5).
-COVERAGE_OK_THRESHOLD = 0.05      # diff ≤ 5 %
-COVERAGE_WARN_THRESHOLD = 0.20    # 5 % < diff ≤ 20 % → warn; > 20 % → error
+# `ok` sections tolerate a small unexplained remainder (files a glob matches
+# but the recipe legitimately classifies as nothing); above it, it is a gap.
+COVERAGE_GAP_THRESHOLD = 0.05
+GAPS_SCHEMA_VERSION = 1
+
+EXTRACTOR_FAILED_PREFIX = "extractor_failed:"
+CONFIG_UNINTERPRETED_PREFIX = "config_uninterpreted:"
 
 
 def _payload_at_path(text: str, section_path: str) -> Optional[dict]:
@@ -830,7 +840,28 @@ def _has_hidden_dir_segment(rel_path: str) -> bool:
     return any(p.startswith(".") for p in parts[:-1])
 
 
-def _glob_files(project_root: Path, patterns: list[str], exclude: tuple[str, ...] = ()) -> set[str]:
+def _user_excluded(rel: str, patterns: tuple[str, ...]) -> bool:
+    """Match `rel` against the user's `--exclude` entries: a path prefix, or a
+    glob when the entry has `*`/`?`/`[` (`*` also spans `/`)."""
+    import fnmatch
+    for raw in patterns:
+        pat = raw.strip().strip("/")
+        if not pat:
+            continue
+        if any(c in pat for c in "*?["):
+            if fnmatch.fnmatchcase(rel, pat) or fnmatch.fnmatchcase(rel, pat + "/*"):
+                return True
+        elif rel == pat or rel.startswith(pat + "/"):
+            return True
+    return False
+
+
+def _glob_files(
+    project_root: Path,
+    patterns: list[str],
+    exclude: tuple[str, ...] = (),
+    user_exclude: tuple[str, ...] = (),
+) -> set[str]:
     found = set()
     for pat in patterns:
         for p in project_root.glob(pat):
@@ -842,9 +873,12 @@ def _glob_files(project_root: Path, patterns: list[str], exclude: tuple[str, ...
             # Recipes declare symlink-resolved paths (`src -> .build/src` gives
             # `.build/src/…`), so compare in that form; escapes are dropped.
             try:
-                found.add(p.resolve().relative_to(project_root.resolve()).as_posix())
+                resolved = p.resolve().relative_to(project_root.resolve()).as_posix()
             except (ValueError, OSError):
                 continue
+            if _user_excluded(walked, user_exclude) or _user_excluded(resolved, user_exclude):
+                continue
+            found.add(resolved)
     return found
 
 
@@ -901,21 +935,17 @@ def _exclude_abstract_class_files(project_root: Path, files: set[str]) -> set[st
     return out
 
 
-EXTRACTOR_FAILED_PREFIX = "extractor_failed:"
-
-
-def _extractor_failures(text: str) -> list[tuple[str, str]]:
-    """(section_path, reason) for every core section or recon_bags payload the
-    recipe could not collect because the PHP extractor failed. Recipe-agnostic:
-    keyed on the reason prefix, not on a probe list."""
-    out: list[tuple[str, str]] = []
+def _section_payloads(text: str) -> list[tuple[str, dict]]:
+    """(section_path, payload) for every core section and every recon_bags
+    payload. A payload is the mapping that carries `status`; paths use the same
+    dot notation as `SanityProbe.section_path`."""
+    out: list[tuple[str, dict]] = []
 
     def walk(node: object, path: str) -> None:
         if not isinstance(node, dict):
             return
-        reason = node.get("reason")
-        if "status" in node and isinstance(reason, str) and reason.startswith(EXTRACTOR_FAILED_PREFIX):
-            out.append((path, reason))
+        if "status" in node:
+            out.append((path, node))
             return
         for key, child in node.items():
             if isinstance(child, dict):
@@ -928,12 +958,98 @@ def _extractor_failures(text: str) -> list[tuple[str, str]]:
     return out
 
 
+def _reason(payload: dict) -> str:
+    reason = payload.get("reason")
+    return reason if isinstance(reason, str) else ""
+
+
+def _extractor_failures(text: str) -> list[tuple[str, str]]:
+    """(section_path, reason) for every section the recipe could not collect
+    because the PHP extractor failed. Recipe-agnostic: keyed on the reason
+    prefix, not on a probe list."""
+    return [
+        (path, _reason(payload))
+        for path, payload in _section_payloads(text)
+        if _reason(payload).startswith(EXTRACTOR_FAILED_PREFIX)
+    ]
+
+
+class _GapFiles:
+    """Filesystem side of the gap collector: probe globs and `SOURCE_ROOTS`,
+    filtered the same way recon filters (recipe EXCLUDE_PATHS, hidden dirs, the
+    user's --exclude, abstract classes)."""
+
+    def __init__(self, project_root: Path, recipe, user_exclude: tuple[str, ...]):
+        self.root = project_root
+        self.exclude = tuple(getattr(recipe, "EXCLUDE_PATHS", ()))
+        self.source_roots = tuple(getattr(recipe, "SOURCE_ROOTS", ()))
+        self.user_exclude = user_exclude
+        self._probes: dict[int, set[str]] = {}
+        self._source: Optional[set[str]] = None
+
+    def probe(self, probe) -> set[str]:
+        key = id(probe)
+        if key not in self._probes:
+            found = _glob_files(self.root, probe.glob_patterns, self.exclude, self.user_exclude)
+            if probe.content_filter:
+                found = _filter_by_content(self.root, found, probe.content_filter)
+            if probe.section_path != "data_access":
+                # See _exclude_abstract_class_files for the data_access opt-out.
+                found = _exclude_abstract_class_files(self.root, found)
+            self._probes[key] = found
+        return self._probes[key]
+
+    def source_roots_glob(self) -> set[str]:
+        if self._source is None:
+            self._source = _glob_files(
+                self.root, [f"{r}/**/*.php" for r in self.source_roots],
+                self.exclude, self.user_exclude,
+            )
+        return self._source
+
+    def existing(self, rels: object) -> set[str]:
+        """Declared `source_files` that are real, non-excluded files."""
+        out: set[str] = set()
+        if not isinstance(rels, list):
+            return out
+        for rel in rels:
+            if not isinstance(rel, str) or not rel.strip():
+                continue
+            rel = rel.strip()
+            if rel.startswith("/") or ".." in rel.split("/"):
+                continue
+            if not (self.root / rel).is_file():
+                continue
+            if (_path_excluded(rel, self.exclude) or _has_hidden_dir_segment(rel)
+                    or _user_excluded(rel, self.user_exclude)):
+                continue
+            out.add(rel)
+        return out
+
+
+def _gap(kind: str, path: str, label: str, payload: dict, reason: str, files: set[str], **extra) -> dict:
+    item = {
+        "kind": kind,
+        "section_path": path,
+        "label": label,
+        "status": payload.get("status"),
+        "reason": reason,
+        "files": sorted(files),
+    }
+    item.update(extra)
+    return item
+
+
 def sanity_check(
     review_root: Path,
     project_root: Optional[Path] = None,
     recipe_loader=None,
 ) -> ValidationResult:
-    """Recipe-driven sanity: hallucination + coverage diff ladder."""
+    """Recipe-driven sanity: hallucinated files, coverage, uninterpreted sections.
+
+    Only a structurally invalid CONTEXT.md (or an unusable `project_root`) is an
+    error. Everything else is a warning plus a record in `res.gaps`.
+    """
     res = ValidationResult()
     context_path = review_root / "CONTEXT.md"
     if not context_path.is_file():
@@ -943,108 +1059,151 @@ def sanity_check(
     fm = _validate_frontmatter_v2(text, res)
     if fm is None:
         return res
-    # A failed extractor leaves sections `partial` with no items, which the
-    # coverage ladder below skips — so it is reported here, loudly, with its cause.
-    for section_path, reason in _extractor_failures(text):
-        res.errors.append(f"sanity[extractor]: {section_path} not collected — {reason}")
+    user_exclude = tuple(x for x in (fm.get("exclude_paths_user") or []) if isinstance(x, str))
+    payloads = _section_payloads(text)
+
+    recipe = None
     recipe_used = fm.get("recipe_used")
     if not isinstance(recipe_used, str):
         res.warnings.append("recipe_used missing — skipping sanity probes")
-        return res
-    try:
-        if recipe_loader is not None:
-            recipe = recipe_loader(recipe_used)
-        else:
-            recipe = importlib.import_module(f"recon.recipes.{recipe_used}")
-    except (ModuleNotFoundError, ImportError) as e:
-        res.warnings.append(f"could not import recipe '{recipe_used}': {e}")
-        return res
-    if project_root is None:
-        # Best guess: parent of review_root if it looks like a project; else give up.
-        candidate = review_root.parent
-        if (candidate / "composer.json").is_file() or (candidate / "package.json").is_file():
-            project_root = candidate
-        else:
-            res.warnings.append(
-                "project_root not specified and could not be inferred — sanity coverage skipped"
-            )
-            return res
-    project_root = project_root.resolve()
-    if not project_root.is_dir():
-        res.errors.append(f"project_root not a directory: {project_root}")
-        return res
+    else:
+        try:
+            if recipe_loader is not None:
+                recipe = recipe_loader(recipe_used)
+            else:
+                recipe = importlib.import_module(f"recon.recipes.{recipe_used}")
+        except (ModuleNotFoundError, ImportError) as e:
+            res.warnings.append(f"could not import recipe '{recipe_used}': {e}")
 
-    probes = recipe.sanity_probes() if callable(getattr(recipe, "sanity_probes", None)) else []
-    # H4: pull recipe.EXCLUDE_PATHS so coverage globs ignore the same paths the
-    # recipe ignored when building inventory (vendor/, var/, tests/, etc).
-    exclude_paths = tuple(getattr(recipe, "EXCLUDE_PATHS", ()))
-    for probe in probes:
-        payload = _payload_at_path(text, probe.section_path)
-        if payload is None:
-            res.warnings.append(f"sanity[{probe.label}]: section {probe.section_path} not found")
-            continue
-        status = payload.get("status")
-        if status == "pending_enrichment":
-            # Skip coverage on pending sections; report as info-warning.
-            res.warnings.append(
-                f"sanity[{probe.label}]: section {probe.section_path} status=pending_enrichment, coverage check skipped"
-            )
-            continue
-        if status not in ("ok", "partial"):
-            # unknown / none — no hallucinations possible, skip coverage.
-            continue
-        declared = _declared_files(payload, kind_filter=probe.kind_filter)
-        # Hallucination check (applies to ok and partial alike — a declared file
-        # must exist on disk regardless of coverage completeness).
-        hallucinated = sorted(f for f in declared if not (project_root / f).is_file())
-        if hallucinated:
-            preview = ", ".join(hallucinated[:5])
-            extra = f" (+{len(hallucinated)-5} more)" if len(hallucinated) > 5 else ""
-            res.warnings.append(
-                f"sanity[{probe.label}]: {len(hallucinated)} declared file(s) not on disk: {preview}{extra}"
-            )
-        if status == "partial":
-            # `partial` self-declares incomplete coverage, so a coverage-diff
-            # ratio would be a guaranteed (and meaningless) gap. Hallucination
-            # above is the only sanity check that applies.
-            continue
-        if not getattr(probe, "coverage", True):
-            # Hallucination-only probe: the section is a semantic subset the
-            # glob cannot reproduce, so a coverage ratio would be noise.
-            continue
-        # Coverage diff ladder.
-        found = _glob_files(project_root, probe.glob_patterns, exclude=exclude_paths)
-        if probe.content_filter:
-            found = _filter_by_content(project_root, found, probe.content_filter)
-        if probe.section_path != "data_access":
-            # See _exclude_abstract_class_files docstring for the data_access opt-out.
-            found = _exclude_abstract_class_files(project_root, found)
-        if not found:
-            continue  # nothing to glob; legit empty case
-        missing = found - declared
-        diff = len(missing) / len(found)
-        if diff <= COVERAGE_OK_THRESHOLD:
-            continue
-        miss_preview = ", ".join(sorted(missing)[:5])
-        miss_extra = f" (+{len(missing)-5} more)" if len(missing) > 5 else ""
-        msg = (
-            f"sanity[{probe.label}]: declared {len(declared)} of {len(found)} filesystem matches "
-            f"({diff:.0%} missing). Missing: {miss_preview}{miss_extra}"
-        )
-        if diff <= COVERAGE_WARN_THRESHOLD:
-            res.warnings.append(msg)
-            # L6: if diff puts us in the warn band, frontmatter level=high is
-            # inconsistent (rev 3.5 ladder).
-            rc = fm.get("recon_confidence")
-            level = rc.get("level") if isinstance(rc, dict) else (rc if isinstance(rc, str) else None)
-            if level == "high":
-                res.errors.append(
-                    f"sanity[{probe.label}]: coverage diff {diff:.0%} puts confidence in "
-                    f"medium band, but frontmatter recon_confidence.level=high"
+    files: Optional[_GapFiles] = None
+    if recipe is not None:
+        if project_root is None:
+            # Best guess: parent of review_root if it looks like a project; else give up.
+            candidate = review_root.parent
+            if (candidate / "composer.json").is_file() or (candidate / "package.json").is_file():
+                project_root = candidate
+            else:
+                res.warnings.append(
+                    "project_root not specified and could not be inferred — sanity coverage skipped"
                 )
-        else:
-            res.errors.append(msg)
+        if project_root is not None:
+            project_root = project_root.resolve()
+            if not project_root.is_dir():
+                res.errors.append(f"project_root not a directory: {project_root}")
+                return res
+            files = _GapFiles(project_root, recipe, user_exclude)
+
+    probes = recipe.sanity_probes() if recipe is not None and callable(
+        getattr(recipe, "sanity_probes", None)) else []
+    probes_by_path: dict[str, list] = {}
+    for probe in probes:
+        probes_by_path.setdefault(probe.section_path, []).append(probe)
+    payload_by_path = dict(payloads)
+
+    def leaf(path: str) -> str:
+        return path.rsplit(".", 1)[-1]
+
+    def declared_of(payload: dict, probe) -> set[str]:
+        return _declared_files(payload, kind_filter=probe.kind_filter)
+
+    flagged: set[str] = set()
+    for path, payload in payloads:
+        reason = _reason(payload)
+        section_probes = probes_by_path.get(path, [])
+        if reason.startswith(EXTRACTOR_FAILED_PREFIX):
+            flagged.add(path)
+            res.warnings.append(f"sanity[extractor]: {path} not collected — {reason}")
+            if section_probes:
+                for probe in section_probes:
+                    found = (files.probe(probe) - declared_of(payload, probe)) if files else set()
+                    res.gaps.append(_gap("extractor_failed", path, probe.label, payload, reason, found))
+            else:
+                found = files.source_roots_glob() if files else set()
+                res.gaps.append(_gap("extractor_failed", path, leaf(path), payload, reason, found))
+            continue
+        pending_list = payload.get("status") == "pending_enrichment" and "items" in payload
+        if reason.startswith(CONFIG_UNINTERPRETED_PREFIX) or pending_list:
+            flagged.add(path)
+            if pending_list:
+                reason = reason or "pending_enrichment"
+                res.warnings.append(
+                    f"sanity[{leaf(path)}]: section {path} left in pending_enrichment"
+                )
+            else:
+                res.warnings.append(f"sanity[config]: {path} not interpreted — {reason}")
+            found: set[str] = set()
+            if files:
+                evidence = payload.get("source_files")
+                data = payload.get("data")
+                if isinstance(data, dict):
+                    ev = data.get("evidence_files")
+                    evidence = [*(evidence if isinstance(evidence, list) else []),
+                                *(ev if isinstance(ev, list) else [])]
+                found = files.existing(evidence)
+                if not found and section_probes:
+                    for probe in section_probes:
+                        found |= files.probe(probe) - declared_of(payload, probe)
+                if not found:
+                    found = files.source_roots_glob()
+            label = section_probes[0].label if section_probes else leaf(path)
+            res.gaps.append(_gap("uninterpreted", path, label, payload, reason, found))
+
+    if files is not None:
+        for probe in probes:
+            payload = payload_by_path.get(probe.section_path)
+            if payload is None:
+                res.warnings.append(f"sanity[{probe.label}]: section {probe.section_path} not found")
+                continue
+            status = payload.get("status")
+            if status not in ("ok", "partial", "unknown"):
+                continue  # none / pending_enrichment / failed
+            declared = declared_of(payload, probe)
+            if status in ("ok", "partial"):
+                # A declared file must exist on disk however complete the section is.
+                hallucinated = sorted(f for f in declared if not (files.root / f).is_file())
+                if hallucinated:
+                    preview = ", ".join(hallucinated[:5])
+                    extra = f" (+{len(hallucinated)-5} more)" if len(hallucinated) > 5 else ""
+                    res.warnings.append(
+                        f"sanity[{probe.label}]: {len(hallucinated)} declared file(s) not on disk: {preview}{extra}"
+                    )
+            if probe.section_path in flagged:
+                continue
+            if not getattr(probe, "coverage", True):
+                # Hallucination-only probe: the section is a semantic subset the
+                # glob cannot reproduce, so a coverage ratio would be noise.
+                continue
+            found = files.probe(probe)
+            if not found:
+                continue  # nothing to glob; legit empty case
+            missing = found - declared
+            diff = len(missing) / len(found)
+            if not missing or (status == "ok" and diff <= COVERAGE_GAP_THRESHOLD):
+                continue
+            miss_preview = ", ".join(sorted(missing)[:5])
+            miss_extra = f" (+{len(missing)-5} more)" if len(missing) > 5 else ""
+            res.warnings.append(
+                f"sanity[{probe.label}]: declared {len(declared)} of {len(found)} filesystem matches "
+                f"({diff:.0%} missing). Missing: {miss_preview}{miss_extra}"
+            )
+            res.gaps.append(_gap(
+                "coverage", probe.section_path, probe.label, payload,
+                f"{len(missing)} of {len(found)} filesystem matches not declared",
+                missing, declared=len(declared), found=len(found),
+                missing_pct=round(100 * len(missing) / len(found), 1),
+            ))
+
+    res.gaps.sort(key=lambda g: (g["kind"], g["section_path"], g["label"]))
     return res
+
+
+def write_gaps(path: Path, gaps: list[dict]) -> None:
+    """Write `recon_gaps.json` (atomic, deterministic — no timestamps)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc = {"schema_version": GAPS_SCHEMA_VERSION, "items": gaps}
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(doc, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp.replace(path)
 
 
 # ---------------------------------------------------------------------------
@@ -1080,12 +1239,20 @@ def main(argv: Optional[list[str]] = None) -> int:
                         help="Run recipe-driven sanity probes (filesystem coverage)")
     parser.add_argument("--project-root", type=Path, default=None,
                         help="Project root for --sanity (default: parent of --review-root)")
+    parser.add_argument("--gaps-out", type=Path, default=None,
+                        help="With --sanity: write the recon gaps JSON here (always written, "
+                             "empty `items` when there are none)")
     args = parser.parse_args(argv)
+    if args.gaps_out is not None and not args.sanity:
+        parser.error("--gaps-out requires --sanity")
 
     review_root = args.review_root.resolve()
     context_path = review_root / "CONTEXT.md"
+    gaps: list[dict] = []
     if not context_path.is_file():
         print(f"error: CONTEXT.md not found in {review_root}", file=sys.stderr)
+        if args.gaps_out is not None:
+            write_gaps(args.gaps_out, gaps)
         return 2
 
     res = validate_context_file(context_path)
@@ -1093,6 +1260,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         s = sanity_check(review_root, project_root=args.project_root)
         res.errors.extend(s.errors)
         res.warnings.extend(s.warnings)
+        gaps = s.gaps if s.ok() else []
+    if args.gaps_out is not None:
+        write_gaps(args.gaps_out, gaps)
 
     for w in res.warnings:
         print(f"WARNING: {w}", file=sys.stderr)

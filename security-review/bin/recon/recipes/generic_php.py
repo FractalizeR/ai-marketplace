@@ -50,6 +50,10 @@ EXCLUDE_PATHS: tuple[str, ...] = (
     "vendor/", "node_modules/", "tests/", "test/", "Tests/", "Test/", "*.min.js",
 )
 
+# Roots the sanity gap collector globs for `*.php` when a section has no probe
+# of its own (validate_context.py --sanity --gaps-out).
+SOURCE_ROOTS: tuple[str, ...] = ("src", "app")
+
 
 # ---------------------------------------------------------------------------
 # Detect: floor for "looks like a PHP project at all".
