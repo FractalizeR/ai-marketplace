@@ -1,4 +1,4 @@
-"""CodexAdapter token + section rendering tests (parallel to test_opencode_adapter)."""
+"""CodexAdapter token + section rendering tests."""
 
 import unittest
 
@@ -42,7 +42,7 @@ class TokenRenderTests(unittest.TestCase):
         )
 
     def test_args_renders_neutral_phrase_not_identity(self):
-        # Diverges from OpenCode: Codex has no $ARGUMENTS substitution.
+        # Codex has no $ARGUMENTS substitution.
         out = self.a.render_segment(_seg(CAT_ARGS, "$ARGUMENTS"))
         self.assertEqual(out, CODEX_ARGS_PHRASE)
         self.assertNotIn("$ARGUMENTS", out)

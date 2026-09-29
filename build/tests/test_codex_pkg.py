@@ -97,6 +97,16 @@ class BundleTopologyTests(unittest.TestCase):
         self.assertTrue(refs, "no read-follow refs found in skills")
         self.assertTrue(refs <= produced, f"dangling refs: {refs - produced}")
 
+    def test_every_runtime_bin_module_bundled(self):
+        # Every non-test .py under bin/ must be present in the bundle.
+        src_bin = PLUGIN_ROOT / "bin"
+        for src in src_bin.rglob("*.py"):
+            rel = src.relative_to(src_bin)
+            if "tests" in rel.parts or "__pycache__" in rel.parts:
+                continue
+            with self.subTest(module=str(rel)):
+                self.assertTrue((self.core / "bin" / rel).is_file(), f"missing {rel}")
+
     def test_deterministic_across_builds(self):
         with tempfile.TemporaryDirectory() as d2:
             out2 = Path(d2) / "codex"
@@ -108,6 +118,23 @@ class BundleTopologyTests(unittest.TestCase):
             self.assertEqual(set(a), set(b))
             for rel in a:
                 self.assertEqual(a[rel], b[rel], f"byte drift in {rel}")
+
+
+class BundleWalkFilterTests(unittest.TestCase):
+    def test_excludes_fixtures_bytecode_and_junk(self):
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d)
+            (src / "keep.py").write_text("x", encoding="utf-8")
+            (src / "sub").mkdir()
+            (src / "sub" / "also.py").write_text("y", encoding="utf-8")
+            (src / "tests").mkdir()
+            (src / "tests" / "fixture.py").write_text("z", encoding="utf-8")
+            (src / "__pycache__").mkdir()
+            (src / "__pycache__" / "c.pyc").write_text("b", encoding="utf-8")
+            (src / "stray.pyc").write_text("b", encoding="utf-8")
+            (src / ".DS_Store").write_text("junk", encoding="utf-8")
+            got = {rel.as_posix() for _, rel in bundle._iter_bundled_files(src)}
+            self.assertEqual(got, {"keep.py", "sub/also.py"})
 
 
 def _iter_refs(text):
@@ -184,16 +211,22 @@ class WritePathGuardTests(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertTrue((build._HARNESS_CODEX / "plugin.json").is_file(), "sources survived")
 
-    def test_guard_refuses_opencode_sentinel(self):
-        # L2: a codex write must not clobber an OpenCode bundle (foreign sentinel).
+    def test_guard_refuses_foreign_dir_with_adapter_json(self):
+        # Regression: adapter.json is a common filename and a git-tracked SOURCE
+        # file — it must NOT mark a foreign dir as a clobber-safe bundle.
         with tempfile.TemporaryDirectory() as d:
-            foreign = Path(d) / "opencode-bundle"
+            foreign = Path(d) / "someones-tool"
             foreign.mkdir()
-            (foreign / bundle.BUNDLE_MARKER).write_text("x", encoding="utf-8")
-            (foreign / "precious.txt").write_text("keep", encoding="utf-8")
+            (foreign / "adapter.json").write_text("{}", encoding="utf-8")
+            (foreign / "precious.txt").write_text("keep me", encoding="utf-8")
             rc = build.main(["--harness=codex", "--mode=write", "--out", str(foreign)])
             self.assertEqual(rc, 2)
             self.assertTrue((foreign / "precious.txt").is_file())
+
+    def test_guard_unit_allows_nonexistent_and_dist(self):
+        with tempfile.TemporaryDirectory() as d:
+            build._guard_out(Path(d) / "does-not-exist")  # no raise
+        build._guard_out(build._DIST_ROOT / "codex")      # under repo dist/ is always ours
 
     def test_guard_allows_prior_codex_bundle(self):
         with tempfile.TemporaryDirectory() as d:
@@ -203,20 +236,9 @@ class WritePathGuardTests(unittest.TestCase):
             self.assertTrue((out / ".fr-codex-bundle").is_file())
 
     def test_guard_refuses_dist_root(self):
-        # HIGH: writing AT dist/ would swap the whole dist/ (every harness) aside.
+        # HIGH: writing AT dist/ would swap the whole dist/ aside.
         with self.assertRaises(ValueError):
-            build._guard_out(build._DIST_ROOT, marker=bundle.CODEX_BUNDLE_MARKER)
-
-    def test_guard_refuses_foreign_sentinel_one_level_down(self):
-        # HIGH: the other harness's marker may sit one level below --out (dist case).
-        with tempfile.TemporaryDirectory() as d:
-            container = Path(d) / "container"
-            (container / "opencode").mkdir(parents=True)
-            (container / "opencode" / bundle.BUNDLE_MARKER).write_text("x", encoding="utf-8")
-            (container / "keep.txt").write_text("keep", encoding="utf-8")
-            rc = build.main(["--harness=codex", "--mode=write", "--out", str(container)])
-            self.assertEqual(rc, 2)
-            self.assertTrue((container / "opencode" / bundle.BUNDLE_MARKER).is_file())
+            build._guard_out(build._DIST_ROOT)
 
     def test_traversal_name_writes_nothing(self):
         # HIGH: a `../../evil` plugin name must not escape the staging dir on write.

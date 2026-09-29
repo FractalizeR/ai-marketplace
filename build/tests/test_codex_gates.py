@@ -21,7 +21,7 @@ class OutputGateUnitTests(unittest.TestCase):
         self.assertEqual(check_codex_output(CLEAN_SKILL, is_skill=True), [])
 
     def test_args_is_forbidden_for_codex(self):
-        # Diverges from OpenCode (which keeps $ARGUMENTS).
+        # $ARGUMENTS must not survive.
         self.assertTrue(check_codex_output(CLEAN_SKILL.replace("body", "$ARGUMENTS"),
                                            is_skill=True))
 

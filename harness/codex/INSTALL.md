@@ -154,7 +154,7 @@ identical — same target revision, same `{high, fast}` models, same `--console-
 
 ## Permissions & offline posture
 
-Codex has no `opencode.json`-style permission file. The security posture rests on the
+Codex has no permission-config file. The security posture rests on the
 `codex exec` sandbox the dispatcher uses:
 
 - **`-s workspace-write`** — workers may write only their worktree plus the explicit
@@ -163,7 +163,7 @@ Codex has no `opencode.json`-style permission file. The security posture rests o
 - **Approval defaults to `never`** headless — no interactive prompt to hang on.
 - **No network** — `codex exec` under `workspace-write` has no `webfetch`/`websearch`
   surface and network access is disabled by default; the methodology is static and
-  offline, matching the OpenCode sibling's `webfetch/websearch: deny` promise. Verify
+  offline. Verify
   this default in your Codex config before a hostile-repo audit.
 - **Read scope of `$FR_SECURITY_CORE_ROOT`** — each worker must *read* `${FR_SECURITY_CORE_ROOT}/agents/*.md`,
   `${FR_SECURITY_CORE_ROOT}/bin/*.py`, and the checklists, which live **outside** `project_root`

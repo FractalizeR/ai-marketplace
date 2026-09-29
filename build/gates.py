@@ -1,4 +1,4 @@
-"""Structural gates for derived OpenCode artifacts.
+"""Structural gates for derived Codex artifacts.
 
 There is no byte oracle for a non-Claude harness (the Claude round-trip proves we
 do not corrupt the authoritative files, not that the derived prose is portable).
@@ -6,17 +6,16 @@ These gates are the negative+positive safety net that proves the section-fold
 *mechanism* consumed every coupled span:
 
   * no-leak — none of the Claude-specific tokens survive (CORE_ROOT, Task, AUQ,
-    MCP). Sourced from ``tokens.REGISTRY`` so it tracks the registry, not a
-    hand-list (catches the bare ``Task subagent_type=`` form). ``$ARGUMENTS`` is
-    deliberately NOT forbidden — OpenCode supports it natively.
-  * frontmatter — the synthesized leading block carries no Claude command keys
-    (``allowed-tools`` / ``argument-hint``); body prose may mention them.
-  * xref — no sibling-artifact *file* ref (``security-project.md``) survives; the
+    MCP, ``$ARGUMENTS``). Sourced from ``tokens.REGISTRY`` so it tracks the registry,
+    not a hand-list (catches the bare ``Task subagent_type=`` form).
+  * frontmatter — a skill carries non-empty ``name`` + ``description`` and no Claude
+    command keys (``allowed-tools`` / ``argument-hint``); a worker agent carries none.
+  * xref — no orchestrator *file* ref (``security-project.md``) survives; the
     standalone skill cannot resolve it.
 
-Semantic correctness of the authored templates is out of scope here (it is the 2C
-live gate); a cheap template↔dispatcher structural assertion lives in
-``check_dispatch_template``.
+Semantic correctness of the authored templates is out of scope here (it is the live
+gate); a cheap template↔dispatcher structural assertion lives in
+``check_codex_dispatch_template``.
 """
 
 from __future__ import annotations
@@ -26,17 +25,11 @@ import re
 from tokens import REGISTRY
 from extract import CAT_ARGS, CAT_AUQ, CAT_CORE_ROOT, CAT_MCP, CAT_TASK
 
-# Claude-specific categories that must never survive into an OpenCode artifact.
-_FORBIDDEN_CATS = (CAT_CORE_ROOT, CAT_TASK, CAT_AUQ, CAT_MCP)
-# Codex adds $ARGUMENTS (no Codex substitution → must render to a neutral phrase).
+# Claude-specific categories that must never survive into a Codex artifact;
+# $ARGUMENTS is included (no Codex substitution → must render to a neutral phrase).
 CODEX_FORBIDDEN_CATS = (CAT_CORE_ROOT, CAT_TASK, CAT_AUQ, CAT_MCP, CAT_ARGS)
 _FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 _FM_FORBIDDEN_KEY = re.compile(r"(?m)^(allowed-tools|argument-hint):")
-# Any sibling-artifact *file* ref (command OR agent) is unresolvable in a standalone
-# skill — covers security-{project,changes,recon,refute}.md and agents/ prefixes.
-_XREF_FILE_RE = re.compile(
-    r"\b(?:agents/)?security(?:-project|-changes|-recon|-refute)?\.md\b"
-)
 # Codex worker prose is a bundled read-follow file, so agent-role refs
 # (agents/*.md, security-recon.md, security-refute.md) MUST survive; only the two
 # ORCHESTRATOR refs are unresolvable in a skill body (C1/E-C9).
@@ -54,33 +47,19 @@ DISPATCH_ANCHORS = frozenset({
 })
 
 
-def forbidden_patterns(cats=_FORBIDDEN_CATS) -> list[tuple[str, re.Pattern[str]]]:
+def forbidden_patterns(cats) -> list[tuple[str, re.Pattern[str]]]:
     return [(c, re.compile(REGISTRY[c].leak_pattern)) for c in cats]
 
 
 def _leak_violations(text: str, cats) -> list[str]:
     """No-leak scan sourced from ``tokens.REGISTRY`` (tracks the registry, not a
-    hand-list) — harness-neutral so OpenCode and Codex share it (AC6)."""
+    hand-list) — shared by every derived-artifact gate."""
     out: list[str] = []
     for cat, pat in forbidden_patterns(cats):
         m = pat.search(text)
         if m:
             out.append(f"leak[{cat}]: {m.group(0)!r}")
     return out
-
-
-def check_opencode_output(text: str) -> list[str]:
-    """Return a list of gate violations for one derived artifact (empty = clean)."""
-    violations = _leak_violations(text, _FORBIDDEN_CATS)
-    fm = _FRONTMATTER_RE.match(text)
-    if fm:
-        key = _FM_FORBIDDEN_KEY.search(fm.group(1))
-        if key:
-            violations.append(f"frontmatter carries Claude key: {key.group(1)!r}")
-    xref = _XREF_FILE_RE.search(text)
-    if xref:
-        violations.append(f"unresolved sibling-artifact file ref: {xref.group(0)!r}")
-    return violations
 
 
 def _nonempty_value(match) -> bool:
@@ -124,23 +103,6 @@ def check_codex_output(text: str, *, is_skill: bool) -> list[str]:
     return violations
 
 
-# Each dispatch template must wire the full external-process invocation, so a
-# template of pure prose (or one that forgot the agent/model) is caught cheaply.
-# These are the structural invariants every worker/recon/refute dispatch shares;
-# the forwarded per-role fields (slice_id vs batch_index vs project_root) differ,
-# so they are NOT asserted here (that would overfit per anchor).
-def check_dispatch_template(text: str) -> list[str]:
-    """Structural template↔dispatcher assertion for a worker/recon/refute template."""
-    out: list[str] = []
-    if "opencode run" not in text:
-        out.append("dispatch template does not mention `opencode run`")
-    if "--agent " not in text:
-        out.append("dispatch template does not target a worker via `--agent <name>`")
-    if "-m " not in text:
-        out.append("dispatch template does not wire model tiering (`-m`)")
-    return out
-
-
 # Codex has no named agents: a worker gets its role prose by reading a bundled
 # `agents/<role>.md` file and following it. The dispatch template must wire the
 # full `codex exec` invocation with tiering, the composite-repo write dir, and a
@@ -158,7 +120,7 @@ def check_codex_dispatch_template(text: str) -> list[str]:
         out.append("dispatch template does not wire model tiering (`-m`)")
     # --add-dir is the composite-repo write invariant: review_root lies outside
     # project_root, and a workspace-write worker would otherwise fail to write its
-    # wave file silently (M1-DS/E-C5 — same forgot-a-flag class as the OpenCode `--`).
+    # wave file silently (M1-DS/E-C5 — a forgot-a-flag class).
     if "--add-dir" not in text:
         out.append("dispatch template does not grant the review_root write dir (`--add-dir`)")
     # -o <file> captures the worker's last message — the partial safety net every

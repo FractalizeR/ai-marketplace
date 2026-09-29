@@ -13,7 +13,7 @@ claude plugin validate .
 echo "Plugin validation passed."
 
 # Multi-environment build gate (fast): byte-identity of the Claude artifacts +
-# the build test suite. The slow ~1130-test engine suite stays manual / CI.
+# the build test suite. The slow ~1660-test engine suite stays manual.
 if ! command -v python3 &>/dev/null; then
   echo "ERROR: 'python3' not found. Install Python 3 to run the build gate."
   exit 1
@@ -21,9 +21,6 @@ fi
 
 echo "Running build byte-identity check..."
 python3 build/build.py --harness=claude --mode=check
-
-echo "Running OpenCode derivation structural gates..."
-python3 build/build.py --harness=opencode --mode=check
 
 echo "Running Codex derivation structural gates..."
 python3 build/build.py --harness=codex --mode=check

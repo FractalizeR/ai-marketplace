@@ -33,7 +33,7 @@ sync (the registry-coverage test enforces that every category is classified).
 | 5 | `task_block` | ACTIVE_PARSED (echo) | 6 directives | project 276/409/515, changes 333/472/547. Two syntaxes: **paren** `Task(subagent_type="…", [model=…,] prompt="""…""")` (4) and **bare** `Task subagent_type=… prompt="…"` (2). Attrs: `syntax_variant`, `subagent_type`, `model` (raw + `is_template`), `prompt_body`, `fence_context`, `is_directive`. Prose `Task(...)` mentions (project:122 / changes:126) are **not** tagged. |
 | 6 | `auq` (`AskUserQuestion`) | ACTIVE_PARSED (echo) | 6 body | project 38/242/268/308 + labeled-block 347; changes 317. (Frontmatter entries project:26 / changes:31 are subsumed by `cmd_frontmatter`.) Attrs: `occurrence_kind` ∈ {prose-mention (5), labeled-block (1)}. Choices→flags + non-interactive fallbacks live in `PROSE_COUPLING.md`. |
 | 7 | `mcp_ref` (`mcp__phpstorm__*`) | ACTIVE_PARSED (echo) | 5 | changes 393/410; security 34/88/176. All framed as optional ("if available"). Attr: `tool`, `optional=true`. |
-| 8 | `deferred_tools` (bare `Read`/`Write`/`Grep` …, `Grep(pattern=…)`) | DEFERRED | n/a | Double as English words → tagging risks false positives. Passthrough as neutral; allow-listed in the no-leak scan. Phase 2 decides their codex/opencode handling. |
+| 8 | `deferred_tools` (bare `Read`/`Write`/`Grep` …, `Grep(pattern=…)`) | DEFERRED | n/a | Double as English words → tagging risks false positives. Passthrough as neutral; allow-listed in the no-leak scan. Phase 2 decides their codex handling. |
 
 ## Deliberately-NEUTRAL (negative guards)
 
@@ -47,8 +47,7 @@ must never tag them (guarded by tests):
 ## Out of scope for Phase 1
 
 Bare tool names and structured tool-calls are deferred. Frontmatter is echoed
-opaque (not re-serialized). Codex/OpenCode renderers are not implemented; their
-adapters raise `NotImplementedError`.
+opaque (not re-serialized).
 
 **Nested tokens inside Task bodies.** A point token (e.g. `${CLAUDE_PLUGIN_ROOT}`)
 that ever appears *inside* a `prompt="""…"""` body is subsumed into the

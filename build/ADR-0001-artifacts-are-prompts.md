@@ -6,7 +6,7 @@ Status: accepted (Phase 1 of the multi-environment build).
 
 The five authoritative artifacts (`commands/*.md`, `agents/*.md`) are not data
 files — they are **natural-language instructions to an LLM orchestrator**. The
-multi-environment build derives Codex/OpenCode artifacts from this
+multi-environment build derives Codex artifacts from this
 Claude-authoritative prose through a harness-neutral IR.
 
 It is tempting to model harness-specificity as a finite set of *tokens*
@@ -16,7 +16,7 @@ everything else as portable prose to echo verbatim. That assumption is wrong.
 ## Decision
 
 Harness-specificity is **also dissolved into narrative prose**. Examples that
-would emit *broken* instructions if echoed verbatim into a Codex/OpenCode
+would emit *broken* instructions if echoed verbatim into a Codex
 artifact:
 
 - "launch in parallel in one block of Task calls", "maximum 6 parallel Task calls".
@@ -26,8 +26,8 @@ artifact:
 - every `AskUserQuestion` checkpoint, whose choices and fallbacks are described
   in prose, not encoded.
 
-Crucially, **in-process `Task` fan-out has no Codex/OpenCode prose equivalent.**
-Codex `codex exec` and OpenCode `opencode run` are external-process dispatch with
+Crucially, **in-process `Task` fan-out has no Codex prose equivalent.**
+`codex exec` is external-process dispatch with
 no in-conversation Task primitive and no interactive-question primitive. A
 working derived artifact therefore requires an external **dispatcher/wrapper**
 and rewritten paragraphs — not a token swap.

@@ -1,8 +1,8 @@
 # fr-security-review — build / install / validation helpers.
-# `make` or `make help` lists targets. Codex/OpenCode bundles land in dist/ (gitignored).
+# `make` or `make help` lists targets. The Codex bundle lands in dist/ (gitignored).
 
 .DEFAULT_GOAL := help
-.PHONY: help build-codex build-opencode install-codex install-opencode install-launchers check test-build test-engine test-triage
+.PHONY: help build-codex install-codex install-launchers check test-build test-engine test-triage
 
 REPO := $(CURDIR)
 BINDIR ?= $(HOME)/.local/bin
@@ -14,14 +14,8 @@ help: ## List available targets
 build-codex: ## Build the Codex bundle into dist/codex
 	python3 build/build.py --harness=codex --mode=write --out=dist/codex
 
-build-opencode: ## Build the OpenCode bundle into dist/opencode
-	python3 build/build.py --harness=opencode --mode=write --out=dist/opencode
-
 install-codex: ## Build + register + install the Codex plugin (self-hosted marketplace)
 	./scripts/install-codex.sh
-
-install-opencode: ## Build + install OpenCode commands/agents (OPENCODE_SCOPE=global|project)
-	./scripts/install-opencode.sh
 
 install-launchers: ## Install the `frsr` launcher into BINDIR (default ~/.local/bin)
 	@mkdir -p "$(BINDIR)"
@@ -30,11 +24,10 @@ install-launchers: ## Install the `frsr` launcher into BINDIR (default ~/.local/
 	@echo "Installed $(BINDIR)/frsr (repo baked as $(REPO))"
 	@case ":$$PATH:" in *":$(BINDIR):"*) : ;; \
 		*) echo "WARNING: $(BINDIR) is not on PATH — add it to your shell rc" ;; esac
-	@echo "Try: frsr project --harness opencode --dry-run"
+	@echo "Try: frsr project --harness codex --dry-run"
 
-check: ## Full local validation gate (3-harness anti-drift + build + engine + triage + plugin validate + leak check)
+check: ## Full local validation gate (2-harness anti-drift + build + engine + triage + plugin validate + leak check)
 	python3 build/build.py --harness=claude   --mode=check
-	python3 build/build.py --harness=opencode --mode=check
 	python3 build/build.py --harness=codex    --mode=check
 	python3 -m unittest discover -s build/tests
 	python3 -m unittest discover -s security-review/bin/tests

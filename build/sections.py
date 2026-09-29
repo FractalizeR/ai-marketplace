@@ -4,7 +4,7 @@
 module gives an independent *section* partition of the **same** text, split at
 markdown headings (`#`..`####`). Both cover the exact source with no gaps. The
 Claude build never uses this layer (it stays on the token fold → byte-identical);
-the OpenCode build walks sections, replacing harness-coupled ones with authored
+the Codex build walks sections, replacing harness-coupled ones with authored
 templates and token-folding the rest (see ADR-0001 / the Phase-2B plan).
 
 Boundary rule (AD-2B6): a `^#{1,4} ` line is a section boundary **only** when it is
@@ -191,7 +191,7 @@ def assert_coupling_guards(sections: list[Section]) -> None:
 
     `task_block` tokens and `labeled-block` AskUserQuestion tokens have no benign
     prose form — if one lands in a section with no pin, the register is incomplete
-    and the OpenCode build would echo a broken instruction. Fail loudly instead.
+    and the Codex build would echo a broken instruction. Fail loudly instead.
     Requires `attach_segments` + `detect_coupling` to have run first.
     """
     for s in sections:

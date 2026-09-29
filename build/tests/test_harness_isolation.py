@@ -1,9 +1,9 @@
 """Guard: the Claude path can never be routed through the section-fold layer.
 
 Claude byte-identity is structurally protected only because the Claude adapter
-uses the token fold (`build`) and the OpenCode build alone walks sections
+uses the token fold (`build`) and the Codex build alone walks sections
 (`build_sectioned`). A future refactor that gave ClaudeAdapter a `render_section`
-or routed `--harness=claude` through `_run_opencode` would silently break that —
+or routed `--harness=claude` through `_run_codex` would silently break that —
 these tests fail first.
 """
 
@@ -15,7 +15,6 @@ from adapters import (
     ClaudeAdapter,
     CodexAdapter,
     FakeAdapter,
-    OpenCodeAdapter,
     get_adapter,
 )
 
@@ -26,8 +25,7 @@ class ClaudeIsolationTests(unittest.TestCase):
         self.assertFalse(hasattr(ClaudeAdapter(), "render_section"))
         self.assertFalse(hasattr(FakeAdapter(), "render_section"))
 
-    def test_section_walking_adapters_have_render_section(self):
-        self.assertTrue(hasattr(OpenCodeAdapter(), "render_section"))
+    def test_codex_adapter_has_render_section(self):
         self.assertTrue(hasattr(CodexAdapter(), "render_section"))
 
     def test_codex_in_adapter_map(self):

@@ -2,7 +2,7 @@
 
 The artifacts are **LLM prompts**, so harness-specificity is not confined to the
 token inventory (`TOKENS.md`) — it is partly dissolved into narrative prose that
-a Codex/OpenCode renderer must *rewrite*, not merely re-tokenize. This register
+a Codex renderer must *rewrite*, not merely re-tokenize. This register
 names those spans so the section-fold derivation (Phase 2B) knows exactly which
 `### N` sections to replace with adapter-authored prose.
 
@@ -12,7 +12,7 @@ section's own computed anchor), a `pinned:` literal (a verbatim substring that
 must still exist in the artifact — a tripwire enforced by
 `tests/test_prose_coupling.py`), the `harness_semantic` it carries, the
 `codex_action` a derived artifact applies, and the `non_interactive_fallback`
-(Codex/OpenCode have no `AskUserQuestion` analog, so every interactive checkpoint
+(Codex have no `AskUserQuestion` analog, so every interactive checkpoint
 needs a no-human path).
 
 **Coupling is PIN-DRIVEN (Phase 2B, AD-2B2):** a section is coupled iff its span
@@ -41,7 +41,7 @@ ONE template, keyed by `(artifact_basename, section_anchor)`.
   section_anchor: "4-recon-phase"
   pinned: "subagent_type="security-recon""
   harness_semantic: "In-process Task(security-recon) dispatch (1x)."
-  codex_action: "Launch 1 external `opencode run` (recon role); preserve the recon_inventory.py / validate_context.py / skip-recon fingerprint logic interwoven in this section."
+  codex_action: "Launch 1 external `codex exec` (recon role); preserve the recon_inventory.py / validate_context.py / skip-recon fingerprint logic interwoven in this section."
   non_interactive_fallback: "Always run recon; no human gate."
 
 - id: recon-quality
@@ -73,7 +73,7 @@ ONE template, keyed by `(artifact_basename, section_anchor)`.
   section_anchor: "8-parallel-worker-launch"
   pinned: "maximum 6 parallel Task calls at once"
   harness_semantic: "In-process Task fan-out, batches of <=6 workers."
-  codex_action: "Launch <=6 external `opencode run -m <tier>` processes via the dispatcher, one per wave (no in-process Task primitive)."
+  codex_action: "Launch <=6 external `codex exec -m <tier>` processes via the dispatcher, one per wave (no in-process Task primitive)."
   non_interactive_fallback: "Bounded concurrency 6; no human input needed."
 
 - id: worker-model-arg
@@ -97,7 +97,7 @@ ONE template, keyed by `(artifact_basename, section_anchor)`.
   section_anchor: "11-5-1-launching-the-refute-wave"
   pinned: "parallelism is **forbidden**"
   harness_semantic: "Refute pass is sequential (single refute.md writer)."
-  codex_action: "Sequential `opencode run` per <=20-finding batch; never parallel."
+  codex_action: "Sequential `codex exec` per <=20-finding batch; never parallel."
   non_interactive_fallback: "Same: sequential, single writer."
 
 # ---- commands/security-changes.md (changes-specific pins, NOT mirrored verbatim) ----
@@ -114,7 +114,7 @@ ONE template, keyed by `(artifact_basename, section_anchor)`.
   section_anchor: "5-recon-phase"
   pinned: "subagent_type="security-recon""
   harness_semantic: "In-process Task(security-recon) dispatch, changes mode (no sanity AUQ here)."
-  codex_action: "Launch 1 external `opencode run` (recon role); preserve the interwoven Python invocations."
+  codex_action: "Launch 1 external `codex exec` (recon role); preserve the interwoven Python invocations."
   non_interactive_fallback: "Always run recon; no human gate."
 
 - id: checkpoint-changes
@@ -130,7 +130,7 @@ ONE template, keyed by `(artifact_basename, section_anchor)`.
   section_anchor: "10-parallel-worker-launch-in-mode-changes"
   pinned: "subagent_type="security""
   harness_semantic: "In-process Task fan-out (changes mode), <=6 workers, per-wave model."
-  codex_action: "Launch <=6 external `opencode run -m <tier>` via the dispatcher, one per wave."
+  codex_action: "Launch <=6 external `codex exec -m <tier>` via the dispatcher, one per wave."
   non_interactive_fallback: "Bounded concurrency 6; persisted/CLI model map."
 
 - id: write-safety-net-changes
@@ -146,14 +146,14 @@ ONE template, keyed by `(artifact_basename, section_anchor)`.
   section_anchor: "12-5-1-launching-the-refute-wave"
   pinned: "subagent_type=security-refute"
   harness_semantic: "Sequential refute pass (single refute.md writer), changes mode."
-  codex_action: "Sequential `opencode run` per <=20-finding batch; never parallel."
+  codex_action: "Sequential `codex exec` per <=20-finding batch; never parallel."
   non_interactive_fallback: "Same: sequential, single writer."
 ```
 
 ## ADR pointer
 
 See `ADR-0001-artifacts-are-prompts.md`: later renderers rewrite prose, not only
-tokens — and in-process `Task` fan-out has **no** Codex/OpenCode prose
+tokens — and in-process `Task` fan-out has **no** Codex prose
 equivalent, so it requires an external dispatcher/wrapper, not a paragraph
 rewrite. This register is the inventory of exactly those rewrites; the
 section-fold build (Phase 2B) consumes it as the sole coupling driver.
