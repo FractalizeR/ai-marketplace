@@ -4,6 +4,22 @@ All notable changes to this plugin will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.0] — 2026-09-29
+
+### Every report says what produced it
+
+#### Added
+
+- **Run snapshot.** Wave planning writes `<review_root>/run_info.json` (`plan_waves.py --save-run-info`, new module `bin/run_info.py`): plugin version, harness (`claude` / `codex`, plus the Codex bundle version), orchestrator model, the model of each tier and the waves planned on it, and on Codex the reasoning effort and `model` from `config.toml`. On Claude the tiers are recorded as the `opus` / `sonnet` aliases the harness resolves; the orchestrator id comes from `--orchestrator-model` when the orchestrator knows its exact id, else `unknown`. On Codex the tier ids come from `.model_map.json` and the orchestrator id from `frsr`.
+- **`## Run` in REPORT.md and a top-level `run` block in `findings.json`**, read from the snapshot. `findings.json` stays `schema_version` 1 (the key is additive). Dedupe never re-derives the snapshot, so re-running it after triage from another 5.1+ plugin tree keeps the attribution and the bytes of `findings.json`. A review root without a snapshot (or with an unreadable one, with a warning) reports `Run metadata: not recorded`; the first 5.1 dedupe over a pre-5.1 review root therefore adds `run` and changes the bytes once, which a triage bound to the old `findings.json` sees as stale.
+- **The Codex build stamps `core/build_info.json`** (harness, engine version, bundle version); the snapshot tells the harness from it, never from the presence of `.model_map.json`.
+- **`frsr` prints both tiers and the reasoning effort in effect**, and warns (without stopping) when the high tier differs from `model` in the Codex `config.toml` (`$CODEX_HOME` or `~/.codex`; a selected `profile` overrides the top level). The config is read with `tomllib`; on Python < 3.11 (e.g. macOS `/usr/bin/python3`) both values are `unknown` and nothing is compared. It exports `FR_SECURITY_ORCHESTRATOR_MODEL` for the snapshot.
+
+#### Changed
+
+- `model_resolver.py --describe` also reports the `fast` id.
+- `## Estimated cost` (priced on Anthropic tiers) is omitted for a Codex run.
+
 ## [5.0.0] — 2026-09-29
 
 ### Fewer mechanisms: one audit mode, one derived harness, no self-refute; recon gaps become a wave instead of a stop

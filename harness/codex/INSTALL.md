@@ -114,6 +114,12 @@ Its own options come first; orchestrator flags go after `--`:
 frsr project --models high=<id>,fast=<id> --go -- --no-console --quick
 ```
 
+Before running, `frsr` prints both tiers and the `model_reasoning_effort` in effect
+(workers inherit it from `config.toml`), and warns when the high tier differs from
+`model` there. It also records the high tier as the orchestrator model in the run
+snapshot (`## Run` in REPORT.md); an orchestrator started by hand runs on the
+session's model, which is recorded only if it states its exact id, else `unknown`.
+
 The audit reports findings recall-first and has no false-positive pass of its own:
 to filter false positives, run the `fr-audit-triage` Claude Code plugin
 (`/fr-audit-triage:triage-findings`) on `<review_root>/findings.json`.
