@@ -18,7 +18,7 @@ cachebuster per §6) in one idempotent command, then prints the `FR_SECURITY_COR
 make install-codex
 ```
 
-Steps 3–5 (export `FR_SECURITY_CORE_ROOT`, resolve models, run) still happen in the session where
+Steps 3–5 (export `FR_SECURITY_CORE_ROOT`, set model tiers, run) still happen in the session where
 you run the audit. The manual walkthrough below explains each step.
 
 ## 1. Build the bundle
@@ -79,21 +79,22 @@ echo "$FR_SECURITY_CORE_ROOT"   # verify — if empty, every ${FR_SECURITY_CORE_
 
 The worker read-follow files live at `$FR_SECURITY_CORE_ROOT/agents/{security,security-recon}.md`.
 
-## 4. Resolve models
+## 4. Set model tiers
 
-The wave dispatcher tiers workers into `{high, fast}` (trust-boundary waves on
-`high`, mechanical data-flow waves on `fast`). Discover and pin the tier map:
+The wave dispatcher tiers workers into `{high, fast}` (recon, trust-boundary and
+recon-gap waves on `high`, mechanical data-flow waves on `fast`). Nothing picks the
+models for you — name both tiers explicitly:
 
 ```bash
-codex debug models                               # inspect what your account exposes
+codex debug models                               # list the ids your account exposes
 python3 "$FR_SECURITY_CORE_ROOT/bin/shared/model_resolver.py" \
-  --discovery-cmd "codex debug models" \
+  --models high=<id>,fast=<id> \
   --review-root security-review-codex
 ```
 
-This writes `<review_root>/.model_map.json`, reused on re-runs (pass `--remodel`
-to re-resolve). It is non-interactive by default; add `--interactive` to confirm or
-override the proposed tiers at a stdin checkpoint.
+Both tiers are required. This writes `<review_root>/.model_map.json`, which later
+runs reuse; pass `--models` again to change it. With neither `--models` nor a saved
+map the resolver exits 2, and the audit stops before recon.
 
 ## 5. Run an audit
 
@@ -105,6 +106,17 @@ root you choose. Recon and each worker run
 as independent `codex exec` processes that **read and follow** the bundled
 `$FR_SECURITY_CORE_ROOT/agents/<role>.md` file — Codex has no named agents, so role prose is
 delivered as a file, not a `--agent` handle.
+
+The `frsr` launcher (`make install-launchers`) does steps 3–5 from any directory.
+Its own options come first; orchestrator flags go after `--`:
+
+```bash
+frsr project --models high=<id>,fast=<id> --go -- --no-console --quick
+```
+
+The audit reports findings recall-first and has no false-positive pass of its own:
+to filter false positives, run the `fr-audit-triage` Claude Code plugin
+(`/fr-audit-triage:triage-findings`) on `<review_root>/findings.json`.
 
 ## 6. Updating during local development
 

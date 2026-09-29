@@ -37,7 +37,7 @@ CODEX_PLUGIN_CONFIGS = ("adapter.json", "INSTALL.md")
 
 _ADAPTER_REQUIRED = frozenset({
     "entrypoint_kind", "fanout", "worker_invocation", "core_root",
-    "model_discovery_cmd", "tier_defaults", "interactive_gates",
+    "interactive_gates",
     "checkpoint_binding", "permission_config", "manifest_template",
     "marketplace_target",
 })

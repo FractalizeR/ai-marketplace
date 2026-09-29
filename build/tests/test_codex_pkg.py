@@ -175,9 +175,12 @@ class CodexConfigTests(unittest.TestCase):
         adapter = json.loads((HARNESS_ROOT / "adapter.json").read_text(encoding="utf-8"))
         self.assertEqual(check_codex_dispatch_template(adapter["worker_invocation"]), [])
 
-    def test_discovery_cmd_is_codex_debug_models(self):
+    def test_adapter_has_no_model_discovery(self):
+        # Model tiers come only from the operator's --models; nothing discovers them.
         adapter = json.loads((HARNESS_ROOT / "adapter.json").read_text(encoding="utf-8"))
-        self.assertEqual(adapter["model_discovery_cmd"], "codex debug models")
+        for key in ("model_discovery_cmd", "tier_defaults"):
+            self.assertNotIn(key, adapter)
+        self.assertNotIn("model", adapter["interactive_gates"])
 
 
 class InstallDocTests(unittest.TestCase):
