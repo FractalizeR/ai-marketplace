@@ -804,24 +804,37 @@ def _extract_classes(
     *,
     exclude: Optional[tuple[str, ...]] = None,
     warnings: Optional[list[str]] = None,
-) -> list[dict]:
+) -> tuple[list[dict], Optional[str]]:
     """Bulk extract namespace + class names + parents from a directory.
+
+    Returns `(classes, failure)`; `failure` is the `extractor_failed: class:
+    <cause>` reason when the extractor call itself failed (timeout, non-zero
+    exit, bad JSON), so an empty list is never mistaken for an empty `app/`.
 
     `exclude`  — extra exclude prefixes appended to sandbox.DEFAULT_EXCLUDE.
     `warnings` — when provided, extractor failure messages are appended to it
                  (parity with symfony recipe).
     """
     if not scan_root.is_dir():
-        return []
+        return [], None
     result, warn = sandbox.run_extractor(
         plugin_root, project_root, "class", scan_root, exclude=exclude,
     )
     if warn is not None and warnings is not None:
         warnings.append(warn)
     if result is None:
-        return []
+        return [], f"extractor_failed: class: {warn or 'extractor returned no data'}"
     items = result.get("items")
-    return items if isinstance(items, list) else []
+    return (items if isinstance(items, list) else []), None
+
+
+def _partial_on_failure(payload: SectionPayload, failure: Optional[str]) -> SectionPayload:
+    """A section built from the class extractor's output is `partial` when that
+    extractor failed: what it lists is a lower bound, not the whole picture."""
+    if failure and payload.status == "ok":
+        payload.status = "partial"
+        payload.reason = failure
+    return payload
 
 
 def _classes_extending(
@@ -888,10 +901,7 @@ def _classes_implementing(
 
 def _build_attack_surface(
     project_root: Path,
-    plugin_root: Path,
-    *,
-    exclude: Optional[tuple[str, ...]] = None,
-    warnings: Optional[list[str]] = None,
+    classes_app: list[dict],
 ) -> tuple[SectionPayload, list[str]]:
     """Aggregate http_route + cli_command + message_handler + event_listener."""
     items: list[dict] = []
@@ -927,10 +937,6 @@ def _build_attack_surface(
                 })
 
     # 2. Console commands — Console/Commands extending Illuminate\Console\Command.
-    classes_app = _extract_classes(
-        plugin_root, project_root, project_root / "app",
-        exclude=exclude, warnings=warnings,
-    )
     if classes_app:
         sources_used.append("php-extractor:app/")
     commands = _classes_extending(classes_app, ("Illuminate/Console/Command", "Command"))
@@ -1303,13 +1309,6 @@ def _build_routes_authz_matrix(
             source_files=[],
             reason="routes/ directory not found",
         )
-
-    # Index controllers by FQN for quick lookup.
-    classes_by_fqn: dict[str, dict] = {}
-    for cls in classes_app:
-        fqn = cls.get("fqn")
-        if isinstance(fqn, str):
-            classes_by_fqn[fqn.lstrip("\\")] = cls
 
     items: list[dict] = []
     source_files: list[str] = []
@@ -2145,7 +2144,7 @@ def build_inventory(
     stack_laravel: dict[str, SectionPayload] = {}
 
     # Bulk class extraction — used by multiple section builders.
-    classes_app = _extract_classes(
+    classes_app, class_failure = _extract_classes(
         plugin_root, project_root, project_root / "app",
         exclude=exclude, warnings=warnings,
     )
@@ -2155,13 +2154,12 @@ def build_inventory(
     files = _list_php_files(project_root)
 
     # ----- attack_surface -----
-    attack_surface, attack_sources = _build_attack_surface(
-        project_root, plugin_root, exclude=exclude, warnings=warnings,
-    )
+    attack_surface, attack_sources = _build_attack_surface(project_root, classes_app)
+    _partial_on_failure(attack_surface, class_failure)
     sources_used.extend(attack_sources)
 
     # ----- data_access -----
-    data_access = _build_data_access(project_root, classes_app)
+    data_access = _partial_on_failure(_build_data_access(project_root, classes_app), class_failure)
 
     # ----- auth_layer -----
     auth_layer = _build_auth_layer(project_root)
@@ -2211,10 +2209,13 @@ def build_inventory(
     frontend_assets = SectionPayload(status="ok", items=frontend_items)
 
     # ----- recon_bags.stack.laravel.* -----
-    stack_laravel["policies"] = _build_policies(project_root, classes_app)
-    stack_laravel["service_providers"] = _build_service_providers(project_root, classes_app)
+    stack_laravel["policies"] = _partial_on_failure(
+        _build_policies(project_root, classes_app), class_failure)
+    stack_laravel["service_providers"] = _partial_on_failure(
+        _build_service_providers(project_root, classes_app), class_failure)
     stack_laravel["middleware_groups"] = _build_middleware_groups(project_root)
-    stack_laravel["form_requests"] = _build_form_requests(project_root, classes_app)
+    stack_laravel["form_requests"] = _partial_on_failure(
+        _build_form_requests(project_root, classes_app), class_failure)
     # GraphQL (optional — only when library detected).
     gql = detect_graphql(project_root)
     if gql is not None:
@@ -2225,8 +2226,9 @@ def build_inventory(
         )
 
     # 3.4.0 Wave 2-E sections.
-    stack_laravel["routes_authz_matrix"] = _build_routes_authz_matrix(
-        project_root, classes_app, diff_files=diff_files,
+    stack_laravel["routes_authz_matrix"] = _partial_on_failure(
+        _build_routes_authz_matrix(project_root, classes_app, diff_files=diff_files),
+        class_failure,
     )
     stack_laravel["sensitive_columns"] = _build_sensitive_columns(project_root)
     stack_laravel["runtime"] = _build_runtime(project_root)
@@ -2300,7 +2302,7 @@ def build_inventory(
     # Ceiling logic: pure-static recipe with no console enrichment available
     # for queue/event metadata → caller should clamp ceiling=medium.
     return InventoryResult(
-        status="ok",
+        status="partial" if class_failure else "ok",
         core=core,
         recon_bags={"stack": {"laravel": stack_laravel}},
         sources_used=sources_used,

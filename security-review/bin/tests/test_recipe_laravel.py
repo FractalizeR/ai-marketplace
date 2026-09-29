@@ -666,6 +666,107 @@ class FrameworkSpecificSchemaTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Extractor failure
+# ---------------------------------------------------------------------------
+
+
+CLASS_DEPENDENT = (
+    ("core", "attack_surface"),
+    ("core", "data_access"),
+    ("bag", "policies"),
+    ("bag", "service_providers"),
+    ("bag", "form_requests"),
+    ("bag", "routes_authz_matrix"),
+)
+
+
+def _section(result, where, name):
+    return result.core[name] if where == "core" else result.recon_bags["stack"]["laravel"][name]
+
+
+@unittest.skipUnless(_php_available(), "php not on PATH")
+class ExtractorFailurePartialStatus(unittest.TestCase):
+    """A failed class extraction makes every section built from it `partial`
+    with an `extractor_failed: class: <cause>` reason, never a quiet `ok` with
+    an empty list."""
+
+    CAUSE = "extract_php_metadata --kind=class timed out after 1s"
+
+    def _failing(self, cause=None):
+        from unittest import mock
+        from recon import sandbox
+        real = sandbox.run_extractor
+
+        def fake(plugin_root, project_root, kind, target, *args, **kwargs):
+            if kind == "class":
+                return None, cause or self.CAUSE
+            return real(plugin_root, project_root, kind, target, *args, **kwargs)
+
+        return mock.patch.object(sandbox, "run_extractor", side_effect=fake)
+
+    def test_class_dependent_sections_become_partial(self):
+        with self._failing():
+            result = laravel.build_inventory(FIXTURES, plugin_root=PLUGIN_ROOT)
+        self.assertEqual(result.status, "partial")
+        for where, name in CLASS_DEPENDENT:
+            with self.subTest(section=name):
+                payload = _section(result, where, name)
+                self.assertEqual(payload.status, "partial")
+                self.assertEqual(payload.reason, f"extractor_failed: class: {self.CAUSE}")
+        attack = result.core["attack_surface"]
+        self.assertTrue(any(it["kind"] == "http_route" for it in attack.items))
+        self.assertFalse(any(it["kind"] != "http_route" for it in attack.items))
+        self.assertEqual(result.core["data_access"].items, [])
+
+    def test_skipped_after_an_earlier_timeout_is_a_failure_too(self):
+        from recon import sandbox
+        with self._failing(sandbox.EXTRACTOR_SKIPPED_AFTER_TIMEOUT):
+            result = laravel.build_inventory(FIXTURES, plugin_root=PLUGIN_ROOT)
+        self.assertEqual(result.core["attack_surface"].status, "partial")
+        self.assertTrue(result.core["attack_surface"].reason.startswith("extractor_failed: class:"))
+
+    def test_extractor_runs_once_and_its_warning_is_not_duplicated(self):
+        with self._failing():
+            result = laravel.build_inventory(FIXTURES, plugin_root=PLUGIN_ROOT)
+        self.assertEqual(result.warnings.count(self.CAUSE), 1)
+
+    def test_extractor_called_once_per_inventory(self):
+        from unittest import mock
+        from recon import sandbox
+        real = sandbox.run_extractor
+        with mock.patch.object(sandbox, "run_extractor", side_effect=real) as spy:
+            laravel.build_inventory(FIXTURES, plugin_root=PLUGIN_ROOT)
+        self.assertEqual([c.args[2] for c in spy.call_args_list].count("class"), 1)
+
+    def test_project_without_app_dir_is_not_a_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "routes").mkdir()
+            (root / "routes" / "web.php").write_text("<?php\nRoute::get('/', fn () => 1);\n")
+            result = laravel.build_inventory(root, plugin_root=PLUGIN_ROOT)
+        self.assertEqual(result.status, "ok")
+        for where, name in CLASS_DEPENDENT:
+            with self.subTest(section=name):
+                self.assertNotEqual(_section(result, where, name).status, "partial")
+
+    def test_sanity_names_the_extractor_cause_and_confidence_drops(self):
+        import recon_inventory
+        from validate_context import sanity_check
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td) / "review"
+            with self._failing():
+                rc = recon_inventory.cmd_inventory(FIXTURES, "laravel", review_root, None, True)
+            self.assertEqual(rc, 0)
+            res = sanity_check(review_root, project_root=FIXTURES)
+            context = (review_root / "CONTEXT.md").read_text(encoding="utf-8")
+        self.assertIn(
+            f"sanity[extractor]: attack_surface not collected — extractor_failed: class: {self.CAUSE}",
+            res.errors,
+        )
+        self.assertIn("level: low", context)
+
+
+# ---------------------------------------------------------------------------
 # Sanity probes
 # ---------------------------------------------------------------------------
 
