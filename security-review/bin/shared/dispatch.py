@@ -48,7 +48,7 @@ from shared.contracts import (  # noqa: E402
     RunResult,
     WaveCommandBuilder,
 )
-from shared.model_resolver import LABEL_TO_TIER, TierMap  # noqa: E402
+from shared.model_resolver import LABEL_TO_TIER, TierMap, load_tier_map_file  # noqa: E402
 
 MAX_PARALLEL_HARD_CAP = 6
 
@@ -470,10 +470,14 @@ def main(argv: list[str] | None = None, *, runner: Runner | None = None) -> int:
         if not isinstance(plan, list):
             print("Error: plan root is not a list", file=sys.stderr)
             return 2
-        model_map_data = json.loads(args.model_map.read_text(encoding="utf-8"))
-        tier_map = TierMap.from_dict(model_map_data)
-    except (OSError, json.JSONDecodeError, KeyError) as exc:
+    except (OSError, json.JSONDecodeError) as exc:
         print(f"Error: could not load inputs: {exc}", file=sys.stderr)
+        return 2
+    tier_map = load_tier_map_file(args.model_map)
+    if tier_map is None:
+        print(f"Error: {args.model_map} is not a usable tier map; "
+              f"pass --models high=<id>,fast=<id> to model_resolver.py to write one",
+              file=sys.stderr)
         return 2
 
     builder = make_wave_command_builder(args.worker_cmd_template)

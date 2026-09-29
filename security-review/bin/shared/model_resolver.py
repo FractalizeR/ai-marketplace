@@ -89,7 +89,12 @@ def load_persisted(review_root: Path) -> TierMap | None:
     A pre-5.0 map carries `provenance`; only "cli" (an explicit operator
     choice) is trusted, the guessed kinds ("proposed", "collapsed", ...) are not.
     """
-    path = _model_map_path(Path(review_root))
+    return load_tier_map_file(_model_map_path(Path(review_root)))
+
+
+def load_tier_map_file(path: Path) -> TierMap | None:
+    """The trust rule for a tier-map file at any path (see `load_persisted`)."""
+    path = Path(path)
     if not path.is_file():
         return None
     try:

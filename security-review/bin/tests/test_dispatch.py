@@ -380,6 +380,36 @@ class CliTests(unittest.TestCase):
             ], runner=runner)
             self.assertEqual(rc, 0)
 
+    def test_cli_guessed_provenance_map_rejected(self):
+        import io
+        with tempfile.TemporaryDirectory() as d:
+            dd = Path(d)
+            plan_p, mm_p = self._write_inputs(dd)
+            mm_p.write_text(json.dumps({**TM.as_dict(), "provenance": "proposed"}),
+                            encoding="utf-8")
+            calls = []
+
+            def runner(argv, timeout):
+                calls.append(argv)
+                return RunResult(returncode=0, stdout="", stderr="", timed_out=False)
+
+            old_err, sys.stderr = sys.stderr, io.StringIO()
+            try:
+                rc = dp.main([
+                    "--plan", str(plan_p), "--model-map", str(mm_p),
+                    "--project-root", str(dd / "proj"),
+                    "--review-root", str(dd / "review"),
+                    "--core-root", str(dd / "core"),
+                    "--worker-cmd-template", "worker {slice_id} {model}",
+                ], runner=runner)
+                err = sys.stderr.getvalue()
+            finally:
+                sys.stderr = old_err
+            self.assertEqual(rc, 2)
+            self.assertEqual(calls, [])
+            self.assertIn("pre-5.0", err)
+            self.assertIn("--models high=<id>,fast=<id>", err)
+
     def test_cli_gaps_exit1_writes_json(self):
         with tempfile.TemporaryDirectory() as d:
             dd = Path(d)
