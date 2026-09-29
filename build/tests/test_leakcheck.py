@@ -7,6 +7,7 @@ the real repo's working tree, and never depends on a developer's real
 .leakcheck.local (which is gitignored and may or may not exist).
 """
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -18,8 +19,15 @@ import _common
 SCRIPT = _common.REPO_ROOT / "scripts" / "leakcheck.sh"
 
 
+def _env():
+    # A hook-invoked run exports GIT_INDEX_FILE/GIT_DIR/...; they would point the
+    # throwaway repos at the caller's repository.
+    return {k: v for k, v in os.environ.items()
+            if not k.startswith("GIT_") or k == "GIT_CONFIG_GLOBAL"}
+
+
 def _git(repo, *args):
-    subprocess.run(["git", *args], cwd=repo, check=True,
+    subprocess.run(["git", *args], cwd=repo, check=True, env=_env(),
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
@@ -39,7 +47,7 @@ def _write(repo: Path, rel: str, content: str) -> Path:
 
 
 def _run(repo: Path, *args):
-    return subprocess.run([str(SCRIPT), *args], cwd=repo,
+    return subprocess.run([str(SCRIPT), *args], cwd=repo, env=_env(),
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                            text=True)
 
