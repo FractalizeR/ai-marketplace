@@ -4,6 +4,12 @@ All notable changes to this plugin will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.1] — 2026-09-29
+
+### Fixed
+
+- **Workers no longer file real findings as `hardening`.** The worker prompt said "Severity ≥ MEDIUM separates `confirmed` from `hardening`", which read as "low impact → `hardening`" and contradicted the bucket's definition (no victim at all). It now states that a real finding with a victim is at least Medium, and that "no principal or resource is affected" may not rest on a trust assumption about who holds a credential or reaches an interface (that is a `condition_keys` precondition, or `needs_validation`), nor on the project's own documents calling the behavior accepted. This matters because `fr-audit-triage` never turns a `hardening` note into a work unit: a misfiled real finding is lost downstream.
+
 ## [5.1.0] — 2026-09-29
 
 ### Every report says what produced it
