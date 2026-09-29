@@ -19,7 +19,7 @@ One engine, two harnesses:
 
 | | Claude Code | Codex CLI |
 |---|---|---|
-| Entry point | slash commands | a **skill** |
+| Entry point | a slash command | a **skill** |
 | Distribution | marketplace (GitHub) | self-hosted marketplace bundle |
 | Worker fan-out | native `Task(model=…)` | `codex exec -m <tier>` processes |
 | Source of truth | **authoritative prose** | derived from Claude |

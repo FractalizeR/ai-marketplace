@@ -159,7 +159,7 @@ Both sources are merged with the built-in `DEFAULT_EXCLUDE` (they do not replace
 
 ## Self-introspection and parallel runs
 
-Without `--label`, commands perform self-introspection and pick a label from the dictionary: `claude | codex | gemini | deepseek | qwen | other-<short>`. Review-root becomes `security-review-<label>/` — parallel runs of different models on the same project do not conflict.
+Without `--label`, the command performs self-introspection and pick a label from the dictionary: `claude | codex | gemini | deepseek | qwen | other-<short>`. Review-root becomes `security-review-<label>/` — parallel runs of different models on the same project do not conflict.
 
 **Known limitation:** open-weight fine-tunes (Qwen/DeepSeek) may incorrectly identify themselves as Claude. For CI/Docker, pass `--label` explicitly.
 
