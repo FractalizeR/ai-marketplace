@@ -27,7 +27,7 @@ Options:
                                (src, app, lib, tests, vendor, public, config, ...)
   --project-root <dir>         project to audit (default: current dir)
   --models high=<id>,fast=<id> model tiers, both required, comma-separated
-                               with no spaces; saved to
+                               spaces around ',' and '=' are tolerated; saved to
                                <review-root>/.model_map.json on a --go run and
                                reused on the next one. Without it, the saved map
                                is used; with neither, frsr stops. A map written
@@ -150,6 +150,8 @@ PY
 
 HIGH=""
 if [ -n "$MODELS" ]; then
+  # Same leniency as model_resolver.parse_cli_models: whitespace around ',' and '='.
+  MODELS="$(printf '%s' "$MODELS" | sed -E 's/[[:space:]]*([,=])[[:space:]]*/\1/g; s/^[[:space:]]+//; s/[[:space:]]+$//')"
   for tier in high fast; do
     [[ "$MODELS" =~ (^|,)$tier=[^,]+(,|$) ]] \
       || die "--models needs both tiers, e.g. --models high=<id>,fast=<id> (missing $tier)"

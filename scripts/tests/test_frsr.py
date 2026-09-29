@@ -110,6 +110,12 @@ class FrsrTests(unittest.TestCase):
             self.assertIn(f"missing {missing}", err)
         self.assert_project_empty()
 
+    def test_models_with_spaces_accepted_like_the_resolver(self):
+        rc, out, err = self.run_frsr("--models", " high = big , fast = small ", "--", "--quick")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("-m big", out)
+        self.assertNotIn("missing", err)
+
     def test_unknown_option_is_an_error(self):
         rc, _, err = self.run_frsr("project", "--quick", "--models", "high=a,fast=b")
         self.assertEqual(rc, 2)
