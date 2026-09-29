@@ -1530,7 +1530,7 @@ class _ConfigResolution:
     env whose view differs from production (prod-only overrides it did not
     load, or dev-only overrides it did).
     `why` names the uninterpreted cause: no_console | console_failed |
-    tree_mismatch | env_mismatch.
+    console_unsupported (Symfony < 6.3) | tree_mismatch | env_mismatch.
     """
 
     alias: str
@@ -1598,10 +1598,13 @@ def _resolve_config(
         )
     if not ev.files:
         return _ConfigResolution(alias, "absent", [])
-    return _ConfigResolution(
-        alias, "uninterpreted", ev.files, None,
-        why="no_console" if session is None else "console_failed",
-    )
+    if session is None:
+        why = "no_console"
+    elif getattr(session, "json_unsupported", False):
+        why = "console_unsupported"
+    else:
+        why = "console_failed"
+    return _ConfigResolution(alias, "uninterpreted", ev.files, None, why=why)
 
 
 def _note_unlocated(res: _ConfigResolution, warnings: list[str]) -> None:

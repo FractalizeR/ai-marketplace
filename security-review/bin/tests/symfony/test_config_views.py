@@ -522,7 +522,8 @@ class PhpConfigFakeConsole(_ReconRun):
 
 
 class _FakeSession:
-    def __init__(self, trees: dict, env: str = "dev"):
+    def __init__(self, trees: dict, env: str = "dev", json_unsupported: bool = False):
+        self.json_unsupported = json_unsupported
         self.trees = trees
         self.env = env
         self.asked: list[str] = []
@@ -792,6 +793,9 @@ class EveryBagUninterpretedWithoutATree(unittest.TestCase):
 
     def test_console_answered_nothing(self):
         self._check(_FakeSession({}), "console_failed")
+
+    def test_console_without_json_config_gets_its_own_reason(self):
+        self._check(_FakeSession({}, json_unsupported=True), "console_unsupported")
 
     @unittest.skipUnless(shutil.which("php"), "php not on PATH")
     def test_routes_authz_matrix(self):

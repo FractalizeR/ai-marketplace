@@ -118,12 +118,28 @@ class ConsoleSessionExtensionConfig(unittest.TestCase):
 
     def test_option_rejected_pre_6_3_returns_none_and_warns(self):
         def fake_run(runner, args):
-            return None, "console_command_failed: debug:config security: --format=json: Option does not exist"
+            if args == ["--version"]:
+                return "Symfony 5.4.12 (env: dev, debug: true)\n", None
+            return None, 'console_command_failed: debug:config security --format=json: The "--format" option does not exist.'
 
         session, _, warnings = self._session(fake_run)
         self.assertIsNone(session.extension_config("security"))
+        self.assertIsNone(session.extension_config("framework"))
+        self.assertTrue(session.json_unsupported)
+        self.assertIn("option does not exist", warnings[0])
+        unsupported = [w for w in warnings if w.startswith("console_unsupported:")]
+        self.assertEqual(len(unsupported), 1)
+        self.assertIn("5.4.12", unsupported[0])
+        self.assertIn(">= 6.3", unsupported[0])
+
+    def test_other_failures_do_not_mark_json_unsupported(self):
+        def fake_run(runner, args):
+            return None, "console_command_failed: debug:config security --format=json: boom"
+
+        session, _, warnings = self._session(fake_run)
+        session.extension_config("security")
+        self.assertFalse(session.json_unsupported)
         self.assertEqual(len(warnings), 1)
-        self.assertIn("Option does not exist", warnings[0])
 
     def test_unregistered_alias_returns_none_and_warns(self):
         def fake_run(runner, args):

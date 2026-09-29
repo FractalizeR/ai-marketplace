@@ -159,6 +159,7 @@ class ConsoleSession:
         self._smoke_ok = False
         self._config_cache: dict[str, Optional[dict]] = {}
         self._debug_config_recorded = False
+        self.json_unsupported = False
         self._env_done = False
         self._env: Optional[str] = None
 
@@ -206,6 +207,8 @@ class ConsoleSession:
         )
         if warn:
             self._warn(quiet, redact_stderr_secrets(warn))
+            if "option does not exist" in warn.lower():
+                self._note_json_unsupported()
             self._config_cache[alias] = None
             return None
         if out is None:
@@ -234,6 +237,22 @@ class ConsoleSession:
             self._debug_config_recorded = True
         self._config_cache[alias] = tree
         return tree
+
+    def _note_json_unsupported(self) -> None:
+        """Symfony < 6.3 rejects `--format` on `debug:config`; say so once,
+        naming the version, instead of leaving a generic console failure."""
+        if self.json_unsupported:
+            return
+        self.json_unsupported = True
+        from recon import sandbox
+
+        out, _ = sandbox.run_console_command(self._runner, ["--version"])
+        match = re.search(r"\d+\.\d+(?:\.\d+)?", out or "")
+        version = match.group(0) if match else "unknown version"
+        self._warnings.append(
+            f"console_unsupported: debug:config --format=json needs Symfony >= 6.3 "
+            f"(console reports {version}); config is left uninterpreted"
+        )
 
     def kernel_environment(self) -> Optional[str]:
         """`debug:container --parameter=kernel.environment --format=json`.
