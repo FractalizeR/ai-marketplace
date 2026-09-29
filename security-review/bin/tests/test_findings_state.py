@@ -49,7 +49,32 @@ class StateFileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             review_root = Path(td)
             (review_root / STATE_FILENAME).write_text("{not json")
-            self.assertEqual(load_resolutions(review_root), {})
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(load_resolutions(review_root), {})
+            self.assertIn("unreadable", err.getvalue())
+
+    def test_save_moves_a_corrupt_journal_aside_and_overwrites_an_older_aside(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            aside = review_root / (STATE_FILENAME + ".corrupt")
+            aside.write_text("older")
+            (review_root / STATE_FILENAME).write_text("{not json")
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                save_state(review_root, resolutions={
+                    "hash1": Resolution(verdict="rejected", source="audit-triage"),
+                })
+            self.assertEqual(aside.read_text(), "{not json")
+            self.assertEqual(set(load_resolutions(review_root)), {"hash1"})
+            self.assertIn("moved", err.getvalue())
+
+    def test_save_leaves_a_healthy_journal_without_an_aside(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            save_state(review_root, resolutions={"h": Resolution(verdict="rejected", source="s")})
+            save_state(review_root)
+            self.assertFalse((review_root / (STATE_FILENAME + ".corrupt")).exists())
 
     def test_schema2_file_with_legacy_keys_is_read_and_extras_dropped_on_save(self):
         with tempfile.TemporaryDirectory() as td:
@@ -451,9 +476,10 @@ class LoadVerdictsInTests(unittest.TestCase):
             root = Path(td)
             (root / "src").mkdir()
             (root / "src" / "Guard.php").write_text("<?php\n\ndeny();\n")
-            for line in (2, 99):
-                with self.assertRaises(VerdictsInError):
-                    self._evidence_import(root, refute_file="src/Guard.php", refute_line=line)
+            (root / "src" / "Blank.php").write_text("<?php\n    \t\ndeny();\n")
+            for name, line in (("Guard", 2), ("Guard", 99), ("Blank", 2)):
+                with self.subTest(file=name, line=line), self.assertRaises(VerdictsInError):
+                    self._evidence_import(root, refute_file=f"src/{name}.php", refute_line=line)
 
     def test_evidence_absolute_path_refused(self):
         with tempfile.TemporaryDirectory() as td:

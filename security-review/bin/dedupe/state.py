@@ -77,7 +77,7 @@ def compute_evidence_hash(refute_file: str, refute_line: int, project_root: Path
     except OSError:
         return _sink_hash_from_snippet("")
     idx = refute_line - 1
-    if idx < 0 or idx >= len(lines):
+    if idx < 0 or idx >= len(lines) or not lines[idx].strip():
         return _sink_hash_from_snippet("")
     return _sink_hash_from_snippet(lines[idx])
 
@@ -188,9 +188,11 @@ def _read_payload(review_root: Path) -> Optional[dict]:
         return None
     try:
         payload = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as exc:
+        _warn_corrupt_once(target, exc)
         return None
     if not isinstance(payload, dict):
+        _warn_corrupt_once(target, "root is not a JSON object")
         return None
     version = payload.get("schema_version")
     if version not in _READABLE_SCHEMA_VERSIONS:
@@ -200,6 +202,34 @@ def _read_payload(review_root: Path) -> Optional[dict]:
 
 
 _warned_state_files: set[tuple[str, object]] = set()
+
+
+def _warn_corrupt_once(target: Path, why: object) -> None:
+    key = (str(target), "corrupt")
+    if key in _warned_state_files:
+        return
+    _warned_state_files.add(key)
+    print(
+        f"Warning: {target} is unreadable ({why}); remembered verdicts in it are ignored",
+        file=sys.stderr,
+    )
+
+
+def _set_aside_if_corrupt(target: Path) -> None:
+    """Keep an unreadable journal as `<name>.corrupt` (replacing an older one)
+    so the save that follows does not silently destroy the only cross-run
+    state."""
+    if not target.is_file():
+        return
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = None
+    if isinstance(payload, dict):
+        return
+    aside = target.with_name(target.name + ".corrupt")
+    target.replace(aside)
+    print(f"Warning: moved the unreadable {target} aside to {aside}", file=sys.stderr)
 
 
 def _warn_unreadable_once(target: Path, version: object) -> None:
@@ -230,6 +260,7 @@ def save_state(
     """
     review_root.mkdir(parents=True, exist_ok=True)
     target = review_root / STATE_FILENAME
+    _set_aside_if_corrupt(target)
     existing_payload = _read_payload(review_root)
     existing_resolutions = _parse_resolutions(existing_payload) if existing_payload else {}
 
