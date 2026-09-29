@@ -1,7 +1,7 @@
 """Tests for shared/dispatch.py (Phase 2A).
 
 Subprocess is the single injected seam — every test passes a FAKE runner that
-simulates exit/write behaviour; no real `opencode`/`codex` binary is invoked.
+simulates exit/write behaviour; no real `codex` binary is invoked.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def make_slice(slice_id, model="opus"):
     }
 
 
-TM = TierMap(high="HIGH-ID", fast="FAST-ID", provenance="proposed")
+TM = TierMap.from_dict({"high": "HIGH-ID", "fast": "FAST-ID"})
 
 
 def writing_runner(roots, *, success_ids, returncode=0, timed_out=False,
@@ -221,35 +221,6 @@ class WaveDispatchTests(unittest.TestCase):
             self.assertEqual(report.results[0].gap_reason, "crash")
             self.assertFalse(wp.exists())  # stale file was deleted, not resurrected
 
-    def test_recover_capture_writes_wave_file_and_clears_gap(self):
-        with tempfile.TemporaryDirectory() as d:
-            roots = make_roots(Path(d))
-            plan = [make_slice("W1_PART1")]
-
-            def recover(slice_id, roots_):
-                return f"# recovered {slice_id}\n"
-
-            report = dp.dispatch_waves(
-                plan, TM, roots=roots, command_builder=wave_cb,
-                runner=writing_runner(roots, success_ids=set(), returncode=1),
-                strict=False, recover_capture=recover,
-            )
-            self.assertTrue(report.all_present)
-            wp = dp.wave_output_path(roots, "W1_PART1")
-            self.assertTrue(wp.is_file())  # dedupe-visible
-            self.assertEqual(wp.read_text(), "# recovered W1_PART1\n")
-
-    def test_recover_capture_none_keeps_gap(self):
-        with tempfile.TemporaryDirectory() as d:
-            roots = make_roots(Path(d))
-            plan = [make_slice("W1_PART1")]
-            report = dp.dispatch_waves(
-                plan, TM, roots=roots, command_builder=wave_cb,
-                runner=writing_runner(roots, success_ids=set(), returncode=1),
-                strict=False, recover_capture=lambda s, r: None,
-            )
-            self.assertFalse(report.all_present)
-
     def test_per_slice_config_written(self):
         with tempfile.TemporaryDirectory() as d:
             roots = make_roots(Path(d))
@@ -332,19 +303,26 @@ class RoleDispatchTests(unittest.TestCase):
             self.assertTrue(res.output_present)
             self.assertEqual(res.role, "recon")
 
-    def test_refute_artifact_absent_is_gap(self):
+    def test_recon_artifact_absent_is_gap(self):
         with tempfile.TemporaryDirectory() as d:
             roots = make_roots(Path(d))
             roots.review_root.mkdir(parents=True, exist_ok=True)
 
             def cb(role, roots_):
-                return ["refute-worker", role]
+                return ["recon-worker", role]
 
             def runner(argv, timeout):
                 return RunResult(returncode=1, stdout="", stderr="", timed_out=False)
 
-            res = dp.dispatch_role("refute", command_builder=cb, runner=runner, roots=roots)
+            res = dp.dispatch_role("recon", command_builder=cb, runner=runner, roots=roots)
             self.assertFalse(res.output_present)
+
+    def test_removed_refute_role_is_config_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            roots = make_roots(Path(d))
+            with self.assertRaises(DispatchConfigError):
+                dp.dispatch_role("refute", command_builder=lambda r, x: ["w"],
+                                 runner=lambda a, t: None, roots=roots)
 
     def test_role_single_process(self):
         with tempfile.TemporaryDirectory() as d:
@@ -353,34 +331,15 @@ class RoleDispatchTests(unittest.TestCase):
             calls = {"n": 0}
 
             def cb(role, roots_):
-                (roots_.review_root / "refute.md").write_text("r", encoding="utf-8")
+                (roots_.review_root / "CONTEXT.md").write_text("r", encoding="utf-8")
                 return ["w", role]
 
             def runner(argv, timeout):
                 calls["n"] += 1
                 return RunResult(returncode=0, stdout="", stderr="", timed_out=False)
 
-            dp.dispatch_role("refute", command_builder=cb, runner=runner, roots=roots)
+            dp.dispatch_role("recon", command_builder=cb, runner=runner, roots=roots)
             self.assertEqual(calls["n"], 1)
-
-    def test_role_recover_capture_materializes(self):
-        with tempfile.TemporaryDirectory() as d:
-            roots = make_roots(Path(d))
-            roots.review_root.mkdir(parents=True, exist_ok=True)
-
-            def cb(role, roots_):
-                return ["w", role]
-
-            def runner(argv, timeout):
-                return RunResult(returncode=1, stdout="", stderr="", timed_out=False)
-
-            res = dp.dispatch_role(
-                "recon", command_builder=cb, runner=runner, roots=roots,
-                recover_capture=lambda role, r: "recovered-ctx",
-            )
-            self.assertTrue(res.output_present)
-            self.assertEqual((roots.review_root / "CONTEXT.md").read_text(), "recovered-ctx")
-
 
 class CliTests(unittest.TestCase):
     def setUp(self):
@@ -459,7 +418,7 @@ class CliTests(unittest.TestCase):
             ], runner=runner)
             self.assertEqual(rc, 2)
 
-    def test_cli_role_refute_single_process(self):
+    def test_cli_role_recon_single_process(self):
         with tempfile.TemporaryDirectory() as d:
             dd = Path(d)
             review = dd / "review"
@@ -468,15 +427,15 @@ class CliTests(unittest.TestCase):
 
             def runner(argv, timeout):
                 calls["n"] += 1
-                (review / "refute.md").write_text("r", encoding="utf-8")
+                (review / "CONTEXT.md").write_text("r", encoding="utf-8")
                 return RunResult(returncode=0, stdout="", stderr="", timed_out=False)
 
             rc = dp.main([
                 "--project-root", str(dd / "proj"),
                 "--review-root", str(review),
                 "--core-root", str(dd / "core"),
-                "--role", "refute",
-                "--role-cmd-template", "refute-worker {role}",
+                "--role", "recon",
+                "--role-cmd-template", "recon-worker {role}",
             ], runner=runner)
             self.assertEqual(rc, 0)
             self.assertEqual(calls["n"], 1)

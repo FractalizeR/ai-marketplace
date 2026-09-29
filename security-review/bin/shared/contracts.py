@@ -1,8 +1,7 @@
 """Typed contracts shared by `model_resolver` and `dispatch` (Phase 2A).
 
 Defines the data carriers (`Roots`, `RunResult`), the typed Callable aliases for
-every injected seam (subprocess `Runner`, command builders, capture recovery,
-the resolver checkpoint), and the typed exceptions. No implementation logic —
+every injected seam (subprocess `Runner`, command builders, the resolver checkpoint), and the typed exceptions. No implementation logic —
 this module is import-only so both helpers (and their tests) share one source of
 truth for the seams.
 
@@ -56,11 +55,8 @@ Runner = Callable[[Sequence[str], "float | None"], RunResult]
 # (slice, model_id, roots, capture_path_or_None) -> argv.
 WaveCommandBuilder = Callable[[Mapping, str, Roots, "Path | None"], Sequence[str]]
 
-# (role, roots) -> argv  (no slice/model — recon/refute carry no per-slice model).
+# (role, roots) -> argv  (no slice/model — recon carries no per-slice model).
 RoleCommandBuilder = Callable[[str, Roots], Sequence[str]]
-
-# (slice_id, roots) -> recovered finding text, or None if nothing to recover.
-RecoverCapture = Callable[[str, Roots], "str | None"]
 
 # (proposed_tier_map, discovered_models) -> chosen TierMap.
 # Accept-as-is = return the proposed map; raise to abort.

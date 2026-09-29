@@ -4,10 +4,10 @@
 `dispatch_waves` launches one external worker per plan slice (≤6 concurrent),
 classifies each as success/gap by a freshness-based protocol, and either raises
 (strict) or writes `dispatch_gaps.json`. `dispatch_role` runs ONE process for a
-single-writer role (recon/refute) and reports presence of its role artifact.
+single-writer role (recon) and reports presence of its role artifact.
 
 Subprocess is the single injected seam (the `runner` callable, AD-2A2) — no test
-spawns a real `opencode`/`codex`. Harness command shapes enter as command-builder
+spawns a real `codex`. Harness command shapes enter as command-builder
 parameters (AD-2A3). Freshness (AD-2A8): planned slices' expected wave files are
 deleted before fan-out so a stale prior-run file + a crashed worker is still a gap.
 
@@ -15,7 +15,7 @@ CLI:
     python3 <core_root>/bin/shared/dispatch.py --plan P.json --model-map M.json
         --project-root P --review-root R --core-root C
         --worker-cmd-template "<tmpl>" [--max-parallel 6] [--allow-gaps] [--timeout S]
-        | --role=recon|refute --role-cmd-template "<tmpl>"
+        | --role=recon --role-cmd-template "<tmpl>"
     Template fields: {model}{project_root}{review_root}{core_root}{slice_id}{capture}{slice_config}.
     exit 0 all present / 1 gaps (allow-gaps) / 2 error (incl. DispatchGapError in strict).
 
@@ -42,7 +42,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.contracts import (  # noqa: E402
     DispatchConfigError,
     DispatchGapError,
-    RecoverCapture,
     RoleCommandBuilder,
     Roots,
     Runner,
@@ -53,8 +52,8 @@ from shared.model_resolver import LABEL_TO_TIER, TierMap  # noqa: E402
 
 MAX_PARALLEL_HARD_CAP = 6
 
-# role -> the single artifact whose fresh presence proves the role ran (Claude M3).
-ROLE_ARTIFACT = {"recon": "CONTEXT.md", "refute": "refute.md"}
+# role -> the single artifact whose fresh presence proves the role ran.
+ROLE_ARTIFACT = {"recon": "CONTEXT.md"}
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +108,6 @@ def slice_config_path(roots: Roots, slice_id: str) -> Path:
 
 
 def _role_artifact_path(roots: Roots, role: str) -> Path:
-    # recon -> CONTEXT.md, refute -> refute.md; both live at review_root.
     return roots.review_root / ROLE_ARTIFACT[role]
 
 
@@ -128,7 +126,6 @@ def default_runner(argv, timeout):  # pragma: no cover - thin stdlib wrapper
     `stdin=DEVNULL` is mandatory: a fanned-out worker is non-interactive, and
     `codex exec` (0.142+) reads *additional* prompt input from stdin — inheriting a
     non-EOF orchestrator stdin makes every worker block forever (verified live, 3C).
-    Feeding EOF is harness-neutral (opencode run is unaffected).
     """
     try:
         proc = subprocess.run(
@@ -253,7 +250,6 @@ def dispatch_waves(
     max_parallel: int = 6,
     strict: bool = True,
     timeout=None,
-    recover_capture: RecoverCapture | None = None,
     gaps_path: Path | None = None,
 ) -> DispatchReport:
     """Fan out one worker per slice (≤6 concurrent) and classify gaps."""
@@ -306,15 +302,6 @@ def dispatch_waves(
         output_present = wp.exists()
         gap_reason = None if output_present else _classify_reason(result, False)
 
-        # AD-2A9: capture-based recovery must materialize to the wave file.
-        if gap_reason is not None and recover_capture is not None:
-            recovered = recover_capture(slice_id, roots)
-            if recovered is not None:
-                _atomic_write_text(wp, recovered)
-                output_present = wp.exists()
-                if output_present:
-                    gap_reason = None
-
         wr = WaveResult(
             slice_id=slice_id,
             returncode=result.returncode,
@@ -357,12 +344,8 @@ def dispatch_role(
     runner: Runner,
     roots: Roots,
     timeout=None,
-    recover_capture: RecoverCapture | None = None,
 ) -> RoleResult:
-    """Run ONE external process for a single-writer role; presence = role artifact.
-
-    The refute ≤20-batch sequencing is the CALLER's loop — this runs once.
-    """
+    """Run ONE external process for a single-writer role; presence = role artifact."""
     if role not in ROLE_ARTIFACT:
         raise DispatchConfigError(role, role, list(ROLE_ARTIFACT.keys()))
     artifact_path = _role_artifact_path(roots, role)
@@ -374,12 +357,6 @@ def dispatch_role(
     argv = command_builder(role, roots)
     result = runner(list(argv), timeout)
     output_present = artifact_path.exists()
-
-    if not output_present and recover_capture is not None:
-        recovered = recover_capture(role, roots)
-        if recovered is not None:
-            _atomic_write_text(artifact_path, recovered)
-            output_present = artifact_path.exists()
 
     return RoleResult(
         role=role,
