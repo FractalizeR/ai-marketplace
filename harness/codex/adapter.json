@@ -5,7 +5,7 @@
   "core_root": "${FR_SECURITY_CORE_ROOT}",
   "model_discovery_cmd": "codex debug models",
   "tier_defaults": { "high": null, "fast": null },
-  "interactive_gates": ["model", "recon_quality", "scope", "console_runner", "winf_warning"],
+  "interactive_gates": ["model", "scope", "console_runner", "winf_warning"],
   "checkpoint_binding": "codex_interactive",
   "permission_config": null,
   "manifest_template": ".codex-plugin/plugin.json",

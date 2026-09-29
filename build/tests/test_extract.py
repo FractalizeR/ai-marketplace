@@ -97,7 +97,7 @@ class AttrValueTests(unittest.TestCase):
         for path, kind in ARTIFACTS.items():
             for s in _by_cat(extract(read(path), kind), "auq"):
                 kinds[s.attrs["occurrence_kind"]] += 1
-        self.assertEqual(dict(kinds), {"prose-mention": 4, "labeled-block": 1})
+        self.assertEqual(dict(kinds), {"prose-mention": 3, "labeled-block": 1})
 
     def test_args_injection_present_in_command(self):
         args = _by_cat(_segments("commands/security-project.md"), "args_injection")

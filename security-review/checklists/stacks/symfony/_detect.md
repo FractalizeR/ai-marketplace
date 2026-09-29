@@ -27,4 +27,4 @@ See `bin/recon/recipes/symfony.py::RECON_BAGS_SCHEMA` for the exact shape.
 
 `none` — generic PHP project without a framework. `stacks/symfony/*.md` are not loaded. Worker operates only with core checklists.
 
-`unknown` — detect did not fire (possibly non-standard installation). The recon agent writes `recon_confidence: low`, plan_waves does not activate framework sections.
+`unknown` — detect did not fire (possibly non-standard installation). `stack.framework` does not name this stack, so `stacks/symfony/*.md` are not loaded either. (`recon_confidence` in the frontmatter is shown to the user only; nothing reads it.)

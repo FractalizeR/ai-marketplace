@@ -24,27 +24,23 @@ python3 ${FR_SECURITY_CORE_ROOT}/bin/shared/dispatch.py \
 
 After the process returns — success means `<REVIEW_ROOT>/CONTEXT.md` was materialized and `codex exec` exited 0 (the dispatcher reports `output_present`). If CONTEXT.md is missing, the captured last message (`-o …/recon.capture.txt`) is the partial safety net: read it and recover CONTEXT.md, otherwise stop and print the error.
 
-Then additionally run sanity-check with filesystem coverage:
+Then run the sanity check with filesystem coverage and record the recon gaps:
 
 ```bash
-python3 ${FR_SECURITY_CORE_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>" --sanity --project-root "<PROJECT_ROOT>"
+python3 ${FR_SECURITY_CORE_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>" --sanity --project-root "<PROJECT_ROOT>" --gaps-out "<REVIEW_ROOT>/recon_gaps.json"
 ```
 
 `--project-root` is required here — without it `validate_context.py` falls back to inferring from `parent(review_root)`, which fails for composite repos (parent has no `composer.json` / `package.json`) and prints `WARNING: project_root not specified and could not be inferred — sanity coverage skipped`. The fallback exists for legacy CLI callers; the orchestrator must always be explicit.
 
-`--sanity` imports the recipe (per `recipe_used` from frontmatter), calls `recipe.sanity_probes()`, compares declared `file:` in sections against the actual filesystem. **Coverage threshold ladder** (rev v3):
+`--sanity` imports the recipe (per `recipe_used` from frontmatter), calls `recipe.sanity_probes()`, and compares what the sections declare against the filesystem. It **never stops the run on a coverage problem** — which suits headless Codex, where there is no one to ask about a retry. Each gap is a `WARNING:` line on stderr, and all but the last kind below are also a record in `<REVIEW_ROOT>/recon_gaps.json`:
 
-- diff ≤ 5 % → ok, `recon_confidence: high`
-- diff 5–20 % → warning, `recon_confidence: medium`, rationale in `frontmatter.warnings`
-- diff > 20 % → error, `recon_confidence: low`, exit 1
+- files a probe found on disk that a section does not declare (an `ok` section with more than 5 % missing, or any `partial` / `unknown` one);
+- a section whose extractor failed (`extractor_failed: …`);
+- config the recipe found but could not interpret (`config_uninterpreted: …`), and list sections left in `pending_enrichment`;
+- declared files that are not on disk (the recon process already had one attempt to fix these).
 
-If validation fails (ERROR exit 1) — stop, show errors to the user.
+The gap records feed the WGAP wave in step 7: workers review those files directly, so a gap costs a follow-up pass instead of the run. `--gaps-out` rewrites the file on every call, with an empty `items` list when there are no gaps.
 
-If only warnings (sanity diff 5–20 %) — Codex runs headless with no retry prompt, so **do not auto-retry**: print the warning and continue with the available inventory at `recon_confidence: medium`. Workers will cover the declared entry points; the medium confidence and the rationale in `frontmatter.warnings` record the reduced coverage.
-
-```
-⚠️  Sanity-check: coverage in the warning range (5–20 %).
-   Possibly some files are outside expected directories or follow non-standard naming.
-   Continuing with the available inventory (recon_confidence: medium) — workers will cover the declared entry points.
-   To improve coverage, re-run recon or widen the recipe's expected directories.
-```
+- exit 0 → print the `WARNING:` lines as they are and continue; do not re-run recon.
+- exit 1 → CONTEXT.md is structurally invalid — stop and print the `ERROR:` lines.
+- exit 2 → CONTEXT.md is missing — stop.

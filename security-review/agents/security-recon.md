@@ -133,12 +133,13 @@ For a section built from `data.evidence_files` (e.g. a `security.php`/`framework
 ### Step 6. Validate
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/bin/validate_context.py --review-root <review_root> --sanity
+python3 ${CLAUDE_PLUGIN_ROOT}/bin/validate_context.py --review-root <review_root> --sanity --project-root <project_root>
 ```
 
-`--sanity` runs recipe-driven probes (checks filesystem coverage against the collected inventory).
+`--sanity` runs recipe-driven probes (checks filesystem coverage against the collected inventory). It exits non-zero **only** when CONTEXT.md is structurally invalid; every coverage finding is a `WARNING:` line.
 
-- `exit 0` (`OK`) — done, go to step 8.
+- `exit 0` with a `sanity[<probe>]: N declared file(s) not on disk: <preview>` warning — go to step 7 **once** (a hallucinated path is Edit-fixable).
+- `exit 0` otherwise — done, go to step 8.
 - `exit 1` (`ERROR: ...`) — go to step 7.
 
 ### Step 7. Targeted fix via Edit
@@ -149,15 +150,16 @@ Read each `ERROR:` line. Typical errors:
 - `status=unknown requires 'reason'` → add `reason: "..."`.
 - `list-type section with status=ok requires 'items'` → add `items: [...]` or change status.
 - `scalar-type section with status=ok requires 'data'` → add `data: {...}` or change status.
-- `sanity[<probe>]: coverage diff X% puts confidence in 'low' — below floor` (from `--sanity`) — the recipe did not find enough expected files, coverage dropped below the floor. This is **not Edit-fixable** (no Edit will create files on disk). Return `RECON_SANITY_FAILED: <details>` to the orchestrator, leave the file as is.
-- `sanity[extractor]: <section> not collected — extractor_failed: <kind>: <warning>` — the PHP extractor itself failed for that section. This is **not Edit-fixable** (no Edit re-runs the extractor). Return `RECON_SANITY_FAILED: <extractor cause, verbatim>` to the orchestrator — do not guess a different cause — leave the file as is.
-- `sanity[<probe>]: N declared file(s) not on disk: <preview>` — hallucinated file path in some item. This is a recipe bug (or yours, if you added something). Edit the needed section, remove non-existent paths.
 
-Sanity warnings (not errors) — for example `coverage diff 15%` without the floor firing — are printed to stderr, but `validate_context.py` returns exit 0. Step 7 is run only on `exit 1`; warnings are ignored (they were already accounted for by the utility when forming `recon_confidence` in the frontmatter).
+And the one Edit-fixable warning:
 
-After each Edit — re-run step 6. **Maximum 3 fix loop attempts.**
+- `sanity[<probe>]: N declared file(s) not on disk: <preview>` — a hallucinated file path in some item. This is a recipe bug (or yours, if you added something). Edit the needed section, remove the non-existent paths. One attempt: if the warning is still there after the re-run, leave it and go to step 8.
 
-After 3 failed attempts — return `RECON_VALIDATION_FAILED: <last ERROR text>` to the orchestrator. Do not rm the file, do not re-recon — let the orchestrator decide.
+Every other sanity warning is **not yours to fix** and never a reason to fail: coverage gaps (`declared X of Y filesystem matches`), `sanity[extractor]: … extractor_failed: …`, `sanity[config]: … not interpreted — config_uninterpreted: …`, a list section left in `pending_enrichment`. No Edit creates the missing files or re-runs the extractor. The orchestrator records these gaps in `recon_gaps.json`, and a follow-up worker wave reviews exactly those files.
+
+After each Edit — re-run step 6. **Maximum 3 fix loop attempts** for `ERROR:` lines.
+
+After 3 failed attempts — return `RECON_SANITY_FAILED: <last ERROR text>` to the orchestrator (CONTEXT.md is still structurally invalid; this is the only case for that code). Do not rm the file, do not re-recon — let the orchestrator decide.
 
 ### Step 8. Response to orchestrator
 
@@ -171,7 +173,7 @@ RECON_OK
   ceiling: <high|medium>
   warnings: <comma-separated, or "none">
   pending_sections_enriched: <N>
-  sanity: passed
+  sanity: <N> warning(s)
 ```
 
 ## TYPICAL EDIT CYCLE (example)
@@ -232,7 +234,7 @@ Marker flipped to `done`. `enrichment_hint` removed. `candidates` removed. Final
 
 ## WHAT IF THE UTILITY EMITTED `recon_confidence: low` OR AN ALMOST EMPTY INVENTORY
 
-`recipe.status=partial` → the utility returns exit 0, but the frontmatter may contain `recon_confidence.level: low/medium`. This is **not grounds for exiting** — continue the standard flow (steps 3–8): a valid schema-conformant file with some `unknown` sections — normal outcome. Do not try to "improve" manually — the orchestrator will see low confidence in the frontmatter and decide what to do.
+`recipe.status=partial` → the utility returns exit 0, but the frontmatter may contain `recon_confidence.level: low/medium`. This is **not grounds for exiting** — continue the standard flow (steps 3–8): a valid schema-conformant file with some `unknown` sections — normal outcome. Do not try to "improve" manually. `recon_confidence` is only displayed to the user; what recon missed is recorded by the orchestrator's sanity run and reviewed by a follow-up wave.
 
 Only `recipe.status=failed` (exit 1) — grounds for exit at step 2 with `RECON_UTILITY_FAILED`.
 

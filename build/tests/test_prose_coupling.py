@@ -31,7 +31,7 @@ def _entries():
 class ProseCouplingAnchorTests(unittest.TestCase):
     def test_register_has_entries(self):
         entries = _entries()
-        self.assertGreaterEqual(len(entries), 7)
+        self.assertGreaterEqual(len(entries), 6)
         # Guard against the hand-rolled parser silently dropping entries on a
         # format drift: parsed count must equal the number of `- id:` lines.
         block = _YAML_BLOCK.search(read(BUILD_DIR / "PROSE_COUPLING.md")).group(1)

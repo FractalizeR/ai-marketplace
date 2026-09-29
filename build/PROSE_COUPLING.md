@@ -44,14 +44,6 @@ ONE template, keyed by `(artifact_basename, section_anchor)`.
   codex_action: "Launch 1 external `codex exec` (recon role); preserve the recon_inventory.py / validate_context.py logic interwoven in this section."
   non_interactive_fallback: "Always run recon; no human gate."
 
-- id: recon-quality
-  file: commands/security-project.md
-  section_anchor: "4-recon-phase"
-  pinned: "offer a choice via AskUserQuestion"
-  harness_semantic: "On a sanity diff of 5-20%, ask whether to repeat recon or continue."
-  codex_action: "No prompt; honor `--interactive` only where supported."
-  non_interactive_fallback: "Continue with awareness of gaps (option b); recon_confidence: medium; no auto-retry."
-
 - id: inventory-checkpoint
   file: commands/security-project.md
   section_anchor: "6-optional-interactive-checkpoint"

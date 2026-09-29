@@ -38,6 +38,14 @@ Concrete rules:
 
 You are allowed to read any project file via Read/Grep/Glob/MCP. The slice defines **what must be covered** and **where to look first**, without forbidding data flow tracing into any file.
 
+### Recon-gap slices (`slice_id` starts with `WGAP_`)
+
+A `WGAP_PART<n>` slice is the follow-up pass on what static recon could not cover. **Before anything else, read `<review_root>/recon_gaps.json`** (`{schema_version: 1, items: [...]}`; each item has `kind` — `coverage` | `extractor_failed` | `uninterpreted` — plus `section_path`, `reason` and `files`). If the file is missing or its `schema_version` is not 1, work from `target_files` alone.
+
+- Your `target_files` are files recon could not enumerate or interpret, so `CONTEXT.md` says little or nothing about them. Discover their entry points yourself (routes, controller actions, console commands, message handlers, listeners declared in those files) and trace each one as usual. `entry_points_in_scope` for this slice lists the files themselves.
+- Use each item's `section_path` and `reason` to see what recon missed — e.g. an uninterpreted `security` config means firewalls and `access_control` rules were never parsed, so read the config yourself before judging authorization.
+- Report in the normal output format below; nothing about the verdicts or quality gates changes.
+
 ## READING CONTEXT.md (schema v2)
 
 `<review_root>/CONTEXT.md` is markdown with frontmatter and sections. Each section's structure:

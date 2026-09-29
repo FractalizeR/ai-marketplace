@@ -307,6 +307,17 @@ class ProjectOnly(unittest.TestCase):
             self.text,
         )
 
+    def test_recon_gaps_warn_and_feed_wgap(self) -> None:
+        # Sanity never stops the run on coverage: it writes recon_gaps.json,
+        # which plan_waves turns into the WGAP wave and dedupe reports.
+        self.assertIn('--gaps-out "<REVIEW_ROOT>/recon_gaps.json"', self.text)
+        self.assertIn('--recon-gaps="<REVIEW_ROOT>/recon_gaps.json"', self.text)
+        self.assertIn('rm -f "<REVIEW_ROOT>/recon_gaps.json"', self.text)
+        self.assertIn('--waves-plan "<REVIEW_ROOT>/waves_plan.json"', self.text)
+        self.assertIn("never stops the run on a coverage problem", self.text)
+        self.assertNotIn("RECON_RETRY_DONE", self.text)
+        self.assertNotIn("Coverage threshold ladder", self.text)
+
     def test_exploratory_default_on(self) -> None:
         self.assertIn("Exploratory wave W∞ is enabled by default", self.text)
 
@@ -382,6 +393,10 @@ class WorkerAgentContract(unittest.TestCase):
         # The diff-only audit mode is gone: no changed-node rule for the worker.
         self.assertNotIn("touched_by_diff", self.text)
         self.assertNotIn("mode=changes", self.text)
+
+    def test_wgap_slice_reads_recon_gaps(self) -> None:
+        self.assertIn("`slice_id` starts with `WGAP_`", self.text)
+        self.assertIn("read `<review_root>/recon_gaps.json`", self.text)
 
     def test_recon_bags_reading_documented(self) -> None:
         # Worker must know how to resolve recon_bags.{kind}.{name}.* via dot-notation.

@@ -38,7 +38,7 @@ Parse flags from `$ARGUMENTS`:
 - `--review-root=<out-dir>` — override of the **review-root output directory** (artifacts: `CONTEXT.md`, `waves/`, `REPORT.md`). For Docker/CI/firejail isolation. Accepts a relative path (resolved from cwd) or absolute. If set — `--label` is ignored. **This flag does NOT specify what to scan** — use `--scope=<glob>` to restrict the audit area, and `--project-root=<path>` to point at a non-cwd project.
 - `--project-root=<path>` — corner of the audited project (where `composer.json` / framework configs live). Defaults to `cwd`. Use in composite repos where CLAUDE.md / cwd is one directory above the actual project root (for example monorepo with `api/` PHP subproject + shared top-level CLAUDE.md). Recon, exclude paths, and sanity coverage all resolve against this value. Accepts a relative (from cwd) or absolute path.
 - `--interactive` — checkpoint with the user after recon (via AskUserQuestion)
-- `--quick` — **disable** the exploratory wave W∞ (ON by default). For fast runs / CI.
+- `--quick` — **disable** the exploratory wave W∞ (ON by default). For fast runs / CI. The WGAP recon-gap wave (step 7) stays on.
 - `--all-opus` — force opus for all waves (legacy). By default W4/W5 on sonnet (mechanical data flow).
 - `--scope=<glob>` — restrict target_files by a glob pattern (for example `src/Api/**`)
 - `--no-console` — static-only recon: the utility does NOT run the project's console. Use when auditing hostile/untrusted repos (no guarantee that bootstrap will not execute malicious code), when runtime credentials are absent, or in CI scenarios where project execution is forbidden. Ceiling=medium (intentionally). Alternative — isolation via firejail/Docker without the flag.
@@ -48,7 +48,7 @@ Parse flags from `$ARGUMENTS`:
 
 **Important about defaults:**
 - **Exploratory wave W∞ is enabled by default.** Without it, cross-layer vulnerabilities (OAuth state, tenancy chains, authenticator integrity) are missed. Quick scanner — `--quick`.
-- **Balanced model profile is on by default.** W1/W2/W6 — opus (auth/disclosure, injection/data-access/business-logic, fintech: require reasoning about trust boundaries / chains). W3 (output-render+frontend-js), W4 (serialization+crypto), W5 (ssrf-fileops), W∞ (exploratory) — sonnet: mechanical data flow, sonnet handles it. Source of truth — `bin/plan_waves.py:WaveSpec.balanced_model`. Force opus everywhere — `--all-opus`.
+- **Balanced model profile is on by default.** W1/W2/W6 — opus (auth/disclosure, injection/data-access/business-logic, fintech: require reasoning about trust boundaries / chains). W3 (output-render+frontend-js), W4 (serialization+crypto), W5 (ssrf-fileops), W∞ (exploratory) — sonnet: mechanical data flow, sonnet handles it. WGAP (follow-up on recon gaps) — opus: its files come with little or no inventory. Source of truth — `bin/plan_waves.py:WaveSpec.balanced_model`. Force opus everywhere — `--all-opus`.
 
 ## STEPS
 
@@ -206,6 +206,8 @@ themselves.
 rm -f "<REVIEW_ROOT>/waves/"*.md
 # Previous pre-retry snapshots (if the orchestrator did a retry in a past run)
 rm -f "<REVIEW_ROOT>/waves/"*.pre-retry.md
+# Recon gaps of a previous run (step 4 writes a fresh one; a stale file would feed WGAP and the report)
+rm -f "<REVIEW_ROOT>/recon_gaps.json"
 ```
 
 `<REVIEW_ROOT>/REPORT.md` and `<REVIEW_ROOT>/REPORT/` (split detail) are **not cleaned** — dedupe rewrites them at the dedup step.
@@ -314,37 +316,26 @@ Both paths are forwarded as **absolute** (per the Step 0.4 invariant).
 
 After return — check `RECON_OK` in the agent's response. If `RECON_*_FAILED` is received — stop, print the error.
 
-Then additionally run sanity-check with filesystem coverage:
+Then run the sanity check with filesystem coverage and record the recon gaps:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>" --sanity --project-root "<PROJECT_ROOT>"
+python3 ${CLAUDE_PLUGIN_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>" --sanity --project-root "<PROJECT_ROOT>" --gaps-out "<REVIEW_ROOT>/recon_gaps.json"
 ```
 
 `--project-root` is required here — without it `validate_context.py` falls back to inferring from `parent(review_root)`, which fails for composite repos (parent has no `composer.json` / `package.json`) and prints `WARNING: project_root not specified and could not be inferred — sanity coverage skipped`. The fallback exists for legacy CLI callers; the orchestrator must always be explicit.
 
-`--sanity` imports the recipe (per `recipe_used` from frontmatter), calls `recipe.sanity_probes()`, compares declared `file:` in sections against the actual filesystem. **Coverage threshold ladder** (rev v3):
+`--sanity` imports the recipe (per `recipe_used` from frontmatter), calls `recipe.sanity_probes()`, and compares what the sections declare against the filesystem. It **never stops the run on a coverage problem**. Each gap is a `WARNING:` line on stderr, and all but the last kind below are also a record in `<REVIEW_ROOT>/recon_gaps.json`:
 
-- diff ≤ 5 % → ok, `recon_confidence: high`
-- diff 5–20 % → warning, `recon_confidence: medium`, rationale in `frontmatter.warnings`
-- diff > 20 % → error, `recon_confidence: low`, exit 1
+- files a probe found on disk that a section does not declare (an `ok` section with more than 5 % missing, or any `partial` / `unknown` one);
+- a section whose extractor failed (`extractor_failed: …`);
+- config the recipe found but could not interpret (`config_uninterpreted: …`), and list sections left in `pending_enrichment`;
+- declared files that are not on disk (the recon agent already had one attempt to fix these).
 
-If validation fails (ERROR exit 1) — stop, show errors to the user.
+The gap records feed the WGAP wave in step 7: workers review those files directly, so a gap costs a follow-up pass instead of the run. `--gaps-out` rewrites the file on every call, with an empty `items` list when there are no gaps.
 
-If only warnings (sanity diff 5–20 %) — use the following logic depending on whether this is the first recon or a repeat (`RECON_RETRY_DONE`):
-
-**First recon (RECON_RETRY_DONE = false):** show warnings to the user and offer a choice via AskUserQuestion:
-- (a) Repeat recon (`rm <REVIEW_ROOT>/CONTEXT.md` + start over) — recommended if many files are missed
-- (b) Continue with awareness of the gaps
-
-If the user picked (a): set `RECON_RETRY_DONE = true`, remove `<REVIEW_ROOT>/CONTEXT.md`, restart the recon agent, run validation and sanity-check again.
-
-**Repeat recon (RECON_RETRY_DONE = true):** if coverage is still in the warning range — **do not ask again**. Show the warning and automatically continue:
-
-```
-⚠️  Sanity-check after repeat recon: coverage improved, but warning remains.
-   Possibly some files are outside expected directories or follow non-standard naming.
-   Continuing with the available inventory — workers will cover the declared entry points.
-```
+- exit 0 → print the `WARNING:` lines to the user as they are and continue.
+- exit 1 → CONTEXT.md is structurally invalid (the recon agent should have returned `RECON_SANITY_FAILED` instead) — stop and show the `ERROR:` lines.
+- exit 2 → CONTEXT.md is missing — stop.
 
 ### 5. Summary for the user
 
@@ -352,6 +343,7 @@ Read `<REVIEW_ROOT>/CONTEXT.md`, show a brief summary (section names — those t
 
 ```
 Recon complete (recon_confidence: <level>, ceiling: <level>).
+Recon gaps: <N items in recon_gaps.json, or "none"> — reviewed by the WGAP wave
 Stack: <framework name from frontmatter.stack.framework>
 Console: <frontmatter.environment.console_mode> <if environment.console_gap: "⚠️ coverage gap — " + environment.console_gap_reason>
 Found (top-level core sections):
@@ -389,6 +381,7 @@ Call:
 python3 ${CLAUDE_PLUGIN_ROOT}/bin/plan_waves.py "<REVIEW_ROOT>/CONTEXT.md" \
   --plugin-root="${CLAUDE_PLUGIN_ROOT}" \
   --save-plan="<REVIEW_ROOT>/waves_plan.json" \
+  --recon-gaps="<REVIEW_ROOT>/recon_gaps.json" \
   [--all-opus]            # if ALL_OPUS \
   [--exploratory]         # if EXPLORATORY \
   [--scope-glob=<SCOPE_GLOB>]   # if set
@@ -399,6 +392,8 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/plan_waves.py "<REVIEW_ROOT>/CONTEXT.md" \
 **`--plugin-root` is required** — otherwise `plan_waves` will not find `checklists/` (the relative path resolves to the project's cwd, not the plugin's). The script prefixes checklists with an absolute path.
 
 **`--exploratory` is passed by default** (except in `--quick` mode). This gives the W∞ wave — key for cross-layer vulnerabilities (OAuth chains, tenancy integrity, authenticator flows).
+
+**`--recon-gaps` gives the WGAP wave** — `WGAP_PART<n>` slices on opus, not disabled by `--quick`. Their `target_files` are the files from the step 4 gap records, minus vendor/tests, `--scope-glob` misses and files another slice already covers, capped at 150 files. No gap records → no WGAP slices.
 
 It returns a JSON array with a list of slices. Each slice's fields:
 - `slice_id`, `wave_id`, `themes`, `checklists` (absolute paths)
@@ -418,6 +413,7 @@ Launching <N> waves (mode: <balanced|all-opus>):
   W5 (sonnet, <M> files): ssrf-fileops
   W6 (opus, <M> files): fintech (if triggered)
   W∞ (sonnet, exploratory): union themes
+  WGAP (opus, <M> files): follow-up on recon gaps (if any)
 ```
 
 This gives visibility — the user sees what will be launched before going off into parallel processing for ~5-15 minutes.
@@ -528,6 +524,8 @@ Dedup produces a **split report** (by default):
 - `<REVIEW_ROOT>/REPORT/manual_review.md` — findings requiring manual check: those that did not pass auto-promote (custom sink_kind + non-critical) **and** parse-failed (worker did not emit `sink_file`, flag `[PARSE_FAILED]`). The index outputs a callout "⚠️ Action required: N" on non-zero count.
 
 For legacy mode (everything in one file) — flag `--single-file`.
+
+Dedupe also reads `<REVIEW_ROOT>/recon_gaps.json` on its own. With `--waves-plan` it splits each gap's files in `## Coverage Gaps` into those a slice reviewed and those it did not (cut by the WGAP cap, `--scope` or the vendor/tests filter), so always pass `--waves-plan`.
 
 ### 12. Output to user
 
