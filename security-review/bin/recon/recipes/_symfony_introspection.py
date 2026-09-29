@@ -256,9 +256,9 @@ class ConsoleSession:
             from recon import sandbox
 
             out, _ = sandbox.run_console_command(self._runner, ["--version"])
-            match = re.search(r"Symfony\s+(\d+)\.(\d+)(?:\.\d+)?", out or "")
+            match = re.search(r"Symfony\s+v?(\d+)\.(\d+)(?:\.\d+)?", out or "")
             if match:
-                self._version = match.group(0).split(None, 1)[1]
+                self._version = match.group(0).split(None, 1)[1].lstrip("v")
                 self._version_too_old = (int(match.group(1)), int(match.group(2))) < (6, 3)
         sentence = "option does not exist" in warn.lower()
         if not (self._version_too_old or sentence):

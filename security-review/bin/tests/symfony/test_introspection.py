@@ -139,6 +139,30 @@ class ConsoleSessionExtensionConfig(unittest.TestCase):
         self.assertIn("5.4.12", unsupported[0])
         self.assertIn(">= 6.3", unsupported[0])
 
+    def test_v_prefixed_real_console_string_pre_6_3_is_detected(self):
+        def fake_run(runner, args):
+            if args == ["--version"]:
+                return "Symfony v5.4.12 (env: dev, debug: true)\n", None
+            return None, self._SYNOPSIS_WARN
+
+        session, _, warnings = self._session(fake_run)
+        self.assertIsNone(session.extension_config("security"))
+        self.assertTrue(session.json_unsupported)
+        unsupported = [w for w in warnings if w.startswith("console_unsupported:")]
+        self.assertEqual(len(unsupported), 1)
+        self.assertIn("console reports 5.4.12)", unsupported[0])
+
+    def test_v_prefixed_real_console_string_modern_is_not_unsupported(self):
+        def fake_run(runner, args):
+            if args == ["--version"]:
+                return "Symfony v8.1.5 (env: dev, debug: true)\n", None
+            return None, self._SYNOPSIS_WARN
+
+        session, _, warnings = self._session(fake_run)
+        self.assertIsNone(session.extension_config("security"))
+        self.assertFalse(session.json_unsupported)
+        self.assertFalse([w for w in warnings if w.startswith("console_unsupported:")])
+
     def test_version_is_read_once_per_session(self):
         calls: list[list[str]] = []
 
