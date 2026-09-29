@@ -26,6 +26,8 @@ Template consistency is reported as problems (not raised): a template whose
 anchor names no section (a renamed heading would otherwise silently fall back to
 token rendering), an anchor naming several sections, a missing or stale source
 hash, and a dispatch template that does not wire ``codex exec`` read-follow.
+``template_set_problems`` adds a missing ``REQUIRED_TEMPLATES`` entry and a
+template directory that names no artifact.
 """
 
 from __future__ import annotations
@@ -160,6 +162,39 @@ def parse_template(path: Path) -> Template:
     if m:
         return Template(path, m.group(1), raw[m.end():])
     return Template(path, None, raw)
+
+
+# Sections the Codex skill must never inherit as Claude prose. Most of them hold
+# no `Task` directive or labeled `AskUserQuestion:` block, so without this list a
+# deleted template would pass the no-leak gate and ship the Claude text.
+REQUIRED_TEMPLATES: dict[str, frozenset[str]] = {
+    "security-project": frozenset({
+        "3b-resolve-console-runner-environment-aware",
+        "4-recon-phase",
+        "6-optional-interactive-checkpoint",
+        "8-parallel-worker-launch",
+        "9-safety-net-progress-per-worker",
+    }),
+}
+
+
+def template_set_problems(artifact_names: set[str], root: Path) -> list[str]:
+    """Required templates that are missing, and template directories that name
+    no artifact (a renamed or removed command/agent)."""
+    problems: list[str] = []
+    for name, anchors in sorted(REQUIRED_TEMPLATES.items()):
+        if name not in artifact_names:
+            problems.append(f"required templates are listed for {name}, "
+                            f"which is not an artifact")
+            continue
+        present = {p.stem for p in (root / name).glob("*.md")}
+        problems += [f"required template {name}/{a}.md is missing"
+                     for a in sorted(anchors - present)]
+    if root.is_dir():
+        problems += [f"template directory {d.name}/ matches no artifact"
+                     for d in sorted(root.iterdir())
+                     if d.is_dir() and d.name not in artifact_names]
+    return problems
 
 
 def load_templates(artifact_name: str, root: Path) -> dict[str, Template]:

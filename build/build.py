@@ -32,6 +32,7 @@ from derive import (
     kind_for,
     load_templates,
     refreshed_templates,
+    template_set_problems,
 )
 from gates import check_codex_output
 from bundle import (
@@ -148,7 +149,8 @@ def _run_codex(args) -> int:
         return 2
     artifacts = args.artifact or discover_artifacts(args.plugin_root)
     rendered: dict[Path, str] = {}
-    violations: list[str] = []
+    violations = template_set_problems(
+        {p.stem for p in discover_artifacts(args.plugin_root)}, _TEMPLATES)
     for path in artifacts:
         rendered[path], problems = render_codex_artifact(path)
         violations += [f"{path.name}: {p}" for p in problems]

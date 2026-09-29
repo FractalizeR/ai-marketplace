@@ -170,10 +170,13 @@ and is **not shipped inside the plugin**.
   `security-project.md` file ref loses its `.md`.
 - **Gates.** `build/build.py --mode=check` renders in memory and runs
   `build/gates.py`: no Claude-token leaks (a `Task` directive or a labeled
-  `AskUserQuestion:` block outside a templated section leaks on purpose, so a
-  missing template fails here), frontmatter shape, dispatch-template invariants,
-  authored-config validation, determinism. It runs in `make check` and in the
-  `.githooks/pre-commit` hook.
+  `AskUserQuestion:` block outside a templated section leaks on purpose),
+  frontmatter shape, dispatch-template invariants, authored-config validation,
+  determinism. Most templated sections hold neither token, so the leak gate alone
+  would not notice a deleted template: every template listed in
+  `derive.REQUIRED_TEMPLATES` must exist, and a template directory that names no
+  artifact fails too. It runs in `make check` and in the `.githooks/pre-commit`
+  hook.
 - **Stale templates.** A template's first line is
   `<!-- source-sha256: <hex> -->`, the hash of the Claude section it was written
   against (never emitted). Editing that Claude section fails the check with

@@ -3,7 +3,7 @@
 The derived prose has no byte oracle, so these gates are the safety net:
 
   * no-leak — none of the Claude-specific tokens survive (``${CLAUDE_PLUGIN_ROOT}``,
-    a ``Task`` directive in either syntax, ``AskUserQuestion``, ``mcp__…``,
+    a ``Task`` / ``Agent`` directive in either syntax, ``AskUserQuestion``, ``mcp__…``,
     ``$ARGUMENTS``). The derivation deliberately leaves a ``Task`` directive and a
     labeled ``AskUserQuestion:`` block untouched outside a templated section, so
     this scan is what fails a build whose templates do not cover them.
@@ -25,7 +25,7 @@ import re
 # artifact. Kept independent of the substitution in derive.py on purpose.
 _LEAK_PATTERNS = (
     ("CORE_ROOT", re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}")),
-    ("task_block", re.compile(r"Task\(subagent_type=|Task\s+subagent_type=")),
+    ("task_block", re.compile(r"\b(?:Task|Agent)\s*\(\s*subagent_type\s*=|\bTask\s+subagent_type=")),
     ("auq", re.compile(r"AskUserQuestion")),
     ("mcp_ref", re.compile(r"mcp__[A-Za-z0-9_]+__[A-Za-z0-9_*]+")),
     ("args_injection", re.compile(r"\$ARGUMENTS")),

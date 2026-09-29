@@ -34,6 +34,12 @@ class OutputGateUnitTests(unittest.TestCase):
         self.assertTrue(check_codex_output('Task subagent_type=security prompt="z"',
                                            is_skill=False))
 
+    def test_task_leak_spacing_and_agent_name(self):
+        for text in ('Task( subagent_type="x")', 'Task (subagent_type = "x")',
+                     'Agent(subagent_type="x", prompt="y")'):
+            with self.subTest(text=text):
+                self.assertTrue(check_codex_output(text, is_skill=False))
+
     def test_auq_leak(self):
         self.assertTrue(check_codex_output("ask via AskUserQuestion now", is_skill=False))
 

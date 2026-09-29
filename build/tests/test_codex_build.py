@@ -12,6 +12,7 @@ import _common
 from _common import PLUGIN_ROOT
 
 import build as build_cli
+from derive import REQUIRED_TEMPLATES
 
 
 def run_main(argv):
@@ -161,6 +162,40 @@ class RefreshHashesCliTests(unittest.TestCase):
                 self.assertEqual(rc, 1)
                 self.assertIn("matches no section", err)
                 self.assertEqual(run_main(["--mode=refresh-hashes"]), 1)
+
+
+class RequiredTemplateTests(unittest.TestCase):
+    """A section without a Task directive or a labeled AskUserQuestion block
+    leaks nothing when its template is gone, so the manifest is the only net."""
+
+    def _check_without(self, mutate):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "sections"
+            shutil.copytree(build_cli._TEMPLATES, root)
+            mutate(root)
+            with mock.patch.object(build_cli, "_TEMPLATES", root):
+                return capture_main(["--mode=check"])
+
+    def test_manifest_matches_the_authored_templates(self):
+        authored = {p.stem for p in (build_cli._TEMPLATES / "security-project").glob("*.md")}
+        self.assertEqual(set(REQUIRED_TEMPLATES["security-project"]), authored)
+
+    def test_every_required_template_is_enforced(self):
+        for anchor in sorted(REQUIRED_TEMPLATES["security-project"]):
+            with self.subTest(anchor=anchor):
+                rc, err = self._check_without(
+                    lambda root: (root / "security-project" / f"{anchor}.md").unlink())
+                self.assertEqual(rc, 1)
+                self.assertIn(f"required template security-project/{anchor}.md is missing", err)
+
+    def test_template_dir_for_unknown_artifact_fails(self):
+        def add_orphan_dir(root):
+            (root / "security-changes").mkdir()
+            (root / "security-changes" / "x.md").write_text("x\n", encoding="utf-8")
+        rc, err = self._check_without(add_orphan_dir)
+        self.assertEqual(rc, 1)
+        self.assertIn("security-changes", err)
+        self.assertIn("matches no artifact", err)
 
 
 if __name__ == "__main__":

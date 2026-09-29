@@ -85,7 +85,10 @@ register) had two consumers left:
 4. **The output no-leak gate replaces the completeness guards.** A `Task`
    directive and a labeled `AskUserQuestion:` block are deliberately *not*
    substituted, so one outside a templated section reaches the output and fails
-   `gates.check_codex_output`.
+   `gates.check_codex_output`. *Amended in 5.0.0:* the leak gate cannot see a
+   deleted template for a section that holds neither token (3b, 9), so
+   `derive.REQUIRED_TEMPLATES` lists every templated anchor and the check fails
+   when one is missing or a template directory names no artifact.
 5. **Stale-template detector (replaces the pin tripwire).** Each template's first
    line is `<!-- source-sha256: <hex> -->`, the sha256 of the Claude section it was
    authored against; it is never emitted. Any change to that Claude section fails
