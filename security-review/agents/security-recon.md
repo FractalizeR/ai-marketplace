@@ -98,7 +98,7 @@ For each pending section remember:
 - `section_id` (from `<!-- section_id: ... -->`)
 - `enrichment_marker` (full string `<!-- enrichment_marker: ... -->`)
 - `enrichment_hint` (recipe's hint text — what exactly needs to be classified)
-- `data.candidates` (bounded list of input candidates from the recipe; usually ≤ 50) — or `data.evidence_files` (config files the recipe could not statically interpret)
+- `data.candidates` (bounded list of input candidates from the recipe; usually ≤ 50) — or `data.evidence_files` (config files the recipe found but could not interpret: recon reads config only through the booted console, so this is the normal case under `--no-console`)
 
 If there are no pending sections — go directly to step 6 (validation).
 
@@ -128,7 +128,7 @@ Do not grep across the whole project, do not read a file in full — **except** 
 
 **5.5. If data is insufficient.** For a section built from `data.candidates` (snippets ambiguous, file unavailable, regex match clearly false) — write `status: unknown` + `reason: "<short explanation>"`. Better unknown than hallucination. Still flip the marker to `done`.
 
-For a section built from `data.evidence_files` (e.g. a `security.php`/`framework.php` config the recipe could not statically parse) that you also cannot interpret — do NOT write `status: unknown`. Write `status: partial`, `reason: "<why>"`, `data:` with every schema key present (unknown values as the string `unknown`, `mfa: false`), and keep `source_files`. Reserve `status: unknown` for this section only when the evidence files, once read, turn out to hold no such config at all — that is "no evidence found", not "found but not understood".
+For a section built from `data.evidence_files` — typically `auth_layer`, left pending with a `config_uninterpreted: security: <no_console|console_failed|tree_mismatch|env_mismatch>` reason because the console did not run, failed, or gave a tree that misses what the files declare — Read the evidence files (5.2 allows it) and fill `data:` with the schema keys when the files state them (`status: ok`). If you cannot interpret them — do NOT write `status: unknown`. Write `status: partial`, `reason: "<why>"`, `data:` with every schema key present (unknown values as the string `unknown`, `mfa: false`), and keep `source_files` — they route the config files to the workers. Reserve `status: unknown` for this section only when the evidence files, once read, turn out to hold no such config at all — that is "no evidence found", not "found but not understood".
 
 ### Step 6. Validate
 
