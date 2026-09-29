@@ -31,9 +31,9 @@ CODEX_FORBIDDEN_CATS = (CAT_CORE_ROOT, CAT_TASK, CAT_AUQ, CAT_MCP, CAT_ARGS)
 _FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 _FM_FORBIDDEN_KEY = re.compile(r"(?m)^(allowed-tools|argument-hint):")
 # Codex worker prose is a bundled read-follow file, so agent-role refs
-# (agents/*.md, security-recon.md, security-refute.md) MUST survive; only the two
-# ORCHESTRATOR refs are unresolvable in a skill body (C1/E-C9).
-_CODEX_ORCH_XREF_RE = re.compile(r"(?<![\w-])security-(?:project|changes)\.md\b")
+# (agents/*.md, security-recon.md, security-refute.md) MUST survive; only the
+# ORCHESTRATOR ref is unresolvable in a skill body (C1/E-C9).
+_CODEX_ORCH_XREF_RE = re.compile(r"(?<![\w-])security-project\.md\b")
 # [^\S\n] = inline whitespace only, so an empty `name:\n` value does not let \s*
 # swallow the newline and capture the NEXT line's content as the value.
 _SKILL_NAME_RE = re.compile(r"(?m)^name:[^\S\n]*(.*)$")
@@ -41,9 +41,9 @@ _SKILL_DESC_RE = re.compile(r"(?m)^description:[^\S\n]*(.*)$")
 
 # Coupled sections whose template MUST wire an external-process dispatch.
 DISPATCH_ANCHORS = frozenset({
-    "4-recon-phase", "5-recon-phase",
-    "8-parallel-worker-launch", "10-parallel-worker-launch-in-mode-changes",
-    "11-5-1-launching-the-refute-wave", "12-5-1-launching-the-refute-wave",
+    "4-recon-phase",
+    "8-parallel-worker-launch",
+    "11-5-1-launching-the-refute-wave",
 })
 
 

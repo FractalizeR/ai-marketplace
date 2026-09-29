@@ -55,7 +55,7 @@ class RoundTripTests(unittest.TestCase):
 
     def test_core_root_count_from_grep(self):
         # Derive expectations from a raw scan, never a hardcoded literal; assert
-        # the 23 body / 4 frontmatter / 27 total split + no false positives.
+        # the 13 body / 2 frontmatter / 15 total split + no false positives.
         total = body = fm = 0
         for path, kind in ARTIFACTS.items():
             source = read(path)
@@ -68,9 +68,9 @@ class RoundTripTests(unittest.TestCase):
             for s in segments:
                 if s.category == "cmd_frontmatter":
                     fm += s.attrs["core_root_globs"]
-        self.assertEqual(total, 27)
-        self.assertEqual(body, 23)
-        self.assertEqual(fm, 4)
+        self.assertEqual(total, 15)
+        self.assertEqual(body, 13)
+        self.assertEqual(fm, 2)
         self.assertEqual(body + fm, total)
 
 

@@ -47,7 +47,6 @@ class BundleTopologyTests(unittest.TestCase):
             ".agents/plugins/marketplace.json",
             f"plugins/{PLUGIN_NAME}/.codex-plugin/plugin.json",
             f"plugins/{PLUGIN_NAME}/skills/security-project/SKILL.md",
-            f"plugins/{PLUGIN_NAME}/skills/security-changes/SKILL.md",
             f"plugins/{PLUGIN_NAME}/core/bin",
             f"plugins/{PLUGIN_NAME}/core/checklists",
             f"plugins/{PLUGIN_NAME}/core/agents/security.md",
@@ -78,9 +77,10 @@ class BundleTopologyTests(unittest.TestCase):
             self.assertNotIn("__pycache__", parts, f"bytecode leaked: {p}")
 
     def test_skills_carry_nonempty_frontmatter(self):
-        for name in ("security-project", "security-changes"):
-            text = (self.plugin / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
-            self.assertTrue(text.startswith("---\nname:"), f"{name} SKILL.md lacks skill frontmatter")
+        text = (self.plugin / "skills" / "security-project" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("---\nname:"), "SKILL.md lacks skill frontmatter")
+        self.assertEqual(sorted(p.name for p in (self.plugin / "skills").iterdir()),
+                         ["security-project"])
 
     def test_agents_have_no_leading_frontmatter(self):
         for name in ("security", "security-recon", "security-refute"):

@@ -32,7 +32,7 @@ def _make_temp_plugin() -> Path:
 
 
 class DiscoveryTests(unittest.TestCase):
-    def test_discovery_set_is_the_five_artifacts(self):
+    def test_discovery_set_is_the_authoritative_artifacts(self):
         found = build_cli.discover_artifacts(PLUGIN_ROOT)
         self.assertEqual({p.name for p in found},
                          {p.name for p in ARTIFACTS})

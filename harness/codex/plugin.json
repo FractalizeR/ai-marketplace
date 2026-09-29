@@ -19,8 +19,7 @@
       "php-symfony-laravel"
     ],
     "defaultPrompt": [
-      "Run a whole-project security audit with fr-security-review.",
-      "Audit the changes in the current branch against the base branch."
+      "Run a whole-project security audit with fr-security-review."
     ]
   }
 }

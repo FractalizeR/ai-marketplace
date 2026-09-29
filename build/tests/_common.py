@@ -1,4 +1,4 @@
-"""Shared test fixtures: put build/ on sys.path and resolve the 5 artifacts.
+"""Shared test fixtures: put build/ on sys.path and resolve the authoritative artifacts.
 
 Importing this module is the (intentional) side effect that makes the flat
 engine modules (``extract``, ``segments``, ``build`` …) importable from the
@@ -19,7 +19,6 @@ from extract import ArtifactKind  # noqa: E402  (after sys.path mutation)
 
 ARTIFACTS = {
     PLUGIN_ROOT / "commands" / "security-project.md": ArtifactKind.COMMAND,
-    PLUGIN_ROOT / "commands" / "security-changes.md": ArtifactKind.COMMAND,
     PLUGIN_ROOT / "agents" / "security.md": ArtifactKind.AGENT,
     PLUGIN_ROOT / "agents" / "security-recon.md": ArtifactKind.AGENT,
     PLUGIN_ROOT / "agents" / "security-refute.md": ArtifactKind.AGENT,

@@ -68,7 +68,6 @@ class OutputGateUnitTests(unittest.TestCase):
 
     def test_orchestrator_xref_flagged(self):
         self.assertTrue(check_codex_output("see security-project.md step 4", is_skill=False))
-        self.assertTrue(check_codex_output("see security-changes.md step 4", is_skill=False))
 
     def test_agent_read_follow_ref_allowed(self):
         # agents/*.md and bare role refs are REAL bundled files → not a violation.
@@ -172,9 +171,9 @@ class FullBuildIntegrationTests(unittest.TestCase):
 
     def test_dispatch_templates_wire_codex_exec(self):
         dispatch_anchors = {
-            "4-recon-phase", "5-recon-phase",
-            "8-parallel-worker-launch", "10-parallel-worker-launch-in-mode-changes",
-            "11-5-1-launching-the-refute-wave", "12-5-1-launching-the-refute-wave",
+            "4-recon-phase",
+            "8-parallel-worker-launch",
+            "11-5-1-launching-the-refute-wave",
         }
         for path in ARTIFACTS:
             for sec in self._coupled_sections(path):

@@ -99,55 +99,6 @@ ONE template, keyed by `(artifact_basename, section_anchor)`.
   harness_semantic: "Refute pass is sequential (single refute.md writer)."
   codex_action: "Sequential `codex exec` per <=20-finding batch; never parallel."
   non_interactive_fallback: "Same: sequential, single writer."
-
-# ---- commands/security-changes.md (changes-specific pins, NOT mirrored verbatim) ----
-- id: console-runner-changes
-  file: commands/security-changes.md
-  section_anchor: "4c-resolve-console-runner-environment-aware"
-  pinned: "decide HOW to run the project console"
-  harness_semantic: "Interactive console-runner choice (changes mode), boot-tested via --console-preflight."
-  codex_action: "Resolve from `--console-cmd=` / `--no-console`; no prompt."
-  non_interactive_fallback: "Console required and not booting (exit 3) -> stop with reason + exact flags (--console-cmd=<tpl> / --no-console, or FR_SECURITY_CONSOLE_CMD)."
-
-- id: recon-dispatch-changes
-  file: commands/security-changes.md
-  section_anchor: "5-recon-phase"
-  pinned: "subagent_type="security-recon""
-  harness_semantic: "In-process Task(security-recon) dispatch, changes mode (no sanity AUQ here)."
-  codex_action: "Launch 1 external `codex exec` (recon role); preserve the interwoven Python invocations."
-  non_interactive_fallback: "Always run recon; no human gate."
-
-- id: checkpoint-changes
-  file: commands/security-changes.md
-  section_anchor: "6-summary-and-optional-checkpoint"
-  pinned: "checkpoint as in"
-  harness_semantic: "Print summary + optional interactive checkpoint (delegated to security-project in prose)."
-  codex_action: "Carry the summary print; resolve the security-project xref; non-interactive checkpoint fallback."
-  non_interactive_fallback: "Skip the checkpoint; print the summary and proceed."
-
-- id: worker-fanout-changes
-  file: commands/security-changes.md
-  section_anchor: "10-parallel-worker-launch-in-mode-changes"
-  pinned: "subagent_type="security""
-  harness_semantic: "In-process Task fan-out (changes mode), <=6 workers, per-wave model."
-  codex_action: "Launch <=6 external `codex exec -m <tier>` via the dispatcher, one per wave."
-  non_interactive_fallback: "Bounded concurrency 6; persisted/CLI model map."
-
-- id: write-safety-net-changes
-  file: commands/security-changes.md
-  section_anchor: "10a-safety-net-progress-critical"
-  pinned: "did not execute Write"
-  harness_semantic: "Recover worker findings from the response message if the wave file is missing."
-  codex_action: "Recover from the dispatcher's captured stdout; else record a coverage gap."
-  non_interactive_fallback: "Unrecoverable -> coverage gap; do not block the report."
-
-- id: refute-changes
-  file: commands/security-changes.md
-  section_anchor: "12-5-1-launching-the-refute-wave"
-  pinned: "subagent_type=security-refute"
-  harness_semantic: "Sequential refute pass (single refute.md writer), changes mode."
-  codex_action: "Sequential `codex exec` per <=20-finding batch; never parallel."
-  non_interactive_fallback: "Same: sequential, single writer."
 ```
 
 ## ADR pointer

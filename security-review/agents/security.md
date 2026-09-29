@@ -21,7 +21,7 @@ The orchestrator passes you:
 - `entry_points_in_scope`: list of FQN/ID entry points for data flow tracing.
 - `target_files`: files that must be analyzed.
 - `slice_id`: unique wave identifier for the report file name.
-- `mode`: `project` or `changes`.
+- `mode`: always `project` (a legacy field; it does not change how you work).
 
 ### PATH RESOLUTION (project_root vs cwd)
 
@@ -36,15 +36,7 @@ Concrete rules:
 
 ### "Slice = priority, not restriction" principle
 
-For **`mode=project`** you are allowed to read any project file via Read/Grep/Glob/MCP. The slice defines **what must be covered** and **where to look first**, without forbidding data flow tracing into any file.
-
-### `mode=changes` principle
-
-Trace is allowed everywhere, but a finding is reported **only if the exploit path contains a changed node**. A "changed node" is determined by the `touched_by_diff: true` field on items in `CONTEXT.md` sections and/or by `sink_file`/`source_file` belonging to the prompt's `target_files`. **Do not grep the diff manually and do not try to reconstruct the changed file list yourself** — the recipe has already set `touched_by_diff` on every relevant item.
-
-Vulnerabilities entirely in unchanged code are not reported.
-
-The orchestrator has pre-populated `entry_points_in_scope` with both directions: reverse-grep (changed service → consumers) and forward-grep (changed entry → downstream). The array may contain both true HTTP/Console entry points and internal transit services. **Treat transit nodes as required stages of the data flow trace**, without expecting every element to be a controller/command.
+You are allowed to read any project file via Read/Grep/Glob/MCP. The slice defines **what must be covered** and **where to look first**, without forbidding data flow tracing into any file.
 
 ## READING CONTEXT.md (schema v2)
 
@@ -112,7 +104,6 @@ Take inventory specifics from `CONTEXT.md`; do not try to reassemble them during
 
 1. Read `<review_root>/CONTEXT.md` in full (not only relevant_section_paths — structural context is needed).
 2. Load all `checklists/*.md` from the prompt.
-3. For `mode=changes` — identify which nodes in the exploit path have `touched_by_diff: true` (per items in `CONTEXT.md`) or belong to `target_files`.
 
 ### Phase 2 — For each in-scope entry point
 
@@ -547,9 +538,8 @@ Before completion **mandatorily**:
 2. Load all passed checklists (absolute paths from the prompt)
 3. Resolve `relevant_section_paths` — for each dot-notation path find the corresponding payload in CONTEXT.md (including `recon_bags.{kind}.{name}.*`); skip missing ones without error.
 4. For each entry point in scope — trace data flow
-5. For `mode=changes` — verify that the exploit path contains a changed node (`touched_by_diff: true` or a file from `target_files`)
-6. For each finding normalize sink_snippet by the rules above (LLM-side, no hashing)
-7. **Write** the result to `<review_root>/waves/<slice_id>.md`, starting with the `<!-- wave_format: 2 -->` marker on the first line
-8. Verify file existence via `ls`
-9. Return a short confirmation (without finding bodies)
-10. Apply the quality gate objectively: confidence ≥ 8 and severity ≥ MEDIUM for `confirmed`. Do not lower severity and do not abandon a finding due to the presence of defensive controls — evaluate whether they can be bypassed (see "What NOT to treat as automatically safe"). A finding that fails the `confirmed` gate is not dropped — route it to `needs_validation` (deciding fact outside the repo) or `hardening` (no principal/resource affected); see "## VERDICT BUCKETS". Duplicates are not your concern — dedup handles them.
+5. For each finding normalize sink_snippet by the rules above (LLM-side, no hashing)
+6. **Write** the result to `<review_root>/waves/<slice_id>.md`, starting with the `<!-- wave_format: 2 -->` marker on the first line
+7. Verify file existence via `ls`
+8. Return a short confirmation (without finding bodies)
+9. Apply the quality gate objectively: confidence ≥ 8 and severity ≥ MEDIUM for `confirmed`. Do not lower severity and do not abandon a finding due to the presence of defensive controls — evaluate whether they can be bypassed (see "What NOT to treat as automatically safe"). A finding that fails the `confirmed` gate is not dropped — route it to `needs_validation` (deciding fact outside the repo) or `hardening` (no principal/resource affected); see "## VERDICT BUCKETS". Duplicates are not your concern — dedup handles them.

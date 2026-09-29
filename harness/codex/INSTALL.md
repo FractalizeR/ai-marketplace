@@ -7,8 +7,7 @@ Claude-authoritative command/agent prose — do not hand-edit files under
 Distribution is **self-hosted** (a local/team marketplace you host yourself); there
 is no OpenAI store submission.
 
-> For the architecture, model tiering, and troubleshooting across all three
-> harnesses, see the [multi-environment guide](../../docs/multi-environment.md).
+> For the architecture, model tiering, and troubleshooting, see the [multi-environment guide](../../docs/multi-environment.md).
 
 ## Quick path
 
@@ -38,8 +37,7 @@ dist/codex/                                   # = the dir you register with code
   .agents/plugins/marketplace.json            # marketplace: fractalizer-marketplace
   plugins/fr-security-review/
     .codex-plugin/plugin.json                 # plugin manifest
-    skills/security-project/SKILL.md          # orchestrator skills
-    skills/security-changes/SKILL.md
+    skills/security-project/SKILL.md          # orchestrator skill
     core/                                     # = $FR_SECURITY_CORE_ROOT
       bin/  checklists/
       agents/security.md  agents/security-recon.md  agents/security-refute.md
@@ -100,7 +98,7 @@ override the proposed tiers at a stdin checkpoint.
 ## 5. Run an audit
 
 Start a Codex session (or `codex exec`) and invoke the orchestrator skill
-(`security-project` or `security-changes`). The skill runs recon → wave planning →
+`security-project`. The skill runs recon → wave planning →
 external-process fan-out (one `codex exec -m <tier>` per slice, ≤6 concurrent) →
 dedupe, writing artifacts (`REPORT.md`, `findings.json`, `waves/`, …) under the review
 root you choose. Recon and each worker run

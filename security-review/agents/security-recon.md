@@ -1,6 +1,6 @@
 ---
 name: security-recon
-description: Recon agent for security review (schema v2). Runs the inventory utility, surgically enriches pending_enrichment sections via Edit, validates. Does not Write to CONTEXT.md. Launched by the security-project / security-changes orchestrator.
+description: Recon agent for security review (schema v2). Runs the inventory utility, surgically enriches pending_enrichment sections via Edit, validates. Does not Write to CONTEXT.md. Launched by the security-project orchestrator.
 model: sonnet
 ---
 
@@ -22,13 +22,11 @@ The orchestrator passes you in text:
 - `<review_root>` — path to the `security-review-{label}/` directory (relative or absolute). The utility will write `CONTEXT.md` there.
 - `--no-console` — flag (optional). If passed — forward to the utility.
 - `--console-cmd=<template>` — command template for running the project console inside a container / via Makefile (optional; resolved by the orchestrator's "resolve console runner" step). If passed — forward to the utility verbatim. Mutually exclusive with `--no-console` in practice (the orchestrator passes at most one).
-- `--diff-files=<path>` — file with the list of changed files (optional, for `scope=changes`). If passed — forward to the utility.
 - `--exclude=<csv>` — additional path prefixes (relative to project_root) to skip *before* parsing (optional). Forward to the utility as-is. The utility will combine them with the built-in `DEFAULT_EXCLUDE` (vendor, var/cache, node_modules, etc.).
 - `--recipe=<name>` — recipe name (optional, override detect). If passed — skip step 1, use `<name>` directly in step 2.
 
 **Flag-free `key=value` inputs (external-process harnesses).** Some harnesses dispatch you as a standalone process whose whole instruction is a single quoted prompt, so they cannot pass leading-`--` flags safely (a dropped quote would collide with the launcher's own options). They instead pass the same inputs as `key=value`; map each to the flag above before invoking the utility, and forward that flag verbatim:
 - `project_root=<path>` → `<project_root>`, `review_root=<path>` → `<review_root>`
-- `diff_files=<path>` → `--diff-files=<path>` (this is the only `scope=changes` signal — if you drop it, recon silently runs in project scope and `touched_by_diff` is never set)
 - `exclude=<csv>` → `--exclude=<csv>`
 - `console_mode=off` → `--no-console`; `console_mode=<a shell command>` → `--console-cmd=<that command>`; `console_mode=env` → **pass neither** flag (the operator exported `FR_SECURITY_CONSOLE_CMD`; the utility reads the console command from the environment itself — never try to reconstruct it from the prompt, its spaces do not survive the `key=value` split); `console_mode=auto` (or absent) → pass neither (the utility auto-selects the host runner)
 
@@ -67,7 +65,6 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/recon_inventory.py <project_root> \
     --review-root <review_root> \
     [--no-console] \
     [--console-cmd=<template>] \
-    [--diff-files=<path>] \
     [--exclude=<csv>]
 ```
 

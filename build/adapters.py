@@ -124,15 +124,15 @@ CODEX_CORE_ROOT = "${FR_SECURITY_CORE_ROOT}"    # bundled-core placeholder (NOT 
 CODEX_ARGS_PHRASE = "the invocation arguments"  # $ARGUMENTS has NO Codex substitution → neutral prose
 MCP_PHRASE = "a semantic IDE tool"
 AUQ_PHRASE = "an interactive prompt"
-# Codex strips only ORCHESTRATOR file refs (security-project.md / security-changes.md):
-# a standalone skill body cannot resolve a sibling orchestrator. Agent-role refs
+# Codex strips only the ORCHESTRATOR file ref (security-project.md): a standalone
+# skill body cannot resolve a sibling orchestrator. Agent-role refs
 # (agents/*.md, security-recon.md, security-refute.md) are REAL bundled read-follow
 # files a codex worker opens under ${FR_SECURITY_CORE_ROOT}/agents/ — they MUST survive (C1/CX1).
-# `security-project`/`security-changes` are orchestrator-only names (no agent shares
-# them), so strip them wherever they appear; the left guard `(?<![\w-])` only blocks a
-# match inside a longer word/hyphenated token (a fixed-length `agents/` lookbehind
-# would spuriously spare `subagents/security-project.md`).
-_CODEX_ORCH_XREF = re.compile(r"(?<![\w-])(security-(?:project|changes))\.md\b")
+# `security-project` is an orchestrator-only name (no agent shares it), so strip it
+# wherever it appears; the left guard `(?<![\w-])` only blocks a match inside a
+# longer word/hyphenated token (a fixed-length `agents/` lookbehind would spuriously
+# spare `subagents/security-project.md`).
+_CODEX_ORCH_XREF = re.compile(r"(?<![\w-])(security-project)\.md\b")
 
 
 def _strip_codex_xrefs(text: str) -> str:

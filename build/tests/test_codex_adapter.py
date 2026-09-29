@@ -96,7 +96,7 @@ class SkillFrontmatterTests(unittest.TestCase):
         self.assertTrue(out.endswith("body\n"))
 
     def test_description_unwrapped_and_quoted(self):
-        out = self._render_preamble("security-changes", desc='"a "b" c"')
+        out = self._render_preamble("security-project", desc='"a "b" c"')
         line = [l for l in out.splitlines() if l.startswith("description:")][0]
         self.assertTrue(line.startswith('description: "'))
         self.assertTrue(line.endswith('"'))
@@ -129,8 +129,6 @@ class XrefStripTests(unittest.TestCase):
     def test_strips_orchestrator_refs(self):
         self.assertEqual(_strip_codex_xrefs("see security-project.md now"),
                          "see security-project now")
-        self.assertEqual(_strip_codex_xrefs("see security-changes.md now"),
-                         "see security-changes now")
 
     def test_preserves_agent_read_follow_refs(self):
         for ref in ("agents/security.md", "agents/security-recon.md",

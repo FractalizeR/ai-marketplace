@@ -47,19 +47,18 @@ class AttrValueTests(unittest.TestCase):
             for s in _by_cat(extract(read(path), kind), "CORE_ROOT"):
                 roles[s.attrs["role"]] += 1
                 fences[s.attrs["fence_context"]] += 1
-        self.assertEqual(dict(roles), {"path_prefix": 21, "flag_value": 2})
-        self.assertEqual(dict(fences), {"triple_fence": 18, "inline_code": 5})
+        self.assertEqual(dict(roles), {"path_prefix": 12, "flag_value": 1})
+        self.assertEqual(dict(fences), {"triple_fence": 10, "inline_code": 3})
 
     def test_task_blocks_both_syntaxes_and_attrs(self):
         rows = []
-        for rel in ("commands/security-project.md", "commands/security-changes.md"):
-            for s in _by_cat(_segments(rel), "task_block"):
-                rows.append((s.attrs["syntax_variant"], s.attrs["subagent_type"],
-                             s.attrs["is_template"], s.attrs["is_directive"]))
-        # 6 directive blocks: recon (paren), worker (paren, templated model), refute (bare) x2
-        self.assertEqual(len(rows), 6)
-        self.assertEqual(sum(v == "paren" for v, *_ in rows), 4)
-        self.assertEqual(sum(v == "bare" for v, *_ in rows), 2)
+        for s in _by_cat(_segments("commands/security-project.md"), "task_block"):
+            rows.append((s.attrs["syntax_variant"], s.attrs["subagent_type"],
+                         s.attrs["is_template"], s.attrs["is_directive"]))
+        # 3 directive blocks: recon (paren), worker (paren, templated model), refute (bare)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(sum(v == "paren" for v, *_ in rows), 2)
+        self.assertEqual(sum(v == "bare" for v, *_ in rows), 1)
         worker = [r for r in rows if r[1] == "security"]
         self.assertTrue(all(r[2] for r in worker))           # model is_template
         self.assertTrue(all(is_dir for *_, is_dir in rows))  # all directives
@@ -67,10 +66,9 @@ class AttrValueTests(unittest.TestCase):
                          {"security-recon", "security", "security-refute"})
 
     def test_prose_task_mentions_not_tagged(self):
-        # Each command has exactly 3 Task *directives*; the prose `Task(...)`
-        # mention (project:122 / changes:126) must not be tagged.
-        for rel in ("commands/security-project.md", "commands/security-changes.md"):
-            self.assertEqual(len(_by_cat(_segments(rel), "task_block")), 3)
+        # The command has exactly 3 Task *directives*; the prose `Task(...)`
+        # mention in step 0.4 must not be tagged.
+        self.assertEqual(len(_by_cat(_segments("commands/security-project.md"), "task_block")), 3)
 
     def test_task_prompt_body_heredoc_captured(self):
         worker = next(s for s in _segments("commands/security-project.md")
@@ -101,13 +99,12 @@ class AttrValueTests(unittest.TestCase):
         for path, kind in ARTIFACTS.items():
             for s in _by_cat(extract(read(path), kind), "auq"):
                 kinds[s.attrs["occurrence_kind"]] += 1
-        self.assertEqual(dict(kinds), {"prose-mention": 7, "labeled-block": 1})
+        self.assertEqual(dict(kinds), {"prose-mention": 5, "labeled-block": 1})
 
-    def test_args_injection_present_in_both_commands(self):
-        for rel in ("commands/security-project.md", "commands/security-changes.md"):
-            args = _by_cat(_segments(rel), "args_injection")
-            self.assertEqual(len(args), 1)
-            self.assertEqual(args[0].original_text, "$ARGUMENTS")
+    def test_args_injection_present_in_command(self):
+        args = _by_cat(_segments("commands/security-project.md"), "args_injection")
+        self.assertEqual(len(args), 1)
+        self.assertEqual(args[0].original_text, "$ARGUMENTS")
 
     def test_mcp_refs_tagged_optional(self):
         total = 0
@@ -116,7 +113,7 @@ class AttrValueTests(unittest.TestCase):
                 total += 1
                 self.assertTrue(s.attrs["optional"])
                 self.assertTrue(s.attrs["tool"].startswith("mcp__"))
-        self.assertEqual(total, 5)
+        self.assertEqual(total, 3)
 
 
 class ParserReadsNotAssertsTests(unittest.TestCase):
@@ -141,22 +138,11 @@ class ParserReadsNotAssertsTests(unittest.TestCase):
 
 
 class NegativeGuardTests(unittest.TestCase):
-    def test_base_branch_never_tagged(self):
-        # ${BASE_BRANCH} is a harness-agnostic shell var: must stay NEUTRAL.
-        source = read(PLUGIN_ROOT / "commands" / "security-changes.md")
-        segments = extract(source, ArtifactKind.COMMAND)
-        neutral_occurrences = sum(
-            s.original_text.count("${BASE_BRANCH}")
-            for s in segments if s.tier is Tier.NEUTRAL
-        )
-        self.assertEqual(neutral_occurrences, source.count("${BASE_BRANCH}"))
-        self.assertGreater(neutral_occurrences, 0)
-
     def test_arguments_heading_not_tagged_as_args(self):
         # `## ARGUMENTS` (no $) must not be mistaken for $ARGUMENTS.
-        for rel in ("commands/security-project.md", "commands/security-changes.md"):
-            args = [s for s in _segments(rel) if s.category == "args_injection"]
-            self.assertTrue(all(s.original_text == "$ARGUMENTS" for s in args))
+        args = [s for s in _segments("commands/security-project.md")
+                if s.category == "args_injection"]
+        self.assertTrue(all(s.original_text == "$ARGUMENTS" for s in args))
 
     def test_placeholders_not_tagged_as_point_tokens(self):
         # <REVIEW_ROOT>/<PROJECT_ROOT> live in neutral or inside task prompt bodies,

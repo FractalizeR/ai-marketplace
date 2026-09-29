@@ -27,14 +27,6 @@ _EXPECTED_COUPLED = {
         "9-safety-net-progress-per-worker",
         "11-5-1-launching-the-refute-wave",
     },
-    "security-changes.md": {
-        "4c-resolve-console-runner-environment-aware",
-        "5-recon-phase",
-        "6-summary-and-optional-checkpoint",
-        "10-parallel-worker-launch-in-mode-changes",
-        "10a-safety-net-progress-critical",
-        "12-5-1-launching-the-refute-wave",
-    },
 }
 
 
