@@ -11,7 +11,7 @@
 
 ## PasswordHasher misuse
 
-- Symfony password hasher `plaintext` or `md5`/`sha1` for User entity (`config/packages/security.yaml::password_hashers`) — applied at `UserPasswordHasherInterface::hashPassword()` → weak password hashes in DB
+- Symfony password hasher `plaintext` or `md5`/`sha1` for User entity (security config's `password_hashers`, e.g. `config/packages/security.{yaml,php}`) — applied at `UserPasswordHasherInterface::hashPassword()` → weak password hashes in DB
 
 ## Symfony JWT bundle pitfalls
 

@@ -176,3 +176,7 @@ Codex has no `opencode.json`-style permission file. The security posture rests o
 **Residual:** run the audit only against code you trust, in a trusted environment;
 recon may execute the project's own console (`bin/console`) for enrichment. For a
 hostile-repo audit pass `--no-console` and consider a sandbox.
+
+The run boot-tests the resolved console up front and **stops** if a console is
+required but doesn't boot, unless `--console-cmd=<tpl>`, `FR_SECURITY_CONSOLE_CMD`,
+or `--no-console` is set.

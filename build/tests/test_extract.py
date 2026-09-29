@@ -47,8 +47,8 @@ class AttrValueTests(unittest.TestCase):
             for s in _by_cat(extract(read(path), kind), "CORE_ROOT"):
                 roles[s.attrs["role"]] += 1
                 fences[s.attrs["fence_context"]] += 1
-        self.assertEqual(dict(roles), {"path_prefix": 19, "flag_value": 2})
-        self.assertEqual(dict(fences), {"triple_fence": 17, "inline_code": 4})
+        self.assertEqual(dict(roles), {"path_prefix": 21, "flag_value": 2})
+        self.assertEqual(dict(fences), {"triple_fence": 18, "inline_code": 5})
 
     def test_task_blocks_both_syntaxes_and_attrs(self):
         rows = []
@@ -101,7 +101,7 @@ class AttrValueTests(unittest.TestCase):
         for path, kind in ARTIFACTS.items():
             for s in _by_cat(extract(read(path), kind), "auq"):
                 kinds[s.attrs["occurrence_kind"]] += 1
-        self.assertEqual(dict(kinds), {"prose-mention": 5, "labeled-block": 1})
+        self.assertEqual(dict(kinds), {"prose-mention": 7, "labeled-block": 1})
 
     def test_args_injection_present_in_both_commands(self):
         for rel in ("commands/security-project.md", "commands/security-changes.md"):

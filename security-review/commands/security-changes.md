@@ -32,7 +32,7 @@ allowed-tools:
   - AskUserQuestion
 ---
 
-You are the orchestrator of a security review for the current branch diff. Recon, reverse-grep, forward-grep, parallel workers in `mode=changes`, deterministic dedup.
+You are the orchestrator of a security review for the current branch diff. Recon, reverse-grep, forward-grep, parallel workers in `mode=changes`, deterministic dedup. Console-enriched recon (Symfony) needs a working project environment — a console that actually boots; step 4c resolves and boot-tests it before recon depends on it.
 
 ## ARGUMENTS
 
@@ -367,15 +367,21 @@ Extra target files for waves: <N> (will be merged into every wave's target_files
 
 ### 4c. Resolve console runner (environment-aware)
 
-Identical logic to `security-project` step 3b — decide HOW to run the project console (the only recon step that executes the project), asking the user rather than silently degrading when the project looks containerized. Skip when `--no-console` (wins) / `--console-cmd=<tpl>` was passed (forward it), **when `FR_SECURITY_CONSOLE_CMD` is set in the environment** (a launcher/CI exported the console command out-of-band → set `CONSOLE_CMD = env`, forward no console flag; the utility reads the variable itself — do **not** echo its space-containing value into the prompt), or when `--skip-recon` is taken. Otherwise:
+Identical logic to `security-project` step 3b — decide HOW to run the project console (the only recon step that executes the project), asking the user rather than silently degrading when the project looks containerized, then boot-test the resolved runner before recon depends on it. Skip the whole step only when `--skip-recon` is taken (CONTEXT.md is reused, not regenerated). Otherwise resolve `CONSOLE_CMD`:
 
-1. Detect the recipe (`recon_inventory.py "<PROJECT_ROOT>" --detect`); console enrichment applies to **Symfony** only — for other recipes proceed with no console flags.
-2. Probe: `python3 ${CLAUDE_PLUGIN_ROOT}/bin/recon/environment.py "<PROJECT_ROOT>" --console-entrypoint "php bin/console"` (read-only, safe).
-3. If `containerized == false` AND `host_php_present == true` → proceed with no console flags (utility auto-selects host).
-4. Else → `AskUserQuestion` built from the probe's `suggestions` (**show + confirm** trust model: present the Python-built `docker compose exec -T <service> php bin/console`; for Makefile suggestions show `detail`/recipe body; offer run-on-host, custom command, and skip). Map to `--console-cmd="<chosen>"` or, for skip, `--no-console`.
-5. Set `CONSOLE_CMD` and forward it to the recon agent in step 5.
+- `--no-console` (wins) / `--console-cmd=<tpl>` was passed → forward it verbatim.
+- **`FR_SECURITY_CONSOLE_CMD` is set in the environment** — a launcher/CI exported the console command out-of-band → `CONSOLE_CMD = env`, forward no console flag; the utility reads the variable itself — do **not** echo its space-containing value into the prompt.
+- Neither of the above:
+  1. Detect the recipe (`recon_inventory.py "<PROJECT_ROOT>" --detect`); console enrichment applies to **Symfony** only — for other recipes `CONSOLE_CMD = none`.
+  2. Probe: `python3 ${CLAUDE_PLUGIN_ROOT}/bin/recon/environment.py "<PROJECT_ROOT>" --console-entrypoint "php bin/console"` (read-only, safe).
+  3. If `containerized == false` AND `host_php_present == true` → `CONSOLE_CMD = none` (utility auto-selects host).
+  4. Else → `AskUserQuestion` built from the probe's `suggestions` (**show + confirm** trust model: present the Python-built `docker compose exec -T <service> php bin/console`; for Makefile suggestions show `detail`/recipe body; offer run-on-host, custom command, and skip). Map to `--console-cmd="<chosen>"` or, for skip, `--no-console`.
 
-> Non-interactive / CI: do not block — proceed with no flag; the utility records a loud `console_gap` (surfaced in REPORT.md). Pass `--console-cmd`/`--no-console` explicitly in CI.
+Whichever branch resolved `CONSOLE_CMD` (including `none`, which still boot-tests: the host-auto path can fail at runtime for mundane reasons — no `vendor/`, no `.env` — and a non-Symfony recipe simply comes back `applicable=false`):
+
+5. Boot-test: `python3 ${CLAUDE_PLUGIN_ROOT}/bin/recon_inventory.py "<PROJECT_ROOT>" --console-preflight [--console-cmd=<tpl> | --no-console]` — pass the same flag you'd forward to recon in step 5; nothing extra for `env` or `none`. `applicable=false` / `ok=true` → forward `CONSOLE_CMD` to the recon agent in step 5. `ok=false` (exit 3) → show `reason` + `suggestions` via `AskUserQuestion`; offer a different `--console-cmd` (repeat the boot-test), a conscious `--no-console` (ceiling=medium, static fallback + agent enrichment), or stop.
+
+> Non-interactive / CI (no human to prompt): if the boot-test fails (`ok=false`), **stop** — do not proceed degraded. Report `reason` and the exact flags that unblock it (`--console-cmd=<tpl>` / `--no-console`, or export `FR_SECURITY_CONSOLE_CMD`). CI must pass one of these explicitly. `applicable=false` / `ok=true` proceeds with no prompt needed.
 
 ### 5. Recon phase
 

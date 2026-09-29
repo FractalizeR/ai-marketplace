@@ -58,21 +58,23 @@ GraphQL endpoints act as a universal data-access layer: one HTTP request with an
 
 Wave 1-C added the concept `route_authz_matrix` → the recipe resolves it into `recon_bags.stack.symfony.routes_authz_matrix`. Wave 2-D will actually start emitting this section from the recipe; until then the section may be absent. The checklist must work in both branches — **graceful fallback** to grep when the section is absent.
 
-**Branch 1 — section is present (`recon_bags.stack.symfony.routes_authz_matrix.status == ok`):**
+**Branch 1 — section is present (`recon_bags.stack.symfony.routes_authz_matrix.status` is `ok` or `partial`):**
 
 - Walk `routes_authz_matrix.items[*]` directly. Each item contains at least: `route` (path/name), `methods` (GET/POST/...), `controller`, `authz_evidence` (an array of records like `{kind, source, strength}` where `kind ∈ {is_granted_attribute, deny_unless_granted_call, access_control_yaml, voter_call, none}`, `strength ∈ {hard_deny, soft, missing}`).
 - **For each route with a mutating method (POST/PUT/PATCH/DELETE):**
   - If `authz_evidence` is empty or contains only records with `strength == soft` (e.g., only `IS_AUTHENTICATED_REMEMBERED` without a role check) → worker reports `missing_authz`, **confidence ≥ 8**.
   - If the route accepts an entity (`#[MapEntity]` / ParamConverter / `$repo->find($request->get('id'))` in the controller body) and `authz_evidence` is empty, **and** the entity lies in `recon_bags.stack.symfony.sensitive_columns.items` (or the Doctrine entity bag equivalent) → worker reports `idor_lookup` / `missing_authz`, **confidence ≥ 8**.
   - Additionally: if the route is protected only by `IS_AUTHENTICATED_REMEMBERED` for a sensitive operation (see `auth.md` → IS_AUTHENTICATED_REMEMBERED vs FULLY) — a separate finding `missing_authz`, confidence ≥ 7.
+- **`access_control_interpreted: false` on an item** (bag `status: partial`, `reason: access_control_not_interpreted…`) means the recipe found the security config but could not interpret it (PHP/XML config, several files, a prod-only override, or rules the console's tree does not contain — the reason then names the `config_env_*` gap). For that item the firewall / `access_control` layer is **unknown, not missing**: `firewall: null` and `matched_access_control: null` say nothing, and the absence of an `access_control` record in `authz_evidence` is not a gap. Before reporting `missing_authz` on such a route, read the security config files in the bag's `source_files` and establish which `access_control` rule covers the route path; if you cannot, use the Branch 2 floor (≥ 7).
+- **Bag `status: partial` with `reason: config_env_<env>_only…` / `config_env_dev_overrides…`** and no per-item flag: `firewall` / `matched_access_control` were read from a console running a non-production env. Treat them as correct for that env and check the prod-only / dev-only overrides in `source_files` for routes you report on.
 - This does not exempt you from reading the source — recipe evidence only marks **what to look at first** and fixes the floor.
 
-**Branch 2 — section is missing or `status != ok` (graceful fallback):**
+**Branch 2 — section is missing or its `status` is neither `ok` nor `partial` (graceful fallback):**
 
 - Use standard grep:
   - `grep -n "#\[Route(" src/Controller/` → find all routes;
   - for each with `methods: ['POST']` / `['PUT']` / `['PATCH']` / `['DELETE']` or without `methods` (meaning any method) — check the nearest `#[IsGranted(...)]` attribute on the method or class, or `denyAccessUnlessGranted(...)` in the method body;
-  - additionally check `config/packages/security.yaml` access_control rules covering the route prefix.
+  - additionally check the `access_control` rules covering the route prefix (`config/packages/security.yaml`, or wherever the `security:` config lives — PHP/XML files and several files are common).
 - Confidence ≥ 7 for suspicious mutating routes without explicit protection (without recipe evidence we cannot guarantee that a voter in an adjacent file was not missed — hence the floor is lower than in Branch 1).
 - **Do not lower findings just because the section is absent** — that reduces recall. Just use a more conservative floor.
 

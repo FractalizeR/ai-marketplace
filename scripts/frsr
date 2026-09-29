@@ -19,7 +19,11 @@
 #                                contain spaces, e.g. "docker compose exec -T php
 #                                bin/console"); exported as FR_SECURITY_CONSOLE_CMD
 #                                so it rides the environment intact instead of the
-#                                whitespace-splitting orchestrator arg contract
+#                                whitespace-splitting orchestrator arg contract.
+#                                The run boot-tests the console up front and
+#                                stops if one is required but doesn't boot, unless
+#                                this flag, the env var, or --no-console (after
+#                                --) is set.
 #   --no-resolve                 reuse an existing .model_map.json, skip discovery
 #   --go                         (codex) actually execute; without it, the prepared
 #                                command is printed for review (codex runs the

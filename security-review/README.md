@@ -23,6 +23,8 @@ Minimum run:
 
 Artifacts are written to `security-review-<label>/` in the current working directory. The folder is automatically added to a local `.gitignore` (`<review_root>/.gitignore` with the content `*`). The plugin does not modify the project-level `.gitignore`; if review artifacts are already tracked by git, it warns and prints the command to stop tracking them instead of touching git state itself.
 
+For a Symfony project, a working project environment (a `bin/console` that actually boots) is a precondition of full-quality recon — the orchestrator resolves the runner and confirms it boots before recon starts, and stops with fix-it flags if it can't. `--no-console` is the conscious static-only opt-out; see [Security model](#security-model).
+
 ## Pipeline
 
 1. **Recon.** A recipe (Symfony / Laravel / generic PHP) collects a structured inventory of the project without an LLM: routes, middleware, controllers, data models, voters, form classes, listeners, messenger handlers, etc. The result is `<review_root>/CONTEXT.md` (schema v2 with frontmatter and closed shape specs).
@@ -46,8 +48,8 @@ For your own project, `bin/dedupe/cost.py estimate <review_root>` after the firs
 **What the plugin reads and executes:**
 
 - **Read-only.** The recipe and checklists only read the project source code; they never modify files outside `<review_root>/`.
-- **Console smoke by default (environment-aware).** The recon utility may run `bin/console list` / `debug:router` (Symfony) to enrich sections (routes, registered services, etc.) — **the project's bootstrap code is executed**. Before doing so, recon probes the execution environment: if the project looks **containerized** (docker compose / Makefile / ddev / Sail) — where running on the host would use the wrong PHP version / unreachable services — the orchestrator **asks you how to run the console** (or to skip) rather than executing on the host. Pass `--console-cmd="docker compose exec -T php php bin/console"` to run it inside the container. When skipped, a `console_gap` is recorded (ceiling=medium) and surfaced in REPORT.md — never a silent degrade.
-- **PHP metadata extractor.** `bin/recon/extract_php_metadata.php` parses PHP files via `token_get_all` without require/include — it does not execute project code. Subprocess sandbox: `timeout=60s`, `memory_limit=256M`, path traversal protection via `Path.resolve() + is_relative_to(project_root)`.
+- **Console smoke by default (environment-aware), boot-tested up front.** The recon utility may run `bin/console list` / `debug:router` (Symfony) to enrich sections (routes, registered services, etc.) — **the project's bootstrap code is executed**. Before recon starts, the orchestrator probes the execution environment and boot-tests the resolved runner: if the project looks **containerized** (docker compose / Makefile / ddev / Sail) — where running on the host would use the wrong PHP version / unreachable services — it **asks you how to run the console** (or to skip) rather than executing on the host, then confirms the chosen runner actually boots. Pass `--console-cmd="docker compose exec -T php php bin/console"` to run it inside the container. A console that's required but doesn't boot stops the run with the reason and the exact fix-it flags (`--console-cmd=...` / `--no-console`) — non-interactively (CI) this is a hard stop, not a silent degrade, so pass one of these flags explicitly in CI. Choosing (or passing) `--no-console` records a `console_gap` (ceiling=medium), surfaced in REPORT.md.
+- **PHP metadata extractor.** `bin/recon/extract_php_metadata.php` parses PHP files via `token_get_all` without require/include — it does not execute project code. Subprocess sandbox: `timeout=180s` (override via `FR_SECURITY_EXTRACTOR_TIMEOUT`), `memory_limit=512M`, path traversal protection via `Path.resolve() + is_relative_to(project_root)`. Any directory whose basename starts with `.` (`.cache/`, `.phpunit/`, …) is never walked, independently of `--exclude`.
 - **Worker tools.** Workers use Read, Grep, Glob; no Write to project files, no git commands except safe read-only ones, no code execution.
 
 **When isolation is needed:**
@@ -64,7 +66,7 @@ If the project runs inside a container, the host PHP is the wrong runtime (diffe
 /fr-security-review:security-project --console-cmd="docker compose exec -T php php bin/console"
 ```
 
-If you don't pass it and the project looks containerized, recon asks interactively (showing the detected runner / Makefile target for confirmation). Choosing "skip" records a `console_gap` instead of running on the host.
+If you don't pass it and the project looks containerized, recon asks interactively (showing the detected runner / Makefile target for confirmation). Choosing "skip" records a `console_gap` instead of running on the host; if the chosen (or auto-selected) runner doesn't actually boot, the run stops before recon with the reason and the flags to fix it.
 
 **Isolation options (for untrusted repos):**
 

@@ -28,7 +28,7 @@ allowed-tools:
   - AskUserQuestion
 ---
 
-You are the project security review orchestrator. You run recon, manage parallel worker waves, stitch results through a deterministic dedup script.
+You are the project security review orchestrator. You run recon, manage parallel worker waves, stitch results through a deterministic dedup script. Console-enriched recon (Symfony) needs a working project environment — a console that actually boots; step 3b resolves and boot-tests it before recon depends on it.
 
 ## ARGUMENTS
 
@@ -278,43 +278,47 @@ Do not analyze in security review:
 
 ### 3b. Resolve console runner (environment-aware)
 
-Console enrichment (running the project's `bin/console` for routes / ceiling=high) is the only recon step that **executes the project**. Running it on the host when the project lives **inside a container** distorts the environment (wrong PHP version, services unreachable). This step decides HOW to run it — and, when ambiguous, **asks you rather than silently degrading** (which would lower analysis quality).
+Console enrichment (running the project's `bin/console` for routes / ceiling=high) is the only recon step that **executes the project**. Running it on the host when the project lives **inside a container** distorts the environment (wrong PHP version, services unreachable). This step decides HOW to run it — and, when ambiguous, **asks you rather than silently degrading** (which would lower analysis quality) — then boot-tests the resolved runner before recon depends on it.
 
-Skip this whole step (set `CONSOLE_CMD = none`, proceed to step 4) when **any** of these holds:
+Skip this whole step (set `CONSOLE_CMD = none`, proceed to step 4) when `--skip-recon` is taken (CONTEXT.md is reused, not regenerated).
 
-- `--no-console` was passed → forward `--no-console` to the recon agent (user's explicit static-only choice). Wins over everything below.
-- `--console-cmd=<tpl>` was passed → forward `--console-cmd=<tpl>` verbatim (user already chose the runner).
-- **`FR_SECURITY_CONSOLE_CMD` is set in the environment** (check `[ -n "$FR_SECURITY_CONSOLE_CMD" ]`) — a launcher (`frsr --console-cmd`) or CI exported a console command out-of-band → set `CONSOLE_CMD = env` and forward **no** console flag to the recon agent. `recon_inventory.py` reads the command from the environment itself. **Do NOT read or forward its value** — it may contain spaces that the whitespace-split argument contract cannot carry; passing only the "console available via env" signal is the whole point. (`--no-console` still wins; an explicit `--console-cmd=<tpl>` flag, when present, takes precedence over the env — same order as `recon_inventory._resolve_console_cmd`.)
-- `--skip-recon` path is taken (CONTEXT.md is reused, not regenerated).
+Otherwise, resolve `CONSOLE_CMD`:
 
-Otherwise:
+- `--no-console` was passed → `CONSOLE_CMD = --no-console` (user's explicit static-only choice). Wins over everything below.
+- `--console-cmd=<tpl>` was passed → `CONSOLE_CMD = --console-cmd=<tpl>` (user already chose the runner).
+- **`FR_SECURITY_CONSOLE_CMD` is set in the environment** (check `[ -n "$FR_SECURITY_CONSOLE_CMD" ]`) — a launcher (`frsr --console-cmd`) or CI exported a console command out-of-band → `CONSOLE_CMD = env`; forward **no** console flag to the recon agent or to the boot-test below. `recon_inventory.py` reads the command from the environment itself. **Do NOT read or forward its value** — it may contain spaces that the whitespace-split argument contract cannot carry; passing only the "console available via env" signal is the whole point. (`--no-console` still wins; an explicit `--console-cmd=<tpl>` flag, when present, takes precedence over the env — same order as `recon_inventory._resolve_console_cmd`.)
+- None of the above:
+  1. **Detect whether the stack even has console enrichment.** Run `python3 ${CLAUDE_PLUGIN_ROOT}/bin/recon_inventory.py "<PROJECT_ROOT>" --detect` and read `recipe`. Only **Symfony** has console enrichment today (Laravel/generic are fully static). If `recipe != symfony` → `CONSOLE_CMD = none`, proceed to step 4.
+  2. **Probe the environment** (read-only; runs only host `php --version` + file reads — safe even for untrusted repos):
 
-1. **Detect whether the stack even has console enrichment.** Run `python3 ${CLAUDE_PLUGIN_ROOT}/bin/recon_inventory.py "<PROJECT_ROOT>" --detect` and read `recipe`. Only **Symfony** has console enrichment today (Laravel/generic are fully static). If `recipe != symfony` → nothing to resolve, proceed to step 4 with no console flags.
+     ```bash
+     python3 ${CLAUDE_PLUGIN_ROOT}/bin/recon/environment.py "<PROJECT_ROOT>" --console-entrypoint "php bin/console"
+     ```
 
-2. **Probe the environment** (read-only; runs only host `php --version` + file reads — safe even for untrusted repos):
+     This prints JSON: `{containerized, container_signals, host_php_present, host_php_version, suggested_php_service, suggestions:[{mode, cmd_template, label, source, detail}], reason}`.
+  3. **If `containerized == false` AND `host_php_present == true`** → the host is a faithful runner. `CONSOLE_CMD = none` (the recon utility auto-selects the host runner).
+  4. **Otherwise (containerized, or no host php)** → **ask the user** via `AskUserQuestion`. Build ≤4 options from the probe's `suggestions` (most relevant first), always including a custom and a skip option. **Trust model — show + confirm:** present the Python-built command verbatim; for any `suggestion.source` starting with `makefile:`, include its `detail` (the parsed recipe body) in the option description so the user sees exactly what would run — never auto-run a repo-derived command without showing it. Suggested option set:
+     - **Run in container** — `cmd_template` of the first `container` suggestion (e.g. `docker compose exec -T <suggested_php_service> php bin/console`). The `-T` flag is already baked in.
+     - **Via Makefile target `<target>`** — when a `makefile` suggestion exists; put its `detail` (recipe body) in the description.
+     - **Run on host (php `<host_php_version>`)** — when `host_php_present`; note it may distort a containerized project.
+     - **Skip console enrichment (static-only)** — recommended for hostile/untrusted repos; the gap will be recorded.
+     - (The user can always type a custom command via the free-text option.)
+
+     Map the answer to `CONSOLE_CMD`: a container / makefile / host / custom command → `--console-cmd="<chosen template>"`; skip → `--no-console`.
+
+Whichever branch resolved `CONSOLE_CMD` (including `none`, which still boot-tests: the host-auto path can fail at runtime for mundane reasons — no `vendor/`, no `.env` — and a non-Symfony recipe simply comes back `applicable=false`):
+
+5. **Boot-test the resolved runner.**
 
    ```bash
-   python3 ${CLAUDE_PLUGIN_ROOT}/bin/recon/environment.py "<PROJECT_ROOT>" --console-entrypoint "php bin/console"
+   python3 ${CLAUDE_PLUGIN_ROOT}/bin/recon_inventory.py "<PROJECT_ROOT>" --console-preflight [--console-cmd=<tpl> | --no-console]
    ```
 
-   This prints JSON: `{containerized, container_signals, host_php_present, host_php_version, suggested_php_service, suggestions:[{mode, cmd_template, label, source, detail}], reason}`.
+   Pass the same flag you'd forward to recon in step 4; nothing extra for `env` or `none`. Read the JSON result:
+   - `applicable=false` or `ok=true` → forward `CONSOLE_CMD` to the recon agent in step 4.
+   - `ok=false` (exit 3) → the console is required but not booting. Show `reason` and `suggestions` to the user via `AskUserQuestion`, then offer: (a) pick a suggested or type a custom `--console-cmd` and repeat this boot-test, (b) `--no-console` as a conscious static-only opt-out (state the cost: ceiling=medium, config via static fallback + agent enrichment), (c) stop the review. Loop on (a) until it passes or the user picks (b) or (c).
 
-3. **If `containerized == false` AND `host_php_present == true`** → the host is a faithful runner. Proceed to step 4 with **no** console flags (the recon utility auto-selects the host runner).
-
-4. **Otherwise (containerized, or no host php)** → **ask the user** via `AskUserQuestion`. Build ≤4 options from the probe's `suggestions` (most relevant first), always including a custom and a skip option. **Trust model — show + confirm:** present the Python-built command verbatim; for any `suggestion.source` starting with `makefile:`, include its `detail` (the parsed recipe body) in the option description so the user sees exactly what would run — never auto-run a repo-derived command without showing it. Suggested option set:
-   - **Run in container** — `cmd_template` of the first `container` suggestion (e.g. `docker compose exec -T <suggested_php_service> php bin/console`). The `-T` flag is already baked in.
-   - **Via Makefile target `<target>`** — when a `makefile` suggestion exists; put its `detail` (recipe body) in the description.
-   - **Run on host (php `<host_php_version>`)** — when `host_php_present`; note it may distort a containerized project.
-   - **Skip console enrichment (static-only)** — recommended for hostile/untrusted repos; the gap will be recorded.
-   - (The user can always type a custom command via the free-text option.)
-
-   Map the answer to a forward value:
-   - a container / makefile / host / custom command → `--console-cmd="<chosen template>"`
-   - skip → `--no-console`
-
-5. Set `CONSOLE_CMD` to the resolved `--console-cmd=...` or `--no-console` (or none) and forward it to the recon agent in step 4.
-
-> Non-interactive / CI: if you cannot prompt (no human), do **not** block — proceed with no console flag. The recon utility then records a loud coverage gap (`console_gap`, ceiling=medium) which surfaces in REPORT.md, so nothing is silently dropped. Pass `--console-cmd`/`--no-console` explicitly in CI to make the choice deterministic.
+> Non-interactive / CI (no human to prompt): if the boot-test fails (`ok=false`), **stop** the review — do not proceed degraded. Report `reason` and the exact flags that unblock it (`--console-cmd=<tpl>` or `--no-console`, or export `FR_SECURITY_CONSOLE_CMD`). CI must pass one of these explicitly to make the choice deterministic; `applicable=false` / `ok=true` proceeds with no prompt needed.
 
 ### 4. Recon phase
 

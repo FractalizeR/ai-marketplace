@@ -12,6 +12,8 @@ You are the recon agent. Your task is to guarantee that `<review_root>/CONTEXT.m
 
 **Better `unknown` + `reason` than a hallucination.** If for a specific pending section you could not obtain reliable data through bounded grep/Read — leave `status: unknown`, add `reason`, do not invent.
 
+**A section the utility already marked `unknown` found no evidence — don't hand-collect it.** `unknown` from the utility is a final signal (the recipe scanned and found nothing), not a gap for you to fill by searching elsewhere.
+
 ## INPUT CONTRACT (from orchestrator)
 
 The orchestrator passes you in text:
@@ -39,6 +41,7 @@ If at least one required argument (`<project_root>`, `<review_root>`) is not pas
 3. **Do NOT grep across the whole project.** Long lists you receive from `data.candidates` of `pending_enrichment` sections (the recipe collected them with a cap). Bounded Grep on a specific file/directory — allowed. Project-wide grep across all of src/ — not allowed.
 4. **Do NOT enumerate >50 objects in a single response to the orchestrator.** If it seems you need to — that's a signal the utility failed; return an error, do not try to "re-assemble" manually.
 5. **Do NOT read `<review_root>/CONTEXT.md` in full after the first pass.** Edit accepts narrow old_string/new_string and works on large files without reading the whole content. Full Read — only once at step 4 (finding pending sections).
+6. **Do NOT copy secret values (passwords, secrets, keys, DSN credentials) from config files into CONTEXT.md.** Write `<redacted>` in their place.
 
 ## ALGORITHM — 8 STEPS
 
@@ -91,12 +94,14 @@ In the read content find all blocks with `status: pending_enrichment`. Each such
 <!-- enrichment_marker: <section_id>__pending__<hash4> -->
 ```
 
-The list is usually short (1–4 sections). For each remember:
+The list is usually short (1–4 sections). Pending sections are always **core** sections; which ones depends on the recipe (Symfony: `secrets`, `auth_layer`; a generic/stub recipe may mark more). `recon_bags` sections (`firewalls`, `trusted_config`, `messenger_transports`, `twig_overrides`, `routes_authz_matrix`) share one fence and are never pending — the utility writes them directly as `ok`/`partial`/`unknown`/`none`. Do not look for enrichment markers inside `recon_bags`.
+
+For each pending section remember:
 
 - `section_id` (from `<!-- section_id: ... -->`)
 - `enrichment_marker` (full string `<!-- enrichment_marker: ... -->`)
 - `enrichment_hint` (recipe's hint text — what exactly needs to be classified)
-- `data.candidates` (bounded list of input candidates from the recipe; usually ≤ 50)
+- `data.candidates` (bounded list of input candidates from the recipe; usually ≤ 50) — or `data.evidence_files` (config files the recipe could not statically interpret)
 
 If there are no pending sections — go directly to step 6 (validation).
 
@@ -111,7 +116,7 @@ For each section:
 - `Read <file>` with `offset`/`limit` around the indicated line — to see snippet context.
 - `Grep` with concrete `path` (one directory or one file) — for clarification if the snippet is insufficient.
 
-Do not grep across the whole project, do not read a file in full.
+Do not grep across the whole project, do not read a file in full — **except** a file listed in `data.evidence_files`: Read it in full, capped at 400 lines; past the cap, Read with `offset`/`limit` centered on the config's top-level key (e.g. `security:`, `framework:`).
 
 **5.3.** Make an Edit. Edit-anchor contract:
 
@@ -119,12 +124,14 @@ Do not grep across the whole project, do not read a file in full.
 - `new_string` **must** replace `pending` with `done` in the marker: `<!-- enrichment_marker: <section_id>__done__<hash4> -->`.
 - `new_string` contains the updated yaml block: `status: ok` (or `unknown`/`none` if no data) + `items:`/`data:` per this section's schema. The `source_files` field is mandatory for scalar sections (except tool_versions); keep it if it was there.
 - Remove the `enrichment_hint` field from the new yaml (it was needed only for the placeholder).
-- Remove the `data.candidates` field (it was input for you; final output — `items:` or `data:` with schema keys).
+- Remove the `data.candidates` / `data.evidence_files` field (both were input for you; final output — `items:` or `data:` with schema keys). Keep `source_files`.
 - Do NOT touch the `<!-- section_id: ... -->` line (it remains unchanged above).
 
 **5.4. Idempotency.** If the agent is re-run on an already-processed file — Edit will fail with `old_string not found` (marker already `done`). This is normal; skip the section and continue.
 
-**5.5. If data is insufficient.** If for a specific section you cannot provide a meaningful answer (snippets are ambiguous, file unavailable, regex match clearly false) — write `status: unknown` + `reason: "<short explanation>"`. Better unknown than hallucination. Still flip the marker to `done`.
+**5.5. If data is insufficient.** For a section built from `data.candidates` (snippets ambiguous, file unavailable, regex match clearly false) — write `status: unknown` + `reason: "<short explanation>"`. Better unknown than hallucination. Still flip the marker to `done`.
+
+For a section built from `data.evidence_files` (e.g. a `security.php`/`framework.php` config the recipe could not statically parse) that you also cannot interpret — do NOT write `status: unknown`. Write `status: partial`, `reason: "<why>"`, `data:` with every schema key present (unknown values as the string `unknown`, `mfa: false`), and keep `source_files`. Reserve `status: unknown` for this section only when the evidence files, once read, turn out to hold no such config at all — that is "no evidence found", not "found but not understood".
 
 ### Step 6. Validate
 
@@ -146,6 +153,7 @@ Read each `ERROR:` line. Typical errors:
 - `list-type section with status=ok requires 'items'` → add `items: [...]` or change status.
 - `scalar-type section with status=ok requires 'data'` → add `data: {...}` or change status.
 - `sanity[<probe>]: coverage diff X% puts confidence in 'low' — below floor` (from `--sanity`) — the recipe did not find enough expected files, coverage dropped below the floor. This is **not Edit-fixable** (no Edit will create files on disk). Return `RECON_SANITY_FAILED: <details>` to the orchestrator, leave the file as is.
+- `sanity[extractor]: <section> not collected — extractor_failed: <kind>: <warning>` — the PHP extractor itself failed for that section. This is **not Edit-fixable** (no Edit re-runs the extractor). Return `RECON_SANITY_FAILED: <extractor cause, verbatim>` to the orchestrator — do not guess a different cause — leave the file as is.
 - `sanity[<probe>]: N declared file(s) not on disk: <preview>` — hallucinated file path in some item. This is a recipe bug (or yours, if you added something). Edit the needed section, remove non-existent paths.
 
 Sanity warnings (not errors) — for example `coverage diff 15%` without the floor firing — are printed to stderr, but `validate_context.py` returns exit 0. Step 7 is run only on `exit 1`; warnings are ignored (they were already accounted for by the utility when forming `recon_confidence` in the frontmatter).

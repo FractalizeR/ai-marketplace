@@ -94,6 +94,10 @@ enforces this differently:
 project's own console (`bin/console`) for enrichment. Pass `--no-console` for a
 hostile repo and consider a sandbox.
 
+The run boot-tests the resolved console up front and **stops** if a console is
+required but doesn't boot, unless `--console-cmd=<tpl>`, `FR_SECURITY_CONSOLE_CMD`,
+or `--no-console` is set.
+
 ---
 
 ## Install and run

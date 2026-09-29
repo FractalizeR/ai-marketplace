@@ -12,7 +12,7 @@
 ## Symfony Security Bundle
 
 - Missing `#[IsGranted(...)]` / `$this->denyAccessUnlessGranted(...)` on controllers handling private resources
-- Errors in `config/packages/security.yaml`: overly broad `access_control` patterns (`^/admin` without regex boundary); `IS_AUTHENTICATED_ANONYMOUSLY` on mutating paths
+- Errors in the security config (`config/packages/security.{yaml,php,xml}`, possibly split across files): overly broad `access_control` patterns (`^/admin` without regex boundary); `IS_AUTHENTICATED_ANONYMOUSLY` on mutating paths
 - Misconfigured voters: `supports()` returns `true` for too broad attributes; `voteOnAttribute()` lets through when it should deny
 - `switch_user` without `role: ROLE_ALLOWED_TO_SWITCH`; ability to switch_user via GET parameter without CSRF
 - `remember_me` with predictable `secret` or without `httponly: true, secure: true`
@@ -22,7 +22,7 @@
 ### `IS_AUTHENTICATED_REMEMBERED` vs `FULLY` for sensitive operations
 
 - Controller for a sensitive operation (password change, email change, payment confirm, 2FA disable, API-key rotation) protected via `#[IsGranted('IS_AUTHENTICATED_REMEMBERED')]` or `denyAccessUnlessGranted('IS_AUTHENTICATED_REMEMBERED')` — this **includes remember-me cookies** (no proof of recent password). It should be `IS_AUTHENTICATED_FULLY` (or `IS_AUTHENTICATED_2FA_IN_PROGRESS` for post-2FA operations).
-- Same for `access_control` rules in `security.yaml`: `roles: IS_AUTHENTICATED_REMEMBERED` on paths with sensitive operations. Sink_kind: `missing_authz` (root_cause_family: `authz`), confidence ≥ 7.
+- Same for `access_control` rules in the security config: `roles: IS_AUTHENTICATED_REMEMBERED` on paths with sensitive operations. Sink_kind: `missing_authz` (root_cause_family: `authz`), confidence ≥ 7.
 
 ### Voter anti-patterns
 
@@ -30,20 +30,20 @@
 - `voteOnAttribute()` `default true` (case-block not matched → `return true` or `return Voter::ACCESS_GRANTED`) instead of `return false` / `Voter::ACCESS_DENIED` → grant by default. Especially dangerous when new attributes are added: they are automatically allowed without updating the voter.
 - `voteOnAttribute()` without `$subject instanceof ExpectedClass` check — if supports() is too broad, the voter may be called with a foreign entity and will ignore the ownership check.
 
-### `security.yaml` access_control regex precedence
+### `access_control` regex precedence
 
 - access_control rules match **in order** top-to-bottom; the first matching one is used, the rest are not checked. If a broad pattern stands above (`{ path: '^/admin', roles: ROLE_USER }`) and a narrow one with a stricter role stands below (`{ path: '^/admin/users/edit', roles: ROLE_SUPER_ADMIN }`), the narrow one **will never fire** → privilege escalation.
 - Catch via manual analysis of rule ordering + cross-check with `recon_bags.stack.symfony.routes_authz_matrix` (if the section is present — see data-access.md). Sink_kind: `missing_authz`, confidence ≥ 7 when a narrow rule is overridden by a broad one.
 
-### Request trust boundary (`framework.yaml` — trusted_proxies / trusted_hosts / trusted_headers)
+### Request trust boundary (framework config — trusted_proxies / trusted_hosts / trusted_headers)
 
-`framework.trusted_proxies` + `framework.trusted_headers` govern how Symfony derives the *effective* client IP, host, and scheme from `X-Forwarded-*` headers. When Symfony trusts a proxy, `Request::getClientIp()` / `getHost()` return the attacker-controlled forwarded value. Anything downstream keyed on those — IP-based `access_control`, `login_throttling` / rate limiters, audit logs, `remember_me` binding, geoblocking — is then spoofable. Recon surfaces this in `recon_bags.stack.symfony.trusted_config` (`source_files: config/packages/framework.yaml`), routed into this wave's `target_files`.
+`framework.trusted_proxies` + `framework.trusted_headers` govern how Symfony derives the *effective* client IP, host, and scheme from `X-Forwarded-*` headers. When Symfony trusts a proxy, `Request::getClientIp()` / `getHost()` return the attacker-controlled forwarded value. Anything downstream keyed on those — IP-based `access_control`, `login_throttling` / rate limiters, audit logs, `remember_me` binding, geoblocking — is then spoofable. Recon surfaces this in `recon_bags.stack.symfony.trusted_config` (`source_files` points at whichever framework config file(s) declare it — `config/packages/framework.{yaml,php,xml}`, possibly split), routed into this wave's `target_files`.
 
 - **`trusted_proxies` set to an over-broad range** (`0.0.0.0/0`, `::/0`, `REMOTE_ADDR`, or a wide private supernet a request can originate from) → attacker sends `X-Forwarded-For: <spoofed>` and `Request::getClientIp()` returns it. Any IP allowlist (`access_control` with a custom IP voter, admin-panel IP gate, internal-only endpoint) is bypassed. Sink_kind: `missing_authz` (root_cause_family: `authz`), confidence ≥ 7 when a concrete IP-gated sink exists; ≥ 6 for the misconfiguration alone.
-- **`%env(...)%` indirection.** Modern configs write `trusted_proxies: '%env(TRUSTED_PROXIES)%'` — the *effective* value lives in `.env` / `.env.local` (routed to W4/secrets). You MUST resolve it: `framework.yaml` only proves the toggle is wired; a value of `0.0.0.0/0` / `REMOTE_ADDR` / `PRIVATE_SUBNETS` in `.env` is the actual vuln. Report only after tracing the resolved value; if the env var is unset at audit time, flag as a config-review gap, not a confirmed finding.
+- **`%env(...)%` indirection.** Modern configs write `trusted_proxies: '%env(TRUSTED_PROXIES)%'` — the *effective* value lives in `.env` / `.env.local` (routed to W4/secrets). You MUST resolve it: the framework config only proves the toggle is wired; a value of `0.0.0.0/0` / `REMOTE_ADDR` / `PRIVATE_SUBNETS` in `.env` is the actual vuln. Report only after tracing the resolved value; if the env var is unset at audit time, flag as a config-review gap, not a confirmed finding.
 - **`trusted_headers` includes `x-forwarded-host` (or `x-forwarded-*` broadly) without a `framework.trusted_hosts` allowlist** → host header injection: password-reset / email links built from `Request::getSchemeAndHttpHost()` point at an attacker host; web-cache poisoning. Sink_kind: `other:host_header_injection` (root_cause_family: `disclosure`), confidence ≥ 7 when a reset/absolute-URL sink consuming the host is reachable.
 - **`trusted_hosts` empty while the app builds absolute URLs from the request host** — same host-injection surface even without forwarded headers (direct `Host:` spoofing). Cross-link: `core/disclosure.md` → host header / open redirect.
-- **Coverage caveat — recon parses `framework.yaml` only.** A project may set the trust boundary the legacy/programmatic way — `Request::setTrustedProxies(...)` / `Request::setTrustedHosts(...)` in `public/index.php` or a bootstrap/kernel — which recon does NOT surface (no `trusted_config` signal, framework.yaml not routed). If `trusted_config.status` is `none`/`unknown`, still grep `public/index.php` + bootstrap for `setTrustedProxies` / `setTrustedHosts` before concluding the boundary is unset.
+- **Coverage caveat — recon reads the `framework` config layer, not code.** A project may set the trust boundary the legacy/programmatic way — `Request::setTrustedProxies(...)` / `Request::setTrustedHosts(...)` in `public/index.php` or a bootstrap/kernel — which recon does NOT surface regardless of format or console availability (it isn't config at all). If `trusted_config.status` is `none`/`unknown`/`partial`, still grep `public/index.php` + bootstrap for `setTrustedProxies` / `setTrustedHosts` before concluding the boundary is unset.
 
 ## OAuth/OIDC (Symfony — KnpUOAuth2ClientBundle, league/oauth2-client)
 

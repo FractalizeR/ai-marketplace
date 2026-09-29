@@ -19,7 +19,7 @@ stack:
 
 ## What lands in the `recon_bags.stack.symfony` bag
 
-The recipe fills in (or marks `status: unknown` with reason) the keys: `voters` (classes `extends Voter`/`extends VoterInterface` and their attributes); `forms` (classes `extends AbstractType` with `data_class`, `csrf_protection`, `allow_extra_fields`); `serializer_groups` (classes with `#[Groups]` attributes; JMS XML/YAML — known limitation of static parsing); `twig_overrides` (global `autoescape` settings and counter of `|raw` filter usages); `doctrine_listeners` (kernel/doctrine event subscribers); `firewalls` (`config/packages/security.yaml`: firewalls + access_control rules); `messenger_transports` (`config/packages/messenger.yaml` or `framework.yaml`: transports + retry strategy).
+The recipe fills in (or marks `status: unknown` / `partial` with reason) the keys: `voters` (classes `extends Voter`/`extends VoterInterface` and their attributes); `forms` (classes `extends AbstractType` with `data_class`, `csrf_protection`, `allow_extra_fields`); `serializer_groups` (classes with `#[Groups]` attributes; JMS XML/YAML — known limitation of static parsing); `twig_overrides` (global `autoescape` settings and counter of `|raw` filter usages); `doctrine_listeners` (kernel/doctrine event subscribers); `firewalls` (security config — `config/packages/security.{yaml,php,xml}`, possibly split across files; read via `debug:config` when the project console boots, else a static YAML-only parser: firewalls + access_control rules); `messenger_transports` (framework config — `config/packages/messenger.{yaml,php,xml}` or `framework.{yaml,php,xml}`: transports + retry strategy).
 
 See `bin/recon/recipes/symfony.py::RECON_BAGS_SCHEMA` for the exact shape.
 

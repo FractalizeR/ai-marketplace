@@ -32,9 +32,9 @@ ONE template, keyed by `(artifact_basename, section_anchor)`.
   file: commands/security-project.md
   section_anchor: "3b-resolve-console-runner-environment-aware"
   pinned: "Build ≤4 options from the probe's `suggestions`"
-  harness_semantic: "Interactive choice of console runner for a containerized project."
+  harness_semantic: "Interactive choice of console runner for a containerized project, boot-tested via --console-preflight."
   codex_action: "Resolve from `--console-cmd=` / `--no-console`; no prompt."
-  non_interactive_fallback: "Containerized + unresolved -> record console_gap (ceiling=medium), proceed static-only."
+  non_interactive_fallback: "Console required and not booting (exit 3) -> stop with reason + exact flags (--console-cmd=<tpl> / --no-console, or FR_SECURITY_CONSOLE_CMD)."
 
 - id: recon-dispatch
   file: commands/security-project.md
@@ -105,9 +105,9 @@ ONE template, keyed by `(artifact_basename, section_anchor)`.
   file: commands/security-changes.md
   section_anchor: "4c-resolve-console-runner-environment-aware"
   pinned: "decide HOW to run the project console"
-  harness_semantic: "Interactive console-runner choice (changes mode)."
+  harness_semantic: "Interactive console-runner choice (changes mode), boot-tested via --console-preflight."
   codex_action: "Resolve from `--console-cmd=` / `--no-console`; no prompt."
-  non_interactive_fallback: "Containerized + unresolved -> console_gap; proceed static-only."
+  non_interactive_fallback: "Console required and not booting (exit 3) -> stop with reason + exact flags (--console-cmd=<tpl> / --no-console, or FR_SECURITY_CONSOLE_CMD)."
 
 - id: recon-dispatch-changes
   file: commands/security-changes.md
