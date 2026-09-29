@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import sys
 import tempfile
 import textwrap
@@ -112,13 +113,11 @@ def _build_generic_php(**overrides: str) -> Path:
 def _ctx(
     stack: str,
     *,
-    language: str | None = None,
     addons: tuple[str, ...] = (),
     integrations: tuple[str, ...] = (),
 ) -> "pw.ResolutionContext":
     """Compact helper for ResolutionContext in resolve_checklists tests."""
     return pw.ResolutionContext(
-        language=language,
         stack=stack,
         addons=addons,
         integrations=integrations,
@@ -248,7 +247,6 @@ class ResolutionContextFromParsedTests(unittest.TestCase):
             self.assertEqual(
                 rc,
                 pw.ResolutionContext(
-                    language="php",
                     stack="symfony",
                     addons=("api-platform", "easyadmin"),
                     integrations=("auth0", "stripe"),
@@ -270,7 +268,6 @@ class ResolutionContextFromParsedTests(unittest.TestCase):
             rc = ctx.resolution_context
             self.assertEqual(rc.addons, ())
             self.assertEqual(rc.integrations, ())
-            self.assertEqual(rc.language, "php")
             self.assertEqual(rc.stack, "symfony")
         finally:
             p.unlink()
@@ -314,21 +311,6 @@ class ResolutionContextFromParsedTests(unittest.TestCase):
         finally:
             p.unlink()
 
-    def test_empty_language_string_becomes_none(self):
-        stack_yaml = (
-            '  language: ""\n'
-            "  framework: symfony\n"
-            "  framework_version: null\n"
-            "  detected_via: test\n"
-        )
-        p = _build_context_with_stack_block(stack_yaml)
-        try:
-            ctx = pw.parse_context(p)
-            rc = ctx.resolution_context
-            self.assertIsNone(rc.language)
-        finally:
-            p.unlink()
-
     def test_missing_stack_block(self):
         p = _build_context_with_stack_block("__NO_STACK__")
         try:
@@ -337,7 +319,6 @@ class ResolutionContextFromParsedTests(unittest.TestCase):
             self.assertEqual(
                 rc,
                 pw.ResolutionContext(
-                    language=None,
                     stack="unknown",
                     addons=(),
                     integrations=(),
@@ -787,172 +768,19 @@ class ScopeGlobTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# mode=changes (channel 1: touched_by_diff in items).
+# Scalar source_files routing: recon-known trust-boundary config files
+# (auth_layer→security.yaml, secrets→.env) must be routed unconditionally into
+# the wave that reads their section — else they are enumerated by recon but
+# never handed to any worker.
 # ---------------------------------------------------------------------------
 
 
-class ChangesChannel1Tests(unittest.TestCase):
-    def test_only_touched_items(self):
-        items = (
-            "  - kind: repository\n"
-            "    file: src/Repository/UserRepo.php\n"
-            "    touched_by_diff: true\n"
-            "  - kind: repository\n"
-            "    file: src/Repository/ProductRepo.php\n"
-            "    touched_by_diff: false"
-        )
-        p = _build_context(
-            framework="symfony",
-            data_access=f"status: ok\nitems:\n{items}",
-        )
-        try:
-            ctx = pw.parse_context(p)
-            diff = {"src/Repository/UserRepo.php"}
-            plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT, diff_files=diff)
-            for s in plan:
-                self.assertEqual(s["mode"], "changes")
-                self.assertTrue(s["slice_id"].endswith("_CHANGES"))
-            w2 = [s for s in plan if s["wave_id"] == "W2"]
-            self.assertTrue(w2, "W2 expected (touched_by_diff=true present)")
-            collected = set()
-            for s in w2:
-                collected |= set(s["target_files"])
-            self.assertEqual(collected, {"src/Repository/UserRepo.php"})
-        finally:
-            p.unlink()
-
-    def test_wave_skipped_when_no_intersection(self):
-        # Only data_access items touched. W4 (serialization) has nothing.
-        items = (
-            "  - kind: repository\n"
-            "    file: src/Repository/UserRepo.php\n"
-            "    touched_by_diff: true"
-        )
-        p = _build_context(
-            framework="symfony",
-            data_access=f"status: ok\nitems:\n{items}",
-        )
-        try:
-            ctx = pw.parse_context(p)
-            plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT, diff_files={"src/Repository/UserRepo.php"})
-            waves = {s["wave_id"] for s in plan}
-            self.assertIn("W2", waves)
-            self.assertNotIn("W4", waves)
-        finally:
-            p.unlink()
-
-
-# ---------------------------------------------------------------------------
-# mode=changes (channel 2: scalar source_files intersect diff_files).
-# ---------------------------------------------------------------------------
-
-
-class ChangesChannel2Tests(unittest.TestCase):
-    def test_scalar_source_files_intersect_diff_pulls_them_in(self):
-        """auth_layer.source_files contains config/security.yaml. If diff
-        touches that yaml, W1 should add the source_files to target_files."""
+class ProjectScalarRoutingTests(unittest.TestCase):
+    def test_scalar_status_unknown_contributes_nothing(self):
         p = _build_context(
             framework="symfony",
             attack_surface="status: ok\nitems: []",
-            data_access="status: ok\nitems: []",
-            authz_usage="status: ok\nitems: []",
-            auth_layer=textwrap.dedent("""\
-                status: ok
-                data:
-                  kind: session
-                source_files:
-                  - config/packages/security.yaml
-                  - config/packages/framework.yaml
-            """).strip(),
-        )
-        try:
-            ctx = pw.parse_context(p)
-            diff = {"config/packages/security.yaml"}
-            plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT, diff_files=diff)
-            w1 = [s for s in plan if s["wave_id"] == "W1"]
-            self.assertTrue(w1, "W1 expected (auth_layer source_files intersect diff)")
-            collected = set()
-            for s in w1:
-                collected |= set(s["target_files"])
-            # Whole config block re-read, not just the intersected file.
-            self.assertIn("config/packages/security.yaml", collected)
-            self.assertIn("config/packages/framework.yaml", collected)
-        finally:
-            p.unlink()
-
-    def test_scalar_dot_notation_firewalls_channel2(self):
-        """recon_bags.stack.symfony.firewalls (scalar, dot-notation) —
-        source_files intersection pulls files for W1."""
-        fs = textwrap.dedent("""\
-            stack:
-              symfony:
-                firewalls:
-                  status: ok
-                  data:
-                    firewalls:
-                      main: lazy
-                  source_files:
-                    - config/packages/security.yaml
-                    - config/packages/dev/security.yaml
-        """).strip()
-        p = _build_context(
-            framework="symfony",
-            attack_surface="status: ok\nitems: []",
-            data_access="status: ok\nitems: []",
-            authz_usage="status: ok\nitems: []",
-            recon_bags=fs,
-        )
-        try:
-            ctx = pw.parse_context(p)
-            diff = {"config/packages/security.yaml"}
-            plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT, diff_files=diff)
-            w1 = [s for s in plan if s["wave_id"] == "W1"]
-            self.assertTrue(w1, "W1 expected (firewalls source_files intersect diff)")
-            collected = set()
-            for s in w1:
-                collected |= set(s["target_files"])
-            self.assertIn("config/packages/security.yaml", collected)
-            self.assertIn("config/packages/dev/security.yaml", collected)
-        finally:
-            p.unlink()
-
-    def test_scalar_secrets_channel2_w4(self):
-        p = _build_context(
-            framework="symfony",
-            attack_surface="status: ok\nitems: []",
-            serialization="status: ok\nitems: []",
-            secrets=textwrap.dedent("""\
-                status: ok
-                data:
-                  hardcoded_count: 0
-                source_files:
-                  - .env
-                  - .env.local
-            """).strip(),
-        )
-        try:
-            ctx = pw.parse_context(p)
-            plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT, diff_files={".env"})
-            w4 = [s for s in plan if s["wave_id"] == "W4"]
-            self.assertTrue(w4, "W4 expected (secrets source_files intersect diff)")
-            collected = set()
-            for s in w4:
-                collected |= set(s["target_files"])
-            self.assertIn(".env", collected)
-            self.assertIn(".env.local", collected)
-        finally:
-            p.unlink()
-
-    def test_scalar_status_unknown_does_not_trigger_channel2(self):
-        """Scalar with status=unknown has no source_files in payload — must
-        not contribute to target_files even if recipe accidentally writes one."""
-        p = _build_context(
-            framework="symfony",
-            attack_surface="status: ok\nitems: []",
-            auth_layer=textwrap.dedent("""\
-                status: unknown
-                reason: detector failed
-            """).strip(),
+            auth_layer="status: unknown\nreason: detector failed",
         )
         try:
             ctx = pw.parse_context(p)
@@ -960,71 +788,9 @@ class ChangesChannel2Tests(unittest.TestCase):
         finally:
             p.unlink()
 
-    def test_diff_path_normalized(self):
-        """`./prefix` in diff_files normalizes to recipe POSIX form."""
-        p = _build_context(
-            framework="symfony",
-            data_access=textwrap.dedent("""\
-                status: ok
-                items:
-                  - kind: repository
-                    file: src/Repo/A.php
-                    touched_by_diff: true
-            """).strip(),
-            attack_surface="status: ok\nitems: []",
-            authz_usage="status: ok\nitems: []",
-        )
-        try:
-            ctx = pw.parse_context(p)
-            # Caller passes diff with leading ./ — must still match recipe paths.
-            plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT, diff_files={"./src/Repo/A.php"})
-            w2 = [s for s in plan if s["wave_id"] == "W2"]
-            self.assertTrue(w2)
-            collected = set()
-            for s in w2:
-                collected |= set(s["target_files"])
-            self.assertIn("src/Repo/A.php", collected)
-        finally:
-            p.unlink()
-
-    def test_scalar_no_intersection_skips_wave(self):
-        p = _build_context(
-            framework="symfony",
-            attack_surface="status: ok\nitems: []",
-            data_access="status: ok\nitems: []",
-            authz_usage="status: ok\nitems: []",
-            auth_layer=textwrap.dedent("""\
-                status: ok
-                data:
-                  kind: session
-                source_files:
-                  - config/packages/security.yaml
-            """).strip(),
-        )
-        try:
-            ctx = pw.parse_context(p)
-            diff = {"src/Other.php"}  # not intersecting any scalar / list source
-            plan = pw.build_plan(ctx, plugin_root=PLUGIN_ROOT, diff_files=diff)
-            self.assertNotIn("W1", {s["wave_id"] for s in plan})
-        finally:
-            p.unlink()
-
-
-# ---------------------------------------------------------------------------
-# Phase A — project mode routes scalar source_files (no diff gate).
-#
-# In changes mode a scalar section's source_files reach target_files only when
-# they intersect the diff (channel 2). In a full project audit there is no
-# diff, so recon-known trust-boundary config files (auth_layer→security.yaml,
-# secrets→.env) must be routed unconditionally into the wave that reads their
-# section — else they are enumerated by recon but never handed to any worker.
-# ---------------------------------------------------------------------------
-
-
-class ProjectScalarRoutingTests(unittest.TestCase):
     def test_auth_layer_scalar_routed_to_w1(self):
         """security.yaml is auth_layer's source_file; W1 reads auth_layer, so
-        project mode must route it into W1.target_files with no diff."""
+        it must be routed into W1.target_files."""
         p = _build_context(
             framework="symfony",
             attack_surface="status: ok\nitems: []",
@@ -1050,7 +816,7 @@ class ProjectScalarRoutingTests(unittest.TestCase):
             p.unlink()
 
     def test_secrets_scalar_routed_to_w4(self):
-        """.env is secrets' source_file; W4 reads secrets — routed with no diff."""
+        """.env is secrets' source_file; W4 reads secrets — routed into W4."""
         p = _build_context(
             framework="symfony",
             attack_surface="status: ok\nitems: []",
@@ -1101,7 +867,7 @@ class ProjectScalarRoutingTests(unittest.TestCase):
     def test_trusted_config_bag_routed_to_w1(self):
         """Phase B: recon_bags.stack.symfony.trusted_config (framework.yaml) is
         wired to W1 via the `request_trust` concept — its source_files must
-        reach W1.target_files in project mode with no diff."""
+        reach W1.target_files."""
         fs = textwrap.dedent("""\
             stack:
               symfony:
@@ -1302,28 +1068,7 @@ class ResolveChecklistsTests(unittest.TestCase):
         for p in out:
             self.assertTrue(Path(p).is_absolute())
 
-    # --- 5-layer chain coverage (languages / addons / integrations) ---
-
-    def test_languages_layer_resolves(self):
-        # Add languages/php/auth.md to the mock layout.
-        lang_dir = self.root / "checklists" / "languages" / "php"
-        lang_dir.mkdir(parents=True)
-        (lang_dir / "auth.md").write_text("auth php")
-        out = pw.resolve_checklists(("auth",), _ctx("symfony", language="php"), self.root)
-        # Expected order: core → languages → stacks.
-        self.assertEqual(len(out), 3)
-        self.assertTrue(out[0].endswith("/core/auth.md"))
-        self.assertTrue(out[1].endswith("/languages/php/auth.md"))
-        self.assertTrue(out[2].endswith("/stacks/symfony/auth.md"))
-
-    def test_languages_layer_skipped_when_language_none(self):
-        # File exists but language=None should suppress the entire languages layer.
-        lang_dir = self.root / "checklists" / "languages" / "php"
-        lang_dir.mkdir(parents=True)
-        (lang_dir / "auth.md").write_text("auth php")
-        out = pw.resolve_checklists(("auth",), _ctx("symfony", language=None), self.root)
-        for s in out:
-            self.assertNotIn("/languages/php/auth.md", s)
+    # --- 4-layer chain coverage (addons / integrations) ---
 
     def test_addons_in_caller_order_per_theme(self):
         # Two addon checklists for `auth`. Pass them deliberately unsorted to
@@ -1393,12 +1138,9 @@ class ResolveChecklistsTests(unittest.TestCase):
         self.assertTrue(out[2].endswith("/core/disclosure.md"))
         self.assertTrue(out[3].endswith("/stacks/symfony/disclosure.md"))
 
-    def test_full_5_layer_chain_for_single_theme(self):
-        # Populate all 5 layers for theme "auth".
+    def test_full_4_layer_chain_for_single_theme(self):
+        # Populate all 4 layers for theme "auth".
         cl = self.root / "checklists"
-        lang_dir = cl / "languages" / "php"
-        lang_dir.mkdir(parents=True)
-        (lang_dir / "auth.md").write_text("auth php")
         addon_dir = cl / "stacks" / "symfony" / "addons" / "easyadmin"
         addon_dir.mkdir(parents=True)
         (addon_dir / "auth.md").write_text("auth easyadmin")
@@ -1410,19 +1152,17 @@ class ResolveChecklistsTests(unittest.TestCase):
             ("auth",),
             _ctx(
                 "symfony",
-                language="php",
                 addons=("easyadmin",),
                 integrations=("auth0",),
             ),
             self.root,
         )
-        # Expected order: core → languages → stacks → addons → integrations.
-        self.assertEqual(len(out), 5)
+        # Expected order: core → stacks → addons → integrations.
+        self.assertEqual(len(out), 4)
         self.assertTrue(out[0].endswith("/core/auth.md"))
-        self.assertTrue(out[1].endswith("/languages/php/auth.md"))
-        self.assertTrue(out[2].endswith("/stacks/symfony/auth.md"))
-        self.assertTrue(out[3].endswith("/stacks/symfony/addons/easyadmin/auth.md"))
-        self.assertTrue(out[4].endswith("/integrations/auth0/auth.md"))
+        self.assertTrue(out[1].endswith("/stacks/symfony/auth.md"))
+        self.assertTrue(out[2].endswith("/stacks/symfony/addons/easyadmin/auth.md"))
+        self.assertTrue(out[3].endswith("/integrations/auth0/auth.md"))
 
 
 class ResolveChecklistsRealLayoutTests(unittest.TestCase):
@@ -1626,72 +1366,6 @@ class WinfAnchorPointsTests(unittest.TestCase):
             p.unlink()
 
 
-# ---------------------------------------------------------------------------
-# Edge cases for collect_files require_touched semantics.
-# ---------------------------------------------------------------------------
-
-
-class CollectFilesEdgeCases(unittest.TestCase):
-    """Channel 1 contract: `touched_by_diff is True` is the SOLE signal in
-    plan_waves. Recipe owns this flag. plan_waves never falls back to
-    re-checking `diff_files` against item.file — that would split source-of-
-    truth and mask recipe bugs (DoD #5)."""
-
-    def _ctx_with_data_access(self, items_yaml: str) -> pw.ParsedContext:
-        p = _build_context(
-            framework="symfony",
-            data_access=f"status: ok\nitems:\n{items_yaml}",
-        )
-        try:
-            return pw.parse_context(p)
-        finally:
-            p.unlink()
-
-    def test_touched_true_included(self):
-        items = (
-            "  - kind: repository\n    file: src/Repo/A.php\n    touched_by_diff: true"
-        )
-        ctx = self._ctx_with_data_access(items)
-        files = pw.collect_files(("data_access",), None, ctx, require_touched=True)
-        self.assertIn("src/Repo/A.php", files)
-
-    def test_touched_false_excluded(self):
-        items = (
-            "  - kind: repository\n    file: src/Repo/A.php\n    touched_by_diff: false"
-        )
-        ctx = self._ctx_with_data_access(items)
-        files = pw.collect_files(("data_access",), None, ctx, require_touched=True)
-        self.assertNotIn("src/Repo/A.php", files)
-
-    def test_touched_missing_excluded(self):
-        # Missing key → not flagged by recipe → not included. Strict.
-        items = "  - kind: repository\n    file: src/Repo/A.php"
-        ctx = self._ctx_with_data_access(items)
-        files = pw.collect_files(("data_access",), None, ctx, require_touched=True)
-        self.assertNotIn("src/Repo/A.php", files)
-
-    def test_touched_string_false_excluded(self):
-        # `is True` (not bool()) — guards against a hand-edited yaml leaking
-        # the string `"false"` (truthy under bool()).
-        items = (
-            "  - kind: repository\n    file: src/Repo/A.php\n"
-            "    touched_by_diff: \"false\""
-        )
-        ctx = self._ctx_with_data_access(items)
-        files = pw.collect_files(("data_access",), None, ctx, require_touched=True)
-        self.assertNotIn("src/Repo/A.php", files)
-
-    def test_no_require_touched_includes_all(self):
-        items = (
-            "  - kind: repository\n    file: src/Repo/A.php\n"
-            "  - kind: repository\n    file: src/Repo/B.php\n    touched_by_diff: false"
-        )
-        ctx = self._ctx_with_data_access(items)
-        files = pw.collect_files(("data_access",), None, ctx, require_touched=False)
-        self.assertIn("src/Repo/A.php", files)
-        self.assertIn("src/Repo/B.php", files)
-
-
 class SchemaVersionGuardTests(unittest.TestCase):
     def test_v1_context_rejected(self):
         fm = (
@@ -1797,24 +1471,6 @@ class WinfBehaviourTests(unittest.TestCase):
             suffixes = [c.split("checklists/", 1)[-1] for c in cls]
             self.assertIn("core/auth.md", suffixes)
             self.assertIn("core/injection.md", suffixes)
-        finally:
-            p.unlink()
-
-    def test_winf_skipped_when_changes_empty(self):
-        """mode=changes + nothing intersects diff → WINF must not be emitted."""
-        p = _build_context(
-            framework="symfony",
-            attack_surface=_attack_surface(("http_route", "src/Controller/A.php")),
-        )
-        try:
-            ctx = pw.parse_context(p)
-            # Diff doesn't touch any item nor any scalar source_file.
-            plan = pw.build_plan(
-                ctx, plugin_root=PLUGIN_ROOT,
-                diff_files={"unrelated/file.php"}, exploratory=True,
-            )
-            self.assertNotIn("WINF", {s["wave_id"] for s in plan},
-                             "WINF must be skipped in mode=changes when no files match")
         finally:
             p.unlink()
 
@@ -2142,281 +1798,180 @@ class SymfonyRegressionAfterRewireTests(unittest.TestCase):
             p.unlink()
 
 
-class ConsumerKindsToWavesTests(unittest.TestCase):
-    """Inverse index `kind → [wave_ids]` is derived from WAVES.relevant_kinds."""
-
-    def test_index_contains_known_kinds(self):
-        idx = pw.consumer_kinds_to_waves()
-        # http_route appears in W1, W2, W3, W5 (and W6 if fintech-detected).
-        self.assertIn("W1", idx["http_route"])
-        self.assertIn("W2", idx["http_route"])
-        self.assertIn("W3", idx["http_route"])
-
-    def test_message_handler_in_w4(self):
-        idx = pw.consumer_kinds_to_waves()
-        self.assertIn("W4", idx["message_handler"])
-
-    def test_template_render_only_in_w3(self):
-        idx = pw.consumer_kinds_to_waves()
-        self.assertEqual(idx["template_render"], ["W3"])
-
-    def test_winf_excluded_from_index(self):
-        """EXPLORATORY_WAVE has relevant_kinds=None — must not appear."""
-        idx = pw.consumer_kinds_to_waves()
-        for waves in idx.values():
-            self.assertNotIn("WINF", waves)
-
-    def test_unknown_kind_absent(self):
-        idx = pw.consumer_kinds_to_waves()
-        self.assertNotIn("garbage_kind", idx)
+def _gaps_item(label: str, files: list[str], kind: str = "uninterpreted") -> dict:
+    return {
+        "kind": kind, "section_path": f"recon_bags.stack.symfony.{label}",
+        "label": label, "status": "partial", "reason": "x", "files": files,
+    }
 
 
-class LookupKindForFileTests(unittest.TestCase):
-    def test_lookup_in_attack_surface(self):
-        p = _build_context(
-            attack_surface=textwrap.dedent("""
-                status: ok
-                items:
-                  - kind: http_route
-                    file: src/Controller/Foo.php
-                  - kind: message_handler
-                    file: src/Messenger/BarHandler.php
-            """).strip(),
-        )
+class GapWaveTests(unittest.TestCase):
+    """WGAP follow-up wave built from recon_gaps.json items."""
+
+    def _plan(self, gaps, *, ctx_kwargs=None, **kw):
+        p = _build_context(framework="symfony", **(ctx_kwargs or {}))
         try:
-            ctx = pw.parse_context(p)
-            self.assertEqual(pw.lookup_kind_for_file("src/Controller/Foo.php", ctx), "http_route")
-            self.assertEqual(pw.lookup_kind_for_file("src/Messenger/BarHandler.php", ctx), "message_handler")
-        finally:
-            p.unlink()
-
-    def test_lookup_normalizes_leading_dot_slash(self):
-        p = _build_context(
-            attack_surface=textwrap.dedent("""
-                status: ok
-                items:
-                  - kind: http_route
-                    file: src/Controller/Foo.php
-            """).strip(),
-        )
-        try:
-            ctx = pw.parse_context(p)
-            self.assertEqual(pw.lookup_kind_for_file("./src/Controller/Foo.php", ctx), "http_route")
-        finally:
-            p.unlink()
-
-    def test_lookup_returns_none_when_absent(self):
-        p = _build_context(
-            attack_surface=textwrap.dedent("""
-                status: ok
-                items:
-                  - kind: http_route
-                    file: src/Controller/Foo.php
-            """).strip(),
-        )
-        try:
-            ctx = pw.parse_context(p)
-            self.assertIsNone(pw.lookup_kind_for_file("src/Service/Unknown.php", ctx))
-        finally:
-            p.unlink()
-
-    def test_lookup_in_recon_bags(self):
-        p = _build_context(
-            recon_bags=textwrap.dedent("""
-                status: ok
-                stack:
-                  symfony:
-                    voters:
-                      status: ok
-                      items:
-                        - kind: voter
-                          file: src/Security/Voter/PostVoter.php
-            """).strip(),
-        )
-        try:
-            ctx = pw.parse_context(p)
-            self.assertEqual(
-                pw.lookup_kind_for_file("src/Security/Voter/PostVoter.php", ctx),
-                "voter",
+            return pw.build_plan(
+                pw.parse_context(p), plugin_root=PLUGIN_ROOT, recon_gaps=gaps, **kw,
             )
         finally:
             p.unlink()
 
-    def test_lookup_in_recon_bags_addon(self):
-        p = _build_context(
-            recon_bags=textwrap.dedent("""
-                status: ok
-                addon:
-                  easyadmin:
-                    crud_controllers:
-                      status: ok
-                      items:
-                        - kind: easyadmin_crud_controller
-                          file: src/Controller/Admin/UserCrudController.php
-            """).strip(),
+    def _gap_slices(self, plan):
+        return [s for s in plan if s["wave_id"] == "WGAP"]
+
+    def test_emitted_under_quick_without_exploratory(self):
+        plan = self._plan([_gaps_item("voters", ["src/Security/V.php"])])
+        gap = self._gap_slices(plan)
+        self.assertEqual([s["slice_id"] for s in gap], ["WGAP_PART1"])
+        self.assertEqual(gap[0]["target_files"], ["src/Security/V.php"])
+        self.assertEqual(gap[0]["mode"], "project")
+        self.assertNotIn("WINF", {s["wave_id"] for s in plan})
+
+    def test_model_is_opus_even_when_balanced(self):
+        gap = self._gap_slices(self._plan([_gaps_item("a", ["src/A.php"])]))
+        self.assertEqual(gap[0]["model"], "opus")
+        self.assertEqual(pw.GAP_WAVE.balanced_model, "opus")
+
+    def test_themes_checklists_sections_are_union_like_winf(self):
+        plan = self._plan(
+            [_gaps_item("a", ["src/A.php"])], exploratory=True,
         )
-        try:
-            ctx = pw.parse_context(p)
-            self.assertEqual(
-                pw.lookup_kind_for_file("src/Controller/Admin/UserCrudController.php", ctx),
-                "easyadmin_crud_controller",
-            )
-        finally:
-            p.unlink()
+        gap = self._gap_slices(plan)[0]
+        winf = next(s for s in plan if s["wave_id"] == "WINF")
+        self.assertEqual(gap["themes"], winf["themes"])
+        self.assertEqual(gap["checklists"], winf["checklists"])
+        self.assertEqual(gap["relevant_section_paths"], winf["relevant_section_paths"])
 
+    def test_files_of_other_slices_excluded(self):
+        plan = self._plan(
+            [_gaps_item("a", ["src/Controller/A.php", "src/Extra/B.php"])],
+            ctx_kwargs={"attack_surface": _attack_surface(("http_route", "src/Controller/A.php"))},
+        )
+        gap = self._gap_slices(plan)
+        self.assertEqual(gap[0]["target_files"], ["src/Extra/B.php"])
 
-class ExtraTargetFilesTests(unittest.TestCase):
-    """`extra_target_files` injects files into target_files of every wave + WINF.
+    def test_wave_absent_when_all_files_already_planned(self):
+        plan = self._plan(
+            [_gaps_item("a", ["src/Controller/A.php"])],
+            ctx_kwargs={"attack_surface": _attack_surface(("http_route", "src/Controller/A.php"))},
+        )
+        self.assertEqual(self._gap_slices(plan), [])
 
-    Used by /security-changes orchestrator to flag consumers of removed
-    Voter/Policy/Middleware classes (which themselves are not in the diff but
-    must be reviewed because the protection they relied on disappeared).
-    """
+    def test_vendor_and_tests_filtered(self):
+        gap = self._gap_slices(self._plan([_gaps_item(
+            "a", ["vendor/x/Y.php", "tests/T.php", "src/Ok.php"],
+        )]))
+        self.assertEqual(gap[0]["target_files"], ["src/Ok.php"])
 
-    def _full_symfony_ctx(self) -> Path:
-        return _build_context(
-            framework="symfony",
-            attack_surface=_attack_surface(
-                ("http_route", "src/Controller/A.php"),
-                ("message_handler", "src/Handler/M.php"),
-                ("event_listener", "src/Listener/L.php"),
-                ("cli_command", "src/Command/C.php"),
-            ),
-            output_renderers=textwrap.dedent("""\
-                status: ok
-                items:
-                  - kind: template
-                    file: templates/home.html.twig
-            """).strip(),
-            file_operations=textwrap.dedent("""\
-                status: ok
-                items:
-                  - kind: file_op
-                    file: src/Controller/UploadController.php
-            """).strip(),
-            fintech_markers=textwrap.dedent("""\
-                status: ok
-                items:
-                  - kind: fintech
-                    file: composer.json
-            """).strip(),
+    def test_include_flags_keep_vendor_and_tests(self):
+        gap = self._gap_slices(self._plan(
+            [_gaps_item("a", ["vendor/x/Y.php", "tests/T.php"])],
+            include_vendor=True, include_tests=True,
+        ))
+        self.assertEqual(gap[0]["target_files"], ["tests/T.php", "vendor/x/Y.php"])
+
+    def test_scope_glob_applied(self):
+        gap = self._gap_slices(self._plan(
+            [_gaps_item("a", ["src/Admin/A.php", "src/Other/B.php"])],
+            scope_glob="src/Admin/*",
+        ))
+        self.assertEqual(gap[0]["target_files"], ["src/Admin/A.php"])
+
+    def test_scope_glob_excluding_everything_gives_no_wave(self):
+        plan = self._plan([_gaps_item("a", ["src/A.php"])], scope_glob="nomatch/*")
+        self.assertEqual(self._gap_slices(plan), [])
+
+    def test_order_is_items_order_then_path(self):
+        gap = self._gap_slices(self._plan([
+            _gaps_item("z", ["src/Z2.php", "src/Z1.php"]),
+            _gaps_item("a", ["src/A.php", "src/Z1.php"]),
+        ]))
+        self.assertEqual(
+            gap[0]["target_files"], ["src/Z1.php", "src/Z2.php", "src/A.php"],
         )
 
-    def test_extra_target_files_added_to_each_wave(self):
-        p = self._full_symfony_ctx()
-        try:
-            ctx = pw.parse_context(p)
-            plan = pw.build_plan(
-                ctx,
-                plugin_root=PLUGIN_ROOT,
-                extra_target_files=["extra/Foo.php"],
-            )
-            self.assertTrue(plan, "plan should not be empty for full Symfony fixture")
-            for slice_ in plan:
-                self.assertIn(
-                    "extra/Foo.php", slice_["target_files"],
-                    f"wave {slice_['wave_id']}/{slice_['slice_id']} missing extra file",
-                )
-        finally:
-            p.unlink()
+    def test_cap_and_split(self):
+        files = [f"src/F{i:03d}.php" for i in range(200)]
+        gap = self._gap_slices(self._plan([_gaps_item("a", files)]))
+        got = [f for s in gap for f in s["target_files"]]
+        self.assertEqual(got, files[:pw.GAP_MAX_FILES])
+        self.assertEqual(pw.GAP_MAX_FILES, 150)
+        self.assertEqual([s["slice_id"] for s in gap], ["WGAP_PART1", "WGAP_PART2", "WGAP_PART3"])
+        self.assertTrue(all(len(s["target_files"]) <= pw.OPUS_SPLIT for s in gap))
 
-    def test_extra_target_files_normalized(self):
-        """Leading `./` is stripped to match recipe's POSIX form."""
-        p = self._full_symfony_ctx()
-        try:
-            ctx = pw.parse_context(p)
-            plan = pw.build_plan(
-                ctx,
-                plugin_root=PLUGIN_ROOT,
-                extra_target_files=["./extra/Bar.php", "  ./extra/Baz.php  "],
-            )
-            for slice_ in plan:
-                self.assertIn("extra/Bar.php", slice_["target_files"])
-                self.assertIn("extra/Baz.php", slice_["target_files"])
-                # Ensure leading `./` form did NOT leak through alongside
-                # normalized form.
-                self.assertNotIn("./extra/Bar.php", slice_["target_files"])
-        finally:
-            p.unlink()
+    def test_cap_keeps_earlier_items(self):
+        first = [f"src/A{i:03d}.php" for i in range(150)]
+        gap = self._gap_slices(self._plan([
+            _gaps_item("a", first), _gaps_item("b", ["src/B.php"]),
+        ]))
+        got = [f for s in gap for f in s["target_files"]]
+        self.assertEqual(got, first)
 
-    def test_extra_target_files_winf_too(self):
-        """Exploratory wave must also receive the extra files."""
-        p = self._full_symfony_ctx()
-        try:
-            ctx = pw.parse_context(p)
-            plan = pw.build_plan(
-                ctx,
-                plugin_root=PLUGIN_ROOT,
-                exploratory=True,
-                extra_target_files=["extra/Voter.php"],
-            )
-            winf = [s for s in plan if s["wave_id"] == "WINF"]
-            self.assertTrue(winf, "WINF must be in plan when exploratory=True")
-            for slice_ in winf:
-                self.assertIn("extra/Voter.php", slice_["target_files"])
-        finally:
-            p.unlink()
+    def test_no_gaps_no_wave(self):
+        self.assertEqual(self._gap_slices(self._plan(None)), [])
+        self.assertEqual(self._gap_slices(self._plan([])), [])
+        self.assertEqual(self._gap_slices(self._plan([_gaps_item("a", [])])), [])
 
-    def test_extra_target_files_changes_mode_no_diff_intersection(self):
-        """In changes-mode a wave with no diff intersection still surfaces if
-        extra_target_files is non-empty (point of the flag)."""
-        p = self._full_symfony_ctx()
-        try:
-            ctx = pw.parse_context(p)
-            # diff_files is empty → without extra, all waves drop out in changes mode.
-            plan = pw.build_plan(
-                ctx,
-                plugin_root=PLUGIN_ROOT,
-                diff_files=set(),
-                extra_target_files=["consumers/of/removed/Voter.php"],
-            )
-            self.assertTrue(
-                plan,
-                "expected at least one wave to surface for extra files in changes mode",
-            )
-            for slice_ in plan:
-                self.assertIn("consumers/of/removed/Voter.php", slice_["target_files"])
-                self.assertEqual(slice_["mode"], "changes")
-        finally:
-            p.unlink()
+    def test_wgap_model_parity_with_dedupe_findings(self):
+        import dedupe_findings
+        self.assertEqual(dedupe_findings._waves_balanced_models()["WGAP"], pw.GAP_WAVE.balanced_model)
+        src = Path(dedupe_findings.__file__).read_text(encoding="utf-8")
+        self.assertRegex(src, r'\["WGAP"\]\s*=\s*"opus"')
 
-    def test_main_extra_target_files_csv(self):
-        """CLI `--extra-target-files=a.php,b.php` parses into both."""
-        ctx_path = self._full_symfony_ctx()
+
+class GapWaveCliTests(unittest.TestCase):
+    def _run(self, gaps_text, *, explicit=False):
+        ctx_path = _build_context(framework="symfony")
         try:
             with tempfile.TemporaryDirectory() as td:
-                target = Path(td) / "waves_plan.json"
-                rc = _main_quiet([
-                    str(ctx_path),
-                    "--plugin-root", str(PLUGIN_ROOT),
-                    "--save-plan", str(target),
-                    "--extra-target-files=a.php,b.php,./c.php",
-                ])
+                d = Path(td)
+                cp = d / "CONTEXT.md"
+                cp.write_text(ctx_path.read_text())
+                argv = [str(cp), "--save-plan", str(d / "plan.json")]
+                if gaps_text is not None:
+                    gp = (d / "elsewhere.json") if explicit else (d / "recon_gaps.json")
+                    gp.write_text(gaps_text)
+                    if explicit:
+                        argv += ["--recon-gaps", str(gp)]
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    rc = _main_quiet(argv)
                 self.assertEqual(rc, 0)
-                import json as _json
-                payload = _json.loads(target.read_text(encoding="utf-8"))
-                self.assertTrue(payload)
-                for slice_ in payload:
-                    for f in ("a.php", "b.php", "c.php"):
-                        self.assertIn(f, slice_["target_files"])
+                plan = json.loads((d / "plan.json").read_text())
+                return [s for s in plan if s["wave_id"] == "WGAP"], err.getvalue()
         finally:
             ctx_path.unlink()
 
-    def test_main_extra_target_files_empty_csv_no_op(self):
-        """Empty / whitespace-only CSV must not crash and must not add files."""
-        ctx_path = self._full_symfony_ctx()
-        try:
-            with tempfile.TemporaryDirectory() as td:
-                target = Path(td) / "waves_plan.json"
-                rc = _main_quiet([
-                    str(ctx_path),
-                    "--plugin-root", str(PLUGIN_ROOT),
-                    "--save-plan", str(target),
-                    "--extra-target-files=,, ,",
-                ])
-                self.assertEqual(rc, 0)
-        finally:
-            ctx_path.unlink()
+    def _doc(self, version=1, items=None):
+        return json.dumps({"schema_version": version, "items": items if items is not None else [_gaps_item("a", ["src/A.php"])]})
+
+    def test_default_path_next_to_context(self):
+        gap, _ = self._run(self._doc())
+        self.assertEqual(len(gap), 1)
+
+    def test_explicit_path(self):
+        gap, _ = self._run(self._doc(), explicit=True)
+        self.assertEqual(len(gap), 1)
+
+    def test_missing_file_no_wave(self):
+        gap, err = self._run(None)
+        self.assertEqual(gap, [])
+        self.assertEqual(err, "")
+
+    def test_empty_items_no_wave(self):
+        gap, _ = self._run(self._doc(items=[]))
+        self.assertEqual(gap, [])
+
+    def test_unknown_schema_version_ignored_with_warning(self):
+        gap, err = self._run(self._doc(version=2))
+        self.assertEqual(gap, [])
+        self.assertIn("schema_version", err)
+
+    def test_corrupt_file_ignored_with_warning(self):
+        gap, err = self._run("{not json")
+        self.assertEqual(gap, [])
+        self.assertIn("Warning", err)
 
 
 class SavePlanCliTests(unittest.TestCase):

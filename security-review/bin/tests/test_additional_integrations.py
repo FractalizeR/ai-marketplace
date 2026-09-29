@@ -710,7 +710,6 @@ class ResolverLoadsAdditionalChecklists(unittest.TestCase):
         from plan_waves import resolve_checklists, ResolutionContext
         plugin_root = Path(__file__).resolve().parents[2]
         ctx = ResolutionContext(
-            language="php",
             stack="symfony",
             addons=(),
             integrations=(integration,),
@@ -771,7 +770,6 @@ class AdditionalAndProviderCoexist(unittest.TestCase):
         # Stripe and Auth0 cover different themes — verify each loads from
         # its respective integration directory.
         ctx = ResolutionContext(
-            language="php",
             stack="symfony",
             addons=(),
             integrations=("auth0", "jwt-generic", "stripe"),

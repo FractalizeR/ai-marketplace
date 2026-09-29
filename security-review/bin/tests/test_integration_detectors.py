@@ -646,7 +646,6 @@ class ResolverLoadsIntegrationChecklist(unittest.TestCase):
         from plan_waves import resolve_checklists, ResolutionContext
         plugin_root = Path(__file__).resolve().parents[2]
         ctx = ResolutionContext(
-            language="php",
             stack="symfony",
             addons=(),
             integrations=("jwt-generic",),
@@ -666,7 +665,6 @@ class ResolverLoadsIntegrationChecklist(unittest.TestCase):
         from plan_waves import resolve_checklists, ResolutionContext
         plugin_root = Path(__file__).resolve().parents[2]
         ctx = ResolutionContext(
-            language="php",
             stack="symfony",
             addons=(),
             integrations=("jwt-generic",),
@@ -682,7 +680,6 @@ class ResolverLoadsIntegrationChecklist(unittest.TestCase):
         from plan_waves import resolve_checklists, ResolutionContext
         plugin_root = Path(__file__).resolve().parents[2]
         ctx = ResolutionContext(
-            language="php",
             stack="laravel",
             addons=(),
             integrations=("oauth-oidc",),
@@ -699,7 +696,6 @@ class ResolverLoadsIntegrationChecklist(unittest.TestCase):
         from plan_waves import resolve_checklists, ResolutionContext
         plugin_root = Path(__file__).resolve().parents[2]
         ctx = ResolutionContext(
-            language="php",
             stack="none",
             addons=(),
             integrations=("jwt-generic",),
@@ -717,7 +713,6 @@ class ResolverLoadsIntegrationChecklist(unittest.TestCase):
         from plan_waves import resolve_checklists, ResolutionContext
         plugin_root = Path(__file__).resolve().parents[2]
         ctx = ResolutionContext(
-            language="php",
             stack="symfony",
             addons=(),
             integrations=(),

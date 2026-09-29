@@ -11,13 +11,13 @@ Usage:
                   [--plugin-root=<path>]
                   [--all-opus]
                   [--scope-glob=<glob>]
-                  [--diff-files=<path-to-file-with-list>]
                   [--exploratory]
+                  [--recon-gaps=<recon_gaps.json>]
                   [--include-vendor] [--include-tests]
 
 Default model assignment is the balanced profile: opus for W1/W2/W6,
-sonnet for W3/W4/W5/W∞. Pass --all-opus to force any wave whose
-default_model is opus onto opus (legacy behaviour); W3 is sonnet-only by
+sonnet for W3/W4/W5/W∞; the WGAP follow-up wave (recon gaps) is always
+opus. Pass --all-opus to force any wave whose default_model is opus onto opus (legacy behaviour); W3 is sonnet-only by
 definition (default_model=sonnet) so --all-opus does not promote it.
 
 Plan output (stdout, JSON):
@@ -31,7 +31,7 @@ Plan output (stdout, JSON):
         "entry_points_in_scope": [...],
         "target_files": [...],
         "model": "opus",
-        "mode": "project" | "changes"
+        "mode": "project"
       },
       ...
     ]
@@ -332,14 +332,14 @@ WAVES: tuple[WaveSpec, ...] = (
 )
 
 
-def _winf_spec() -> WaveSpec:
-    """Build exploratory WINF spec.
+def _union_spec(wave_id: str, *, balanced_model: str, trigger: str) -> WaveSpec:
+    """Build a spec spanning every focused wave (WINF, WGAP).
 
-    section_paths, concepts and themes — union of all focused waves (so WINF
-    gets every section in scope and pulls every core / framework checklist).
-    relevant_kinds & entry_point_kinds = None (no filter): exploratory must
-    surface every entry-kind, including ones not yet listed in any focused
-    wave (forward-compat: a future recipe emitting e.g. `webhook_handler`
+    section_paths, concepts and themes — union of all focused waves (so the
+    wave gets every section in scope and pulls every core / framework
+    checklist). relevant_kinds & entry_point_kinds = None (no filter): the
+    wave must surface every entry-kind, including ones not yet listed in any
+    focused wave (forward-compat: a future recipe emitting e.g. `webhook_handler`
     would still be scanned without a plan_waves bump).
     """
     paths: list[str] = []
@@ -362,7 +362,7 @@ def _winf_spec() -> WaveSpec:
                 seen_themes.add(t)
                 themes.append(t)
     return WaveSpec(
-        wave_id="WINF",
+        wave_id=wave_id,
         themes=tuple(themes),
         relevant_section_paths=tuple(paths),
         relevant_concepts=tuple(concepts),
@@ -370,8 +370,8 @@ def _winf_spec() -> WaveSpec:
         entry_point_section_paths=("attack_surface",),
         entry_point_kinds=None,
         default_model="opus",
-        balanced_model="sonnet",
-        trigger="flag",
+        balanced_model=balanced_model,
+        trigger=trigger,
     )
 
 
@@ -396,77 +396,21 @@ def resolved_section_paths(wave: WaveSpec, stack: str) -> list[str]:
     return out
 
 
+def _winf_spec() -> WaveSpec:
+    return _union_spec("WINF", balanced_model="sonnet", trigger="flag")
+
+
+def _wgap_spec() -> WaveSpec:
+    return _union_spec("WGAP", balanced_model="opus", trigger="gap")
+
+
 EXPLORATORY_WAVE = _winf_spec()
 
-
-# ---------------------------------------------------------------------------
-# Consumer kind → waves inverse index.
-#
-# Used by /security-changes orchestrator after reverse-grep: for a consumer
-# file whose `kind` is known (from CONTEXT.md attack_surface lookup), the
-# index returns the list of waves whose `relevant_kinds` cover that kind.
-# This replaces the previous LLM-heuristic "guess which wave matches".
-# ---------------------------------------------------------------------------
-
-
-def consumer_kinds_to_waves() -> dict[str, list[str]]:
-    """Build inverse index `kind → [wave_ids]` from WAVES.
-
-    Excludes EXPLORATORY_WAVE (relevant_kinds=None means "all kinds" — would
-    swamp the index and add noise to the orchestrator's decision).
-    """
-    index: dict[str, list[str]] = {}
-    for wave in WAVES:
-        if wave.relevant_kinds is None:
-            continue
-        for kind in wave.relevant_kinds:
-            index.setdefault(kind, []).append(wave.wave_id)
-    return index
-
-
-def lookup_kind_for_file(file_path: str, ctx: ParsedContext) -> Optional[str]:
-    """Find `kind` of an attack-surface item by file path.
-
-    Resolution: scan ctx.sections["attack_surface"]["items"] (canonical), then
-    recon_bags.<kind>.<name>.<bag_key> sections that carry items with `kind`.
-    Returns the first match's `kind` or None.
-
-    `file_path` is normalized through `_normalize_path` before comparison
-    (recipe emits POSIX `relative_to(project_root)` form).
-    """
-    target = _normalize_path(file_path)
-    stack = ctx.stack
-    payload = ctx.sections.get("attack_surface")
-    if isinstance(payload, dict):
-        for item in payload.get("items") or []:
-            if not isinstance(item, dict):
-                continue
-            f = _item_file(item, stack=stack)
-            if f and _normalize_path(f) == target:
-                k = item.get("kind")
-                if isinstance(k, str) and k:
-                    return k
-    # recon_bags.<kind>.<name>.<bag_key> may also carry items with `kind`.
-    fw_root = ctx.sections.get("recon_bags")
-    if isinstance(fw_root, dict):
-        for kind_payload in fw_root.values():          # level 1: kind {stack,addon,integration}
-            if not isinstance(kind_payload, dict):
-                continue
-            for name_payload in kind_payload.values():  # level 2: name {symfony, easyadmin, ...}
-                if not isinstance(name_payload, dict):
-                    continue
-                for bag_payload in name_payload.values():  # level 3: bag_key {voters, forms, ...}
-                    if not isinstance(bag_payload, dict):
-                        continue
-                    for item in bag_payload.get("items") or []:
-                        if not isinstance(item, dict):
-                            continue
-                        f = _item_file(item, stack=stack)
-                        if f and _normalize_path(f) == target:
-                            k = item.get("kind")
-                            if isinstance(k, str) and k:
-                                return k
-    return None
+# Recon left these files uninterpreted; the worker has to discover entry
+# points and trust boundaries itself, hence opus regardless of --all-opus.
+GAP_WAVE = _wgap_spec()
+GAP_MAX_FILES = 150
+RECON_GAPS_SCHEMA_VERSION = 1
 
 
 # Autosplit limits by model.
@@ -527,7 +471,6 @@ class ParsedContext:
     def resolution_context(self) -> "ResolutionContext":
         """Build a ResolutionContext from frontmatter.stack for resolve_checklists.
 
-        - language: from stack.language (None if missing or empty string).
         - stack: from stack.framework (default "unknown").
         - addons: from stack.addons (default empty).
         - integrations: from stack.integrations (default empty).
@@ -537,14 +480,10 @@ class ParsedContext:
         (dedupe + sort) in __post_init__.
         """
         st = self.frontmatter.get("stack")
-        language: Optional[str] = None
         stack_name = "unknown"
         addons_raw: tuple[str, ...] = ()
         integrations_raw: tuple[str, ...] = ()
         if isinstance(st, dict):
-            lang = st.get("language")
-            if isinstance(lang, str) and lang:
-                language = lang
             fw = st.get("framework")
             if isinstance(fw, str) and fw:
                 stack_name = fw
@@ -555,7 +494,6 @@ class ParsedContext:
             if isinstance(i, list):
                 integrations_raw = tuple(x for x in i if isinstance(x, str) and x)
         return ResolutionContext(
-            language=language,
             stack=stack_name,
             addons=addons_raw,
             integrations=integrations_raw,
@@ -636,9 +574,8 @@ def parse_context(path: Path) -> ParsedContext:
     sv = fm.get("schema_version")
     if sv != 2:
         raise ValueError(
-            f"Unsupported schema_version: {sv!r} (expected 2). v3 plan_waves "
-            "does not read v1 SECURITY_CONTEXT.md — rerun recon_inventory to "
-            "regenerate <review_root>/CONTEXT.md."
+            f"Unsupported schema_version: {sv!r} (expected 2). Rerun "
+            "recon_inventory to regenerate <review_root>/CONTEXT.md."
         )
 
     sections_raw = vc.extract_sections(text)
@@ -666,8 +603,8 @@ def should_trigger(wave: WaveSpec, ctx: ParsedContext) -> bool:
     trigger = wave.trigger
     if trigger == "always":
         return True
-    if trigger == "flag":
-        return False  # only via --exploratory
+    if trigger in ("flag", "gap"):
+        return False  # only via --exploratory / recon gaps
     if trigger == "has_output_or_frontend":
         return (
             ctx.section_has_items("output_renderers")
@@ -758,19 +695,10 @@ def collect_files(
     ctx: ParsedContext,
     *,
     scope_glob: Optional[str] = None,
-    require_touched: bool = False,
     include_vendor: bool = False,
     include_tests: bool = False,
 ) -> list[str]:
-    """Channel 1 — collect unique file paths from list-shape section items.
-
-    require_touched=True: keep item only when `touched_by_diff is True`. The
-    recipe is authoritative — it received `diff_files` during build_inventory
-    and is responsible for setting the flag. Do not re-derive from diff_files
-    here: it would mask recipe bugs (and split source-of-truth between two
-    places). Use `is True` (not bool()) so a stray string `"false"` from a
-    hand-edited yaml does not leak through.
-    """
+    """Collect unique file paths from list-shape section items."""
     collected: set[str] = set()
     stack = ctx.stack
     for path in section_paths:
@@ -783,8 +711,6 @@ def collect_files(
             if not include_vendor and _is_vendor_path(file_path):
                 continue
             if not include_tests and _is_tests_path(file_path):
-                continue
-            if require_touched and item.get("touched_by_diff") is not True:
                 continue
             if scope_glob and not _matches_scope_glob(file_path, scope_glob):
                 continue
@@ -801,8 +727,8 @@ def _filter_scalar_files(
 ) -> set[str]:
     """Shared vendor/tests/scope filter for scalar source_files.
 
-    Single source of truth for channels 2 (changes) and the project-mode
-    scalar path so their filtering can't drift.
+    Shared by the scalar-section path and the WGAP gap files so their
+    filtering can't drift.
     """
     out: set[str] = set()
     for f in files:
@@ -816,39 +742,6 @@ def _filter_scalar_files(
     return out
 
 
-def collect_scalar_changes(
-    section_paths: tuple[str, ...],
-    ctx: ParsedContext,
-    diff_files: set[str],
-    *,
-    scope_glob: Optional[str] = None,
-    include_vendor: bool = False,
-    include_tests: bool = False,
-) -> list[str]:
-    """Channel 2 — for mode=changes only.
-
-    For each scalar section in `section_paths`, if its `source_files` set
-    intersects `diff_files`, surface ALL its source_files into target_files
-    (worker re-reads the whole config block, not just the touched line).
-
-    Skips list-shape sections (they go through channel 1 / collect_files).
-    """
-    out: set[str] = set()
-    for path in section_paths:
-        sf = ctx.scalar_source_files(path)
-        if not sf:
-            continue
-        if not (set(sf) & diff_files):
-            continue
-        out |= _filter_scalar_files(
-            sf,
-            scope_glob=scope_glob,
-            include_vendor=include_vendor,
-            include_tests=include_tests,
-        )
-    return sorted(out)
-
-
 def collect_scalar_project(
     section_paths: tuple[str, ...],
     ctx: ParsedContext,
@@ -857,16 +750,14 @@ def collect_scalar_project(
     include_vendor: bool = False,
     include_tests: bool = False,
 ) -> list[str]:
-    """Project-mode analog of channel 2 (no diff-intersection gate).
+    """Collect scalar `source_files` of the wave's sections.
 
-    Surfaces ALL scalar `source_files` of the wave's sections into
-    target_files. In a full project audit there is no diff to gate on, so
-    recon-known trust-boundary config files (e.g. auth_layer→security.yaml,
+    Recon-known trust-boundary config files (e.g. auth_layer→security.yaml,
     secrets→.env) must be routed unconditionally — otherwise they are
     enumerated by recon but never reach any worker's target_files, and
     catching their vulns silently depends on the model ranging beyond scope.
 
-    Skips list-shape sections (they go through channel 1 / collect_files).
+    Skips list-shape sections (they go through collect_files).
     """
     out: set[str] = set()
     for path in section_paths:
@@ -908,30 +799,24 @@ def collect_entry_points(
 
 
 # ---------------------------------------------------------------------------
-# Checklist resolution (5-layer: core → language → stack → addons → integrations).
+# Checklist resolution (4-layer: core → stack → addons → integrations).
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class ResolutionContext:
-    """Inputs for the 5-layer checklist resolver.
+    """Inputs for the 4-layer checklist resolver.
 
-    - language: e.g. "php"/"python"/"node"; None disables the language layer.
     - stack: e.g. "symfony"/"laravel"/"none"/"unknown"; "none"/"unknown" disable
       the stack and addons layers.
     - addons: alphabetically sorted, deduped (normalized in __post_init__).
     - integrations: alphabetically sorted, deduped (normalized in __post_init__).
     """
-    language: Optional[str]
     stack: str
     addons: tuple[str, ...]
     integrations: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        # Normalize language: empty string → None (callers may pass "" when the
-        # field was absent in YAML).
-        if self.language == "":
-            object.__setattr__(self, "language", None)
         # Normalize addons / integrations: drop non-strings, dedupe, sort.
         for field in ("addons", "integrations"):
             raw = getattr(self, field)
@@ -946,16 +831,15 @@ def resolve_checklists(
 ) -> list[str]:
     """Return absolute checklist paths for the given themes & resolution ctx.
 
-    Layout (5-layer; precedence increases with depth):
+    Layout (4-layer; precedence increases with depth):
       1. checklists/core/{theme}.md
-      2. checklists/languages/{language}/{theme}.md       — skip if ctx.language is None
-      3. checklists/stacks/{stack}/{theme}.md             — skip if stack ∈ {none, unknown}
-      4. checklists/stacks/{stack}/addons/{addon}/{theme}.md
+      2. checklists/stacks/{stack}/{theme}.md             — skip if stack ∈ {none, unknown}
+      3. checklists/stacks/{stack}/addons/{addon}/{theme}.md
          — for each addon, alphabetical; skip if stack ∈ {none, unknown}
-      5. checklists/integrations/{integration}/{theme}.md
+      4. checklists/integrations/{integration}/{theme}.md
          — for each integration, alphabetical; independent of stack
 
-    Order per theme: core → language → stack → addons → integrations
+    Order per theme: core → stack → addons → integrations
     (i.e., less specific first; more specific layer overrides on conflict).
     Across themes: theme order is preserved (for each theme we append its full
     chain before moving to the next).
@@ -975,22 +859,17 @@ def resolve_checklists(
         core = cl / "core" / f"{t}.md"
         if core.is_file():
             out.append(str(core))
-        # 2. language.
-        if ctx.language:
-            lang = cl / "languages" / ctx.language / f"{t}.md"
-            if lang.is_file():
-                out.append(str(lang))
-        # 3. stack.
+        # 2. stack.
         if stack_active:
             stk = cl / "stacks" / ctx.stack / f"{t}.md"
             if stk.is_file():
                 out.append(str(stk))
-            # 4. addons (only if stack is active — addons live under stacks/{stack}/addons/).
+            # 3. addons (only if stack is active — addons live under stacks/{stack}/addons/).
             for addon in ctx.addons:
                 ad = cl / "stacks" / ctx.stack / "addons" / addon / f"{t}.md"
                 if ad.is_file():
                     out.append(str(ad))
-        # 5. integrations (independent of stack).
+        # 4. integrations (independent of stack).
         for integration in ctx.integrations:
             ig = cl / "integrations" / integration / f"{t}.md"
             if ig.is_file():
@@ -1031,47 +910,61 @@ def _wave_target_files(
     ctx: ParsedContext,
     *,
     scope_glob: Optional[str],
-    diff_files: Optional[set[str]],
     include_vendor: bool,
     include_tests: bool,
 ) -> list[str]:
-    """List-shape items (channel 1) unioned with scalar source_files.
-
-    Scalar files come from the diff-gated channel 2 in changes mode, or the
-    ungated project channel (collect_scalar_project) in project mode.
-    """
+    """List-shape items unioned with the wave's scalar source_files."""
     section_paths = tuple(resolved_section_paths(wave, ctx.stack))
     list_files = collect_files(
         section_paths,
         wave.relevant_kinds,
         ctx,
         scope_glob=scope_glob,
-        require_touched=diff_files is not None,
         include_vendor=include_vendor,
         include_tests=include_tests,
     )
-    if diff_files is None:
-        # Project mode: no diff to gate on, so route ALL scalar source_files of
-        # the wave's (theme-scoped) sections, not just touched ones (channel 2).
-        scalar_files = collect_scalar_project(
-            section_paths,
-            ctx,
-            scope_glob=scope_glob,
-            include_vendor=include_vendor,
-            include_tests=include_tests,
-        )
-    else:
-        scalar_files = collect_scalar_changes(
-            section_paths,
-            ctx,
-            diff_files,
-            scope_glob=scope_glob,
-            include_vendor=include_vendor,
-            include_tests=include_tests,
-        )
+    scalar_files = collect_scalar_project(
+        section_paths,
+        ctx,
+        scope_glob=scope_glob,
+        include_vendor=include_vendor,
+        include_tests=include_tests,
+    )
     if not scalar_files:
         return list_files
     return sorted(set(list_files) | set(scalar_files))
+
+
+def _gap_target_files(
+    recon_gaps: list[dict[str, Any]],
+    taken: set[str],
+    *,
+    scope_glob: Optional[str],
+    include_vendor: bool,
+    include_tests: bool,
+) -> list[str]:
+    """Files for the WGAP wave: gap items in order, then path; capped.
+
+    Files already routed to another slice are dropped — those workers see them
+    anyway, and a second pass would only double the cost.
+    """
+    out: list[str] = []
+    seen: set[str] = set(taken)
+    for item in recon_gaps:
+        raw = item.get("files")
+        if not isinstance(raw, list):
+            continue
+        keep = _filter_scalar_files(
+            [f for f in raw if isinstance(f, str) and f],
+            scope_glob=scope_glob,
+            include_vendor=include_vendor,
+            include_tests=include_tests,
+        )
+        for f in sorted(keep):
+            if f not in seen:
+                seen.add(f)
+                out.append(f)
+    return out[:GAP_MAX_FILES]
 
 
 def build_plan(
@@ -1081,24 +974,10 @@ def build_plan(
     all_opus: bool = False,
     exploratory: bool = False,
     scope_glob: Optional[str] = None,
-    diff_files: Optional[set[str]] = None,
     include_vendor: bool = False,
     include_tests: bool = False,
-    extra_target_files: Optional[list[str]] = None,
+    recon_gaps: Optional[list[dict[str, Any]]] = None,
 ) -> list[dict[str, Any]]:
-    mode = "changes" if diff_files is not None else "project"
-    # Normalize external diff_files to recipe's POSIX, no-leading-./ form so
-    # set intersections (channel 2) line up. Idempotent: already-normalized
-    # paths pass through unchanged.
-    if diff_files is not None:
-        diff_files = {_normalize_path(p) for p in diff_files}
-    # Normalize extra_target_files identically: orchestrator passes them
-    # straight from `removed_defenses.json` / consumer grep output, so leading
-    # `./` and whitespace are common.
-    extra_norm: list[str] = (
-        sorted({_normalize_path(p) for p in extra_target_files if p and p.strip()})
-        if extra_target_files else []
-    )
     plan: list[dict[str, Any]] = []
     stack = ctx.stack
 
@@ -1109,19 +988,9 @@ def build_plan(
         files = _wave_target_files(
             wave, ctx,
             scope_glob=scope_glob,
-            diff_files=diff_files,
             include_vendor=include_vendor,
             include_tests=include_tests,
         )
-        # Inject extra_target_files (from /security-changes removed-defense
-        # detection: consumers of removed Voter/Policy/Middleware + controllers
-        # that lost their authz attribute). Done BEFORE the empty-intersection
-        # skip so a wave with no diff intersection but with extra files still
-        # gets scheduled — that's the whole point of the flag.
-        if extra_norm:
-            files = sorted(set(files) | set(extra_norm))
-        if diff_files is not None and not files:
-            continue  # no intersection with diff
         if scope_glob and not files:
             continue
         entry_points = collect_entry_points(
@@ -1130,11 +999,8 @@ def build_plan(
         chunks = split_files(files, model)
         checklists = resolve_checklists(wave.themes, ctx.resolution_context, plugin_root)
         for idx, chunk in enumerate(chunks, start=1):
-            slice_id = f"{wave.wave_id}_PART{idx}"
-            if mode == "changes":
-                slice_id += "_CHANGES"
             plan.append({
-                "slice_id": slice_id,
+                "slice_id": f"{wave.wave_id}_PART{idx}",
                 "wave_id": wave.wave_id,
                 "themes": list(wave.themes),
                 "checklists": checklists,
@@ -1142,7 +1008,7 @@ def build_plan(
                 "entry_points_in_scope": entry_points,
                 "target_files": chunk,
                 "model": model,
-                "mode": mode,
+                "mode": "project",
             })
 
     if exploratory:
@@ -1151,68 +1017,88 @@ def build_plan(
         files = _wave_target_files(
             wave, ctx,
             scope_glob=scope_glob,
-            diff_files=diff_files,
             include_vendor=include_vendor,
             include_tests=include_tests,
         )
-        if extra_norm:
-            files = sorted(set(files) | set(extra_norm))
-        # mode=changes: skip WINF entirely if nothing intersects the diff —
-        # exploratory has no value when there's no changed code to explore.
-        # project mode: still emit one slice (exploratory ranges over context
-        # via `relevant_section_paths`, target_files=[] is a valid signal).
-        if not (mode == "changes" and not files):
-            # Anchor entry points: own + union of all focused waves'.
-            own = set(collect_entry_points(
-                wave.entry_point_section_paths, wave.entry_point_kinds, ctx,
-            ))
-            focused: set[str] = set()
-            for s in plan:
-                focused.update(s.get("entry_points_in_scope", []))
-            all_eps = sorted(own | focused)
-            # Exploratory loads union of all themes' checklists (section F:
-            # "On W∞ exploratory all themes are loaded as a union").
-            checklists = resolve_checklists(wave.themes, ctx.resolution_context, plugin_root)
+        # Anchor entry points: own + union of all focused waves'.
+        own = set(collect_entry_points(
+            wave.entry_point_section_paths, wave.entry_point_kinds, ctx,
+        ))
+        focused: set[str] = set()
+        for s in plan:
+            focused.update(s.get("entry_points_in_scope", []))
+        all_eps = sorted(own | focused)
+        # Exploratory loads the union of all themes' checklists.
+        checklists = resolve_checklists(wave.themes, ctx.resolution_context, plugin_root)
 
-            chunks = split_files(files, model, limit_override=WINF_SPLIT) or [[]]
-            for idx, chunk in enumerate(chunks, start=1):
-                slice_id = f"WINF_PART{idx}"
-                if mode == "changes":
-                    slice_id += "_CHANGES"
+        # target_files=[] is a valid signal: exploratory ranges over context
+        # via `relevant_section_paths`.
+        chunks = split_files(files, model, limit_override=WINF_SPLIT) or [[]]
+        for idx, chunk in enumerate(chunks, start=1):
+            plan.append({
+                "slice_id": f"WINF_PART{idx}",
+                "wave_id": wave.wave_id,
+                "themes": list(wave.themes),
+                "checklists": checklists,
+                "relevant_section_paths": resolved_section_paths(wave, stack),
+                "entry_points_in_scope": all_eps,
+                "target_files": chunk,
+                "model": model,
+                "mode": "project",
+            })
+
+    if recon_gaps:
+        wave = GAP_WAVE
+        taken = {f for s in plan for f in s["target_files"]}
+        files = _gap_target_files(
+            recon_gaps, taken,
+            scope_glob=scope_glob,
+            include_vendor=include_vendor,
+            include_tests=include_tests,
+        )
+        if files:
+            checklists = resolve_checklists(wave.themes, ctx.resolution_context, plugin_root)
+            for idx, chunk in enumerate(split_files(files, wave.balanced_model), start=1):
                 plan.append({
-                    "slice_id": slice_id,
+                    "slice_id": f"{wave.wave_id}_PART{idx}",
                     "wave_id": wave.wave_id,
                     "themes": list(wave.themes),
                     "checklists": checklists,
                     "relevant_section_paths": resolved_section_paths(wave, stack),
-                    "entry_points_in_scope": all_eps,
+                    "entry_points_in_scope": list(chunk),
                     "target_files": chunk,
-                    "model": model,
-                    "mode": mode,
+                    "model": wave.balanced_model,
+                    "mode": "project",
                 })
 
     return plan
 
 
+def read_recon_gaps(path: Path) -> list[dict[str, Any]]:
+    """Items of a recon_gaps.json; [] for a missing, unreadable or foreign file."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as exc:
+        print(f"Warning: ignoring unreadable {path}: {exc}", file=sys.stderr)
+        return []
+    if not isinstance(data, dict) or data.get("schema_version") != RECON_GAPS_SCHEMA_VERSION:
+        print(
+            f"Warning: ignoring {path}: unsupported schema_version "
+            f"{data.get('schema_version') if isinstance(data, dict) else None!r}",
+            file=sys.stderr,
+        )
+        return []
+    items = data.get("items")
+    if not isinstance(items, list):
+        return []
+    return [i for i in items if isinstance(i, dict)]
+
+
 # ---------------------------------------------------------------------------
 # CLI.
 # ---------------------------------------------------------------------------
-
-
-def _normalize_path(s: str) -> str:
-    """Normalize project-relative path: strip leading './' so diff_files and
-    item.file are compared in the same form. Recipe emits POSIX
-    `Path.relative_to(project_root).as_posix()` (no leading dot); but external
-    callers (CI scripts, hand-curated diffs) may pass `./src/Foo.php`.
-    """
-    return s.strip().removeprefix("./")
-
-
-def read_diff_files(path: Path) -> set[str]:
-    return {
-        _normalize_path(ln) for ln in path.read_text(encoding="utf-8").splitlines()
-        if ln.strip()
-    }
 
 
 def _default_plugin_root() -> Path:
@@ -1234,8 +1120,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--exploratory", action="store_true", help="Append W∞ exploratory wave")
     parser.add_argument("--scope-glob", type=str, default=None,
                         help="Glob to restrict target files")
-    parser.add_argument("--diff-files", type=Path, default=None,
-                        help="File listing changed files (one per line) → mode=changes")
+    parser.add_argument(
+        "--recon-gaps", type=Path, default=None,
+        help="recon_gaps.json written by validate_context.py --gaps-out. "
+             "Default: recon_gaps.json next to the CONTEXT.md argument. Absent "
+             "or empty → no WGAP wave.",
+    )
     parser.add_argument("--include-vendor", action="store_true",
                         help="Keep vendor/**, node_modules/**, var/**, build/**, dist/**")
     parser.add_argument("--include-tests", action="store_true",
@@ -1245,14 +1135,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Persist generated plan as JSON at this path (atomic write via "
         "temp+rename). Stdout still prints the plan. Renderer reads the saved "
         "file via --waves-plan to emit `## Checklist coverage` block.",
-    )
-    parser.add_argument(
-        "--extra-target-files", type=str, default=None,
-        help="CSV-list of additional files to include in target_files of every "
-             "wave (and WINF). Used by /security-changes for consumers of "
-             "removed defenses (Voter/Policy/Middleware) and controllers that "
-             "lost authz attributes — those files must be reviewed even when "
-             "they themselves are unchanged in the diff.",
     )
     args = parser.parse_args(argv)
 
@@ -1264,16 +1146,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
 
-    try:
-        diff_files = read_diff_files(args.diff_files) if args.diff_files else None
-    except (FileNotFoundError, OSError) as exc:
-        print(f"Error reading --diff-files: {exc}", file=sys.stderr)
-        return 2
-
-    extra_files: list[str] = (
-        [f.strip() for f in args.extra_target_files.split(",") if f.strip()]
-        if args.extra_target_files else []
-    )
+    gaps_path = args.recon_gaps or args.context.parent / "recon_gaps.json"
+    recon_gaps = read_recon_gaps(gaps_path)
 
     plan = build_plan(
         ctx,
@@ -1281,10 +1155,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         all_opus=args.all_opus,
         exploratory=args.exploratory,
         scope_glob=args.scope_glob,
-        diff_files=diff_files,
         include_vendor=args.include_vendor,
         include_tests=args.include_tests,
-        extra_target_files=extra_files,
+        recon_gaps=recon_gaps,
     )
 
     if args.save_plan is not None:
