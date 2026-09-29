@@ -10,8 +10,6 @@ allowed-tools:
   - Task
   - Bash(git rev-parse *)
   - Bash(git ls-files *)
-  - Bash(git diff HEAD*)
-  - Bash(git diff origin/*)
   - Bash(git status *)
   - Bash(git log *)
   - Bash(git -C *)
@@ -19,7 +17,6 @@ allowed-tools:
   - Bash(ls *)
   - Bash(mkdir *)
   - Bash(rm *)
-  - Bash(mv *)
   - Bash(cat *)
   - Bash(printf *)
   - Bash(test *)
@@ -39,7 +36,7 @@ Parse flags from `$ARGUMENTS`:
 - `--project-root=<path>` — corner of the audited project (where `composer.json` / framework configs live). Defaults to `cwd`. Use in composite repos where CLAUDE.md / cwd is one directory above the actual project root (for example monorepo with `api/` PHP subproject + shared top-level CLAUDE.md). Recon, exclude paths, and sanity coverage all resolve against this value. Accepts a relative (from cwd) or absolute path.
 - `--interactive` — checkpoint with the user after recon (via AskUserQuestion)
 - `--quick` — **disable** the exploratory wave W∞ (ON by default). For fast runs / CI. The WGAP recon-gap wave (step 7) stays on.
-- `--all-opus` — force opus for all waves (legacy). By default W4/W5 on sonnet (mechanical data flow).
+- `--all-opus` — force opus on W4, W5 and W∞ (legacy). By default W3, W4, W5 and W∞ run on sonnet (mechanical data flow); W3 stays on sonnet even with this flag.
 - `--scope=<glob>` — restrict target_files by a glob pattern (for example `src/Api/**`)
 - `--no-console` — static-only recon: the utility does NOT run the project's console. Use when auditing hostile/untrusted repos (no guarantee that bootstrap will not execute malicious code), when runtime credentials are absent, or in CI scenarios where project execution is forbidden. Ceiling=medium (intentionally). Framework config (security firewalls / `access_control`, trusted proxies, messenger, twig) is then **not interpreted**: recon does not parse config files itself, so those sections come back `partial` (or `pending_enrichment` for `auth_layer`) with a `config_uninterpreted: <alias>: no_console` reason and their files in `source_files`, which routes them to the workers and the WGAP wave. Alternative — isolation via firejail/Docker without the flag.
 - `--console-cmd=<template>` — explicit command for running the project console, e.g. `--console-cmd="docker compose exec -T php php bin/console"`. Use when the project runs **inside a container** (docker compose / Makefile / ddev / Sail) — running `bin/console` on the host would distort the environment (wrong PHP version, missing services). May contain a `{args}` placeholder for Makefile-style passthrough (`--console-cmd="make console CMD={args}"`); otherwise the subcommand is appended. When neither this flag nor `--no-console` is passed and the project looks containerized, **step 3b asks you interactively** (see below) instead of silently degrading. `--no-console` wins over this flag. **On the derived Codex harness** a space-containing value here is truncated by the whitespace-split argument contract — there, set the console command via the `FR_SECURITY_CONSOLE_CMD` environment variable instead (e.g. `frsr --console-cmd "…"`), which step 3b honors; see step 3b.
@@ -48,7 +45,7 @@ Parse flags from `$ARGUMENTS`:
 
 **Important about defaults:**
 - **Exploratory wave W∞ is enabled by default.** Without it, cross-layer vulnerabilities (OAuth state, tenancy chains, authenticator integrity) are missed. Quick scanner — `--quick`.
-- **Balanced model profile is on by default.** W1/W2/W6 — opus (auth/disclosure, injection/data-access/business-logic, fintech: require reasoning about trust boundaries / chains). W3 (output-render+frontend-js), W4 (serialization+crypto), W5 (ssrf-fileops), W∞ (exploratory) — sonnet: mechanical data flow, sonnet handles it. WGAP (follow-up on recon gaps) — opus: its files come with little or no inventory. Source of truth — `bin/plan_waves.py:WaveSpec.balanced_model`. Force opus everywhere — `--all-opus`.
+- **Balanced model profile is on by default.** W1/W2/W6 — opus (auth/disclosure, injection/data-access/business-logic, fintech: require reasoning about trust boundaries / chains). W3 (output-render+frontend-js), W4 (serialization+crypto), W5 (ssrf-fileops), W∞ (exploratory) — sonnet: mechanical data flow, sonnet handles it. WGAP (follow-up on recon gaps) — opus: its files come with little or no inventory. Source of truth — `bin/plan_waves.py:WaveSpec.balanced_model`. Force opus on W4/W5/W∞ — `--all-opus` (W3 stays sonnet).
 
 ## STEPS
 
