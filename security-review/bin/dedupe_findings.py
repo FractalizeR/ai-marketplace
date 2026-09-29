@@ -67,6 +67,9 @@ def _waves_balanced_models() -> dict[str, str]:
     for wave in plan_waves.WAVES:
         out[wave.wave_id] = wave.balanced_model
     out["WINF"] = plan_waves._winf_spec().balanced_model  # noqa: SLF001
+    # Literal, not read from plan_waves: the gap wave is defined there and must
+    # agree (a parity test pins it), but cost estimation must not depend on it.
+    out["WGAP"] = "opus"
     return out
 
 
@@ -125,6 +128,95 @@ def read_coverage_gaps(review_root: Path) -> list[str]:
         "Dynamically registered routes / CLI commands may be missing from the "
         "attack surface; re-run with `--console-cmd` to enumerate them."
     ]
+
+
+RECON_GAPS_NAME = "recon_gaps.json"
+RECON_GAPS_SCHEMA_VERSION = 1
+_NOT_REVIEWED_PREVIEW = 5
+
+_RECON_GAP_HEADS = {
+    "coverage": "Recon enumerated fewer entities than the source contains",
+    "extractor_failed": "Recon extractor failed",
+    "uninterpreted": "Recon found configuration it could not interpret",
+}
+
+
+def _plan_target_files(waves_plan: list[dict] | None) -> set[str] | None:
+    """Union of `target_files` over every planned slice; None without a plan."""
+    if waves_plan is None:
+        return None
+    out: set[str] = set()
+    for entry in waves_plan:
+        files = entry.get("target_files")
+        if isinstance(files, list):
+            out.update(f for f in files if isinstance(f, str))
+    return out
+
+
+def read_recon_gaps(review_root: Path, waves_plan: list[dict] | None) -> list[str]:
+    """Surface recon-level gaps from `<review_root>/recon_gaps.json` (written by
+    `validate_context.py --sanity --gaps-out`).
+
+    Each entry's `files` are split into "reviewed" (listed in some slice's
+    `target_files` of `waves_plan`) and "NOT reviewed" (cut by the gap-wave
+    cap, `--scope`, vendor/tests filtering, ...). Without a plan the split is
+    undefined and only the file count is reported. Missing / corrupt file or
+    empty `items` -> `[]`; an unknown `schema_version` -> warning + `[]`.
+    """
+    path = review_root / RECON_GAPS_NAME
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    if data.get("schema_version") != RECON_GAPS_SCHEMA_VERSION:
+        print(
+            f"Warning: {path} has schema_version {data.get('schema_version')!r} "
+            f"(supported: {RECON_GAPS_SCHEMA_VERSION}); recon gaps are not reported",
+            file=sys.stderr,
+        )
+        return []
+    items = [i for i in (data.get("items") or []) if isinstance(i, dict)] if isinstance(data.get("items"), list) else []
+    items.sort(key=lambda i: (str(i.get("kind", "")), str(i.get("section_path", "")), str(i.get("label", ""))))
+
+    planned = _plan_target_files(waves_plan)
+    lines: list[str] = []
+    for item in items:
+        kind = str(item.get("kind", ""))
+        label = str(item.get("label", "")) or "?"
+        section = str(item.get("section_path", "")) or "?"
+        head = _RECON_GAP_HEADS.get(kind, "Recon gap")
+        detail = f"{head}: `{label}` (section `{section}`"
+        status = item.get("status")
+        if status:
+            detail += f", status {status}"
+        detail += ")."
+        reason = item.get("reason")
+        if reason:
+            detail += f" {reason}."
+        if kind == "coverage" and item.get("declared") is not None and item.get("found") is not None:
+            detail += f" Declared {item['declared']}, found {item['found']}"
+            if item.get("missing_pct") is not None:
+                detail += f" ({item['missing_pct']}% missing)"
+            detail += "."
+        raw_files = item.get("files")
+        files = sorted({f for f in raw_files if isinstance(f, str)}) if isinstance(raw_files, list) else []
+        if planned is None:
+            detail += f" {len(files)} file(s) involved; review status unknown (no plan given)."
+        else:
+            reviewed = [f for f in files if f in planned]
+            not_reviewed = [f for f in files if f not in planned]
+            detail += f" {len(reviewed)} file(s) reviewed, {len(not_reviewed)} NOT reviewed"
+            if not_reviewed:
+                shown = ", ".join(f"`{f}`" for f in not_reviewed[:_NOT_REVIEWED_PREVIEW])
+                more = len(not_reviewed) - _NOT_REVIEWED_PREVIEW
+                detail += f" ({shown}{f', +{more} more' if more > 0 else ''})"
+            detail += "."
+        lines.append(detail)
+    return lines
 
 
 def read_dispatch_gaps(path: Path | None) -> list[str]:
@@ -190,6 +282,30 @@ def _sink_hashes_from_findings_payload(payload: dict) -> set[str]:
             if isinstance(entry, dict) and isinstance(entry.get("sink_hash"), str):
                 out.add(entry["sink_hash"])
     return out
+
+
+def load_waves_plan(path: Path | None) -> list[dict] | None:
+    if path is None:
+        return None
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
+        print(
+            f"Warning: could not read --waves-plan {path}: {exc}; "
+            "skipping coverage block",
+            file=sys.stderr,
+        )
+        return None
+    if not isinstance(loaded, list):
+        print(
+            f"Warning: --waves-plan {path} root is not a list "
+            f"({type(loaded).__name__}); skipping coverage block",
+            file=sys.stderr,
+        )
+        return None
+    # Skip non-dict entries silently — defensive against minor schema drift;
+    # renderer further validates per-entry shape.
+    return [s for s in loaded if isinstance(s, dict)]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -289,6 +405,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     dispatch_gap_lines = read_dispatch_gaps(dispatch_gaps_path)
     incomplete = bool(dispatch_gap_lines)
+    waves_plan = load_waves_plan(args.waves_plan)
+    recon_gap_lines = read_recon_gaps(review_root, waves_plan)
 
     paths = collect_input_paths(args.input, args.input_glob)
     if not paths:
@@ -298,7 +416,7 @@ def main(argv: list[str] | None = None) -> int:
         if not incomplete:
             print("Error: no input files found", file=sys.stderr)
             return 2
-        coverage_gaps = read_coverage_gaps(review_root) + dispatch_gap_lines
+        coverage_gaps = read_coverage_gaps(review_root) + recon_gap_lines + dispatch_gap_lines
         details_dir = args.details_dir or args.output.parent / args.output.stem
         write_split_report(
             [],
@@ -355,35 +473,13 @@ def main(argv: list[str] | None = None) -> int:
     # re-validated) history.
     new_resolutions = verdicts_in_resolutions
 
-    # Coverage gaps: recon-level (console enrichment skipped, from CONTEXT.md)
-    # PLUS wave-dispatch execution gaps (from dispatch_gaps.json). Both render
-    # under `## Coverage Gaps`; the dispatch gaps additionally drive the
-    # prominent INCOMPLETE marker via `incomplete`.
-    coverage_gaps = read_coverage_gaps(review_root) + dispatch_gap_lines
+    # Coverage gaps: recon-level (console enrichment skipped, from CONTEXT.md;
+    # sanity gaps, from recon_gaps.json) PLUS wave-dispatch execution gaps
+    # (from dispatch_gaps.json). All render under `## Coverage Gaps`; only the
+    # dispatch gaps drive the prominent INCOMPLETE marker via `incomplete`.
+    coverage_gaps = read_coverage_gaps(review_root) + recon_gap_lines + dispatch_gap_lines
 
     cost = estimate_cost(paths, _waves_balanced_models())
-
-    waves_plan: list[dict] | None = None
-    if args.waves_plan is not None:
-        try:
-            text = args.waves_plan.read_text(encoding="utf-8")
-            loaded = json.loads(text)
-            if isinstance(loaded, list):
-                # Skip non-dict entries silently — defensive against minor
-                # schema drift; renderer further validates per-entry shape.
-                waves_plan = [s for s in loaded if isinstance(s, dict)]
-            else:
-                print(
-                    f"Warning: --waves-plan {args.waves_plan} root is not a list "
-                    f"({type(loaded).__name__}); skipping coverage block",
-                    file=sys.stderr,
-                )
-        except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
-            print(
-                f"Warning: could not read --waves-plan {args.waves_plan}: {exc}; "
-                "skipping coverage block",
-                file=sys.stderr,
-            )
 
     if args.single_file:
         _write_reflowed(

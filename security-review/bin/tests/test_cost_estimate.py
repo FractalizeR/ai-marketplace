@@ -28,9 +28,11 @@ class WaveIdParse(unittest.TestCase):
     def test_winf_part1(self):
         self.assertEqual(_wave_id_from_slice("WINF_PART1"), "WINF")
 
-    def test_changes_suffix(self):
-        self.assertEqual(_wave_id_from_slice("W2_PART3_CHANGES"), "W2")
-        self.assertEqual(_wave_id_from_slice("WINF_PART1_CHANGES"), "WINF")
+    def test_wgap_part1(self):
+        self.assertEqual(_wave_id_from_slice("WGAP_PART1"), "WGAP")
+
+    def test_changes_suffix_is_no_longer_a_slice_id(self):
+        self.assertIsNone(_wave_id_from_slice("W2_PART3_CHANGES"))
 
     def test_unknown_pattern_returns_none(self):
         for name in ("W1part1", "wave_1", "PART1_W1", "RANDOM_FILENAME", "W"):
@@ -54,6 +56,15 @@ class EstimateCostBehaviour(unittest.TestCase):
         self.assertEqual(cost.parts_per_model, {"opus": 2, "sonnet": 3})
         self.assertEqual(cost.parts_per_wave, {"W1": 2, "W3": 3})
         self.assertEqual(cost.unrecognized_slices, [])
+
+    def test_gap_wave_is_priced_with_the_mapped_model(self):
+        import dedupe_findings
+        waves = dedupe_findings._waves_balanced_models()
+        self.assertEqual(waves["WGAP"], "opus")
+        cost = estimate_cost([Path("WGAP_PART1.md"), Path("WGAP_PART2.md")], waves)
+        self.assertEqual(cost.parts_per_model, {"opus": 2})
+        self.assertEqual(cost.unrecognized_slices, [])
+        self.assertAlmostEqual(cost.total_usd, 0.60, places=2)
 
     def test_unmapped_wave_falls_into_unrecognized(self):
         # Wave id that plan_waves doesn't know about → unrecognized.

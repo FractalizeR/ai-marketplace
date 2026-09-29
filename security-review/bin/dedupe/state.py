@@ -3,8 +3,8 @@
 The file holds `resolutions` — a `sink_hash -> Resolution` map recording
 external triage-tool verdicts (`--verdicts-in`) so a rejected false positive
 is not re-discovered and re-argued on every run. Nothing else is persisted;
-older builds also stored a per-run findings snapshot, a diff baseline and a
-run id, which are ignored on read and dropped on the next write.
+older builds also stored per-run snapshot keys, which are ignored on read and
+dropped on the next write.
 
 Design rules:
 
@@ -43,7 +43,7 @@ STATE_SCHEMA_VERSION = 2
 
 # Only schema 2 is read. A schema-1 file (pre-resolutions) carries nothing
 # worth keeping, so it is treated as an empty journal with a warning. The
-# version stays at 2 although the payload lost `findings`/`baseline`/`run_id`:
+# version stays at 2 although the payload lost its snapshot keys:
 # a build that predates this change reads the new file as "no previous run"
 # and keeps `resolutions`, whereas a bump would make it discard them.
 _READABLE_SCHEMA_VERSIONS = (2,)

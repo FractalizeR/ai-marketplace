@@ -1,7 +1,7 @@
 """Rough cost estimate for the security pipeline run.
 
 Walks the input file paths fed into dedupe (their names follow the
-`W<N>_PART<M>[_CHANGES].md` convention emitted by `plan_waves.py`), looks up
+`W<N>_PART<M>.md` convention emitted by `plan_waves.py`), looks up
 which model each wave runs by default, multiplies by an empirical per-slice
 constant, and renders a `## Estimated cost` block for the executive summary.
 
@@ -34,7 +34,7 @@ COST_PER_PART_USD: dict[str, float] = {
 }
 
 
-SLICE_ID_RE = re.compile(r"^(W(?:\d+|INF))_PART\d+(?:_CHANGES)?$")
+SLICE_ID_RE = re.compile(r"^(W(?:\d+|INF|GAP))_PART\d+$")
 
 
 @dataclass(frozen=True)
@@ -50,7 +50,7 @@ class CostEstimate:
 
 
 def _wave_id_from_slice(slice_id: str) -> Optional[str]:
-    """`W2_PART3` → `W2`, `WINF_PART1_CHANGES` → `WINF`. None on no match."""
+    """`W2_PART3` → `W2`, `WGAP_PART1` → `WGAP`. None on no match."""
     m = SLICE_ID_RE.match(slice_id)
     return m.group(1) if m else None
 
