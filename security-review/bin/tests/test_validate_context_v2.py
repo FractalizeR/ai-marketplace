@@ -1309,6 +1309,16 @@ class GapCollector(unittest.TestCase):
     def by_kind(self, res, kind):
         return [g for g in res.gaps if g["kind"] == kind]
 
+    def test_generic_recipe_gap_files_come_from_outside_src_and_app(self):
+        from recon.recipes import generic_php
+        self.php("lib/Service.php", "public/index.php", "vendor/x/Y.php",
+                 "tests/ZTest.php", ".cache/Hidden.php")
+        self.context({"attack_surface": 'status: partial\nreason: "extractor_failed: class: boom"\nitems: []'})
+        res = vc.sanity_check(self.review_root, project_root=self.project,
+                              recipe_loader=lambda _n: generic_php)
+        (item,) = [g for g in res.gaps if g["section_path"] == "attack_surface"]
+        self.assertEqual(item["files"], ["lib/Service.php", "public/index.php"])
+
     # --- extractor_failed ---
 
     def test_extractor_failed_with_probe_lists_the_glob_per_probe(self):
@@ -1497,7 +1507,7 @@ class GapCollector(unittest.TestCase):
         from recon.recipes import generic_php, laravel, symfony
         self.assertEqual(symfony.SOURCE_ROOTS, ("src", "app"))
         self.assertEqual(laravel.SOURCE_ROOTS, ("app",))
-        self.assertEqual(generic_php.SOURCE_ROOTS, ("src", "app"))
+        self.assertEqual(generic_php.SOURCE_ROOTS, (".",))
 
 
 class GapsFileCli(unittest.TestCase):

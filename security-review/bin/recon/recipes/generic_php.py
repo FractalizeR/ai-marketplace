@@ -51,8 +51,10 @@ EXCLUDE_PATHS: tuple[str, ...] = (
 )
 
 # Roots the sanity gap collector globs for `*.php` when a section has no probe
-# of its own (validate_context.py --sanity --gaps-out).
-SOURCE_ROOTS: tuple[str, ...] = ("src", "app")
+# of its own (validate_context.py --sanity --gaps-out). The whole project: a
+# generic project may keep code in any directory (lib/, public/, ...);
+# EXCLUDE_PATHS and the hidden-directory filter prune the rest.
+SOURCE_ROOTS: tuple[str, ...] = (".",)
 
 
 # ---------------------------------------------------------------------------
