@@ -45,14 +45,10 @@ class PersistTests(unittest.TestCase):
             (Path(d) / ".model_map.json").write_text('{"high": "a", "fast": ""}')
             self.assertIsNone(mr.load_persisted(Path(d)))
 
-    def test_legacy_operator_provenance_is_trusted(self):
-        with tempfile.TemporaryDirectory() as d:
-            (Path(d) / ".model_map.json").write_text(
-                '{"high": "a", "fast": "b", "provenance": "cli"}')
-            self.assertEqual(mr.load_persisted(Path(d)), mr.TierMap("a", "b"))
-
-    def test_legacy_guessed_provenance_is_treated_as_absent_with_a_message(self):
-        for prov in ("proposed", "collapsed", "persisted"):
+    def test_any_provenance_key_marks_a_pre_5_0_map_and_is_ignored(self):
+        # 4.x recorded "cli" for a map with one guessed tier and "persisted" after
+        # any re-run, so the value says nothing about who chose the ids.
+        for prov in ("cli", "proposed", "collapsed", "persisted"):
             with self.subTest(provenance=prov), tempfile.TemporaryDirectory() as d:
                 (Path(d) / ".model_map.json").write_text(
                     json.dumps({"high": "a", "fast": "b", "provenance": prov}))
@@ -60,7 +56,30 @@ class PersistTests(unittest.TestCase):
                 with contextlib.redirect_stderr(err):
                     self.assertIsNone(mr.load_persisted(Path(d)))
                 self.assertIn("--models", err.getvalue())
-                self.assertIn(prov, err.getvalue())
+                self.assertIn("pre-5.0", err.getvalue())
+
+
+class InspectTests(unittest.TestCase):
+    def _status(self, text=None):
+        with tempfile.TemporaryDirectory() as d:
+            if text is not None:
+                (Path(d) / ".model_map.json").write_text(text)
+            return mr.inspect_persisted(Path(d))
+
+    def test_statuses(self):
+        self.assertEqual(self._status(), ("absent", None))
+        self.assertEqual(self._status('{"high": "a", "fast": "b"}'),
+                         ("usable", mr.TierMap("a", "b")))
+        self.assertEqual(self._status('{"high": "a", "fast": "b", "provenance": "cli"}'),
+                         ("ignored-pre-5.0", None))
+        self.assertEqual(self._status('{"high": "a"}'), ("invalid", None))
+        self.assertEqual(self._status('not json'), ("invalid", None))
+
+    def test_inspection_prints_nothing(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self._status('{"high": "a", "fast": "b", "provenance": "cli"}')
+        self.assertEqual(err.getvalue(), "")
 
 
 class ParseCliModelsTests(unittest.TestCase):
@@ -149,6 +168,45 @@ class CliTests(unittest.TestCase):
             rc, _, err = self._run(["--review-root", d, "--models", "high=a"])
             self.assertEqual(rc, 2)
             self.assertIn("both tiers", err)
+
+    def test_check_validates_like_parse_cli_models_and_writes_nothing(self):
+        rc, out, _ = self._run(["--check", "--models", " high = a , fast = b "])
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out), {"high": "a", "fast": "b"})
+        for spec in ("high=a,fast=b,mid=c", "high=a,high=z,fast=b", "high=a",
+                     "high=,fast=b", ""):
+            with self.subTest(spec=spec):
+                rc, _, err = self._run(["--check", "--models", spec])
+                self.assertEqual(rc, 2)
+                self.assertIn("Error:", err)
+
+    def test_check_does_not_touch_review_root(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "r"
+            rc, _, _ = self._run(["--check", "--review-root", str(root),
+                                  "--models", "high=a,fast=b"])
+            self.assertEqual(rc, 0)
+            self.assertFalse(root.exists())
+
+    def test_describe_reports_status_and_high(self):
+        with tempfile.TemporaryDirectory() as d:
+            rc, out, _ = self._run(["--describe", "--review-root", d])
+            self.assertEqual((rc, json.loads(out)), (0, {"status": "absent"}))
+            (Path(d) / ".model_map.json").write_text('{"high": "a", "fast": "b"}')
+            rc, out, err = self._run(["--describe", "--review-root", d])
+            self.assertEqual((rc, json.loads(out)), (0, {"status": "usable", "high": "a"}))
+            (Path(d) / ".model_map.json").write_text(
+                '{"high": "a", "fast": "b", "provenance": "cli"}')
+            rc, out, err = self._run(["--describe", "--review-root", d])
+            self.assertEqual(json.loads(out), {"status": "ignored-pre-5.0"})
+            self.assertEqual(err, "")
+
+    def test_describe_and_check_are_exclusive_and_need_their_inputs(self):
+        for argv in (["--describe"], ["--check"], ["--describe", "--check", "--models", "high=a,fast=b"]):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as cm:
+                    mr.main(argv)
+                self.assertEqual(cm.exception.code, 2)
 
     def test_removed_flags_are_argparse_errors(self):
         with tempfile.TemporaryDirectory() as d:

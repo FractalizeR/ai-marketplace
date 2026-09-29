@@ -380,12 +380,12 @@ class CliTests(unittest.TestCase):
             ], runner=runner)
             self.assertEqual(rc, 0)
 
-    def test_cli_guessed_provenance_map_rejected(self):
+    def test_any_provenance_map_rejected(self):
         import io
         with tempfile.TemporaryDirectory() as d:
             dd = Path(d)
             plan_p, mm_p = self._write_inputs(dd)
-            mm_p.write_text(json.dumps({**TM.as_dict(), "provenance": "proposed"}),
+            mm_p.write_text(json.dumps({**TM.as_dict(), "provenance": "cli"}),
                             encoding="utf-8")
             calls = []
 

@@ -16,6 +16,10 @@ CLI:
         [--models high=<id>,fast=<id>]
     stdout = the resolved map as JSON. exit 0 ok / 2 ResolverError.
 
+Side-effect-free modes (for launchers): `--check --models SPEC` validates the spec
+exactly as a real run would; `--describe --review-root P` prints
+`{"status": ..., "high": ...}` for the saved map.
+
 stdlib only.
 """
 
@@ -84,37 +88,50 @@ def persist(tier_map: TierMap, review_root: Path) -> Path:
 
 
 def load_persisted(review_root: Path) -> TierMap | None:
-    """Load <review_root>/.model_map.json. Missing/corrupt/incomplete → None.
-
-    A pre-5.0 map carries `provenance`; only "cli" (an explicit operator
-    choice) is trusted, the guessed kinds ("proposed", "collapsed", ...) are not.
-    """
+    """Load <review_root>/.model_map.json. Missing/corrupt/incomplete → None."""
     return load_tier_map_file(_model_map_path(Path(review_root)))
 
 
-def load_tier_map_file(path: Path) -> TierMap | None:
-    """The trust rule for a tier-map file at any path (see `load_persisted`)."""
+def inspect_tier_map_file(path: Path) -> tuple[str, TierMap | None]:
+    """Side-effect-free status of a tier-map file: `(status, map)`.
+
+    Statuses: `usable`, `absent`, `invalid` (corrupt or a tier missing) and
+    `ignored-pre-5.0`. Only pre-5.0 builds wrote a `provenance` key, and its
+    value never said reliably who chose the ids (a 4.x `cli` map could hold an
+    auto-proposed tier, a re-run rewrote it as `persisted`), so the key alone
+    marks the map as untrusted.
+    """
     path = Path(path)
     if not path.is_file():
-        return None
+        return "absent", None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return None
-        if not all(isinstance(data.get(t), str) and data[t] for t in TIERS):
-            return None
-        provenance = data.get("provenance", "cli")
-        if provenance != "cli":
-            print(
-                f"model_resolver: ignoring {path}: written by a pre-5.0 build with "
-                f"provenance {provenance!r}, not by an explicit operator choice; "
-                f"pass --models high=<id>,fast=<id> to replace it",
-                file=sys.stderr,
-            )
-            return None
-        return TierMap.from_dict(data)
     except (OSError, ValueError):
-        return None
+        return "invalid", None
+    if not isinstance(data, dict):
+        return "invalid", None
+    if not all(isinstance(data.get(t), str) and data[t] for t in TIERS):
+        return "invalid", None
+    if "provenance" in data:
+        return "ignored-pre-5.0", None
+    return "usable", TierMap.from_dict(data)
+
+
+def inspect_persisted(review_root: Path) -> tuple[str, TierMap | None]:
+    return inspect_tier_map_file(_model_map_path(Path(review_root)))
+
+
+def load_tier_map_file(path: Path) -> TierMap | None:
+    """The trusted tier map at any path, else None (with a message when ignored)."""
+    status, tier_map = inspect_tier_map_file(path)
+    if status == "ignored-pre-5.0":
+        print(
+            f"model_resolver: ignoring {path}: written by a pre-5.0 build "
+            f"(it carries a `provenance` key); pass --models high=<id>,fast=<id> "
+            f"to replace it",
+            file=sys.stderr,
+        )
+    return tier_map
 
 
 def parse_cli_models(spec: str) -> TierMap:
@@ -156,11 +173,37 @@ def resolve(*, review_root: Path, models: str | None) -> TierMap:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Resolve the {high, fast} model tier map")
-    parser.add_argument("--review-root", type=Path, required=True,
+    parser.add_argument("--review-root", type=Path, default=None,
                         help="Where .model_map.json lives")
     parser.add_argument("--models", default=None,
                         help="high=<id>,fast=<id> (both required); overwrites the saved map")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true",
+                      help="only validate --models exactly as a real run would; writes nothing")
+    mode.add_argument("--describe", action="store_true",
+                      help="only report the saved map's status for --review-root "
+                           "(usable | absent | invalid | ignored-pre-5.0) and its high id")
     args = parser.parse_args(argv)
+
+    if args.check:
+        if args.models is None:
+            parser.error("--check needs --models")
+        try:
+            tier_map = parse_cli_models(args.models)
+        except ResolverError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(tier_map.as_dict(), indent=2, sort_keys=True))
+        return 0
+    if args.review_root is None:
+        parser.error("--review-root is required")
+    if args.describe:
+        status, tier_map = inspect_persisted(args.review_root)
+        report = {"status": status}
+        if tier_map is not None:
+            report["high"] = tier_map.high
+        print(json.dumps(report, sort_keys=True))
+        return 0
 
     try:
         tier_map = resolve(review_root=args.review_root, models=args.models)
