@@ -14,7 +14,7 @@ BIN_DIR = THIS_DIR.parent
 sys.path.insert(0, str(BIN_DIR))
 
 from dedupe.models import FLAG_REFUTE_CLAIMED, Finding, MergedFinding  # noqa: E402
-from dedupe.refute import compute_evidence_hash  # noqa: E402
+from dedupe.state import compute_evidence_hash  # noqa: E402
 from dedupe.state import (  # noqa: E402
     FindingSnapshot,
     Resolution,

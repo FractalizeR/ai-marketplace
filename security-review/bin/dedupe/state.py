@@ -26,7 +26,7 @@ positive is not re-discovered and re-argued on every run. See
     resolution whose cited evidence line has since changed (protection
     removed, code moved) silently stops rendering; this is the mechanism
     that keeps a regression from hiding behind a stale "already reviewed"
-    mark. See `refute.compute_evidence_hash`.
+    mark. See `compute_evidence_hash`.
   - `run_seq` is an audit trail *inside* this file only. It is never read by
     the renderer and never reaches REPORT.md / findings.json — leaking it
     would couple external consumers to run-count, breaking the idempotency
@@ -46,8 +46,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from .models import CONDITION_KEYS, FLAG_REFUTE_CLAIMED, MergedFinding
-from .refute import compute_evidence_hash
+from .models import CONDITION_KEYS, FLAG_REFUTE_CLAIMED, MergedFinding, _sink_hash_from_snippet
 
 
 STATE_FILENAME = ".findings_state.json"
@@ -69,6 +68,36 @@ STATE_SCHEMA_VERSION = 2
 _READABLE_SCHEMA_VERSIONS = (1, 2)
 
 _RESOLUTION_VERDICTS = ("rejected", "reaffirmed")
+
+
+# Evidence-content hash: the cross-run invalidation key for a remembered
+# rejection. A hash of the CONTENT at file:line, not of the location — a
+# location-only key never changes when the cited protection is removed, so it
+# could not catch the regression it exists to catch. Reuses the
+# normalize-then-sha256 that derives `sink_hash`.
+#
+# The window is the single cited line: dropping a mark too eagerly only shows
+# an already-reviewed finding again, while keeping one too eagerly hides a
+# regression, so the narrow window is the conservative choice.
+
+
+def compute_evidence_hash(refute_file: str, refute_line: int, project_root: Path) -> str:
+    """Hash of the normalized single line of code at
+    `project_root/refute_file:refute_line`.
+
+    Returns the shared "no usable content" sentinel (`nohash00`) when the file
+    is unreadable or the line is out of range.
+    """
+    target = project_root / refute_file
+    try:
+        lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return _sink_hash_from_snippet("")
+    idx = refute_line - 1
+    if idx < 0 or idx >= len(lines):
+        return _sink_hash_from_snippet("")
+    return _sink_hash_from_snippet(lines[idx])
+
 
 
 @dataclass(frozen=True)

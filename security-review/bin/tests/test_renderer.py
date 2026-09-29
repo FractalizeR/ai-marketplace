@@ -29,7 +29,7 @@ from dedupe.models import (  # noqa: E402
 )
 from dedupe.pipeline import attach_side_records  # noqa: E402
 from dedupe.pipeline import dedupe as df_dedupe  # noqa: E402
-from dedupe.refute import compute_evidence_hash  # noqa: E402
+from dedupe.state import compute_evidence_hash  # noqa: E402
 from dedupe.renderer import (  # noqa: E402
     _replace_field,
     render_finding,
