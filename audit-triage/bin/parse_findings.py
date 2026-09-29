@@ -13,7 +13,7 @@ regexes `REPORT.md`/`REPORT/*.md` as structured data -- it reads
 contract, don't guess a different shape"). Finding bodies are fetched from
 `REPORT/<root_cause_family>.md` only for `confirmed` records, and only by
 `bundle()`, on demand, keyed by the `* **sink_hash**: \\`<hex8>\\`` line
-`security-refute` already uses for the same lookup.
+the same lookup the audit engine uses.
 
 Two-call protocol across the orchestrator's phases (separate `python3`
 subprocesses -- no shared interpreter state):

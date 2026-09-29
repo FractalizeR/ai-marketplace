@@ -97,7 +97,7 @@ def build_bucket_review_root(dest: Path, *, extra_args: list[str] | None = None)
     return dest
 
 
-def build_project_tree(dest: Path, sink_files: list[str], *, content: str = "<?php\n// synthetic fixture placeholder\n") -> Path:
+def build_project_tree(dest: Path, sink_files: list[str], *, content: str = "<?php\n$synthetic = 1;\n") -> Path:
     """Build a minimal temporary "project tree" under `dest` containing one
     placeholder file per `sink_files` entry (paths relative to `dest`, same
     shape as a `Record.sink_file` / findings.json `sink_file`). For

@@ -102,6 +102,10 @@ def _is_int(value) -> bool:
 # ---------------------------------------------------------------------------
 
 
+# `#[` opens a PHP attribute, which is code, not a comment.
+_COMMENT_LEADS = ("//", "/*", "*/", "*", "#")
+
+
 def _check_refute(loc: dict, where: str, project_root: Path | None) -> list[str]:
     """Rule 6: a `rejected` candidate must cite a line the engine can hash --
     otherwise `compute_evidence_hash` yields `nohash00` (or no evidence at
@@ -140,6 +144,9 @@ def _check_refute(loc: dict, where: str, project_root: Path | None) -> list[str]
         return [f"{where}: rule 6: refute_line {refute_line} is past the end of {refute_file} ({len(lines)} lines)"]
     if not lines[refute_line - 1].strip():
         return [f"{where}: rule 6: refute_line {refute_line} of {refute_file} is blank"]
+    text = lines[refute_line - 1].lstrip()
+    if text.startswith(_COMMENT_LEADS) and not text.startswith("#["):
+        return [f"{where}: rule 6: refute_line {refute_line} of {refute_file} is a comment -- prose is not enforced, cite the code line"]
     return []
 
 

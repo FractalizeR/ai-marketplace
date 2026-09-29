@@ -138,6 +138,11 @@ class _E2EFixture(unittest.TestCase):
         cls.grouping = copy.deepcopy(fixtures_lib.FULL_GROUPING)
         cls.project_root = fixtures_lib.build_project_tree(base / "project", PROJECT_FILES)
         (cls.project_root / "src" / "Blank.php").write_text("<?php\n\n// synthetic\n", encoding="utf-8")
+        (cls.project_root / "src" / "Comments.php").write_text(
+            "<?php\n// synthetic slash\n# synthetic hash\n/* synthetic open\n * synthetic star\n */\n"
+            "    // indented\n#[Synthetic]\n$x = 1;\n",
+            encoding="utf-8",
+        )
         cls.tickets_root = base / "tickets"
         cls.tickets_root.mkdir()
         for name in UNIT_FILES.values():
@@ -291,6 +296,18 @@ class ValidateSidecarTests(_E2EFixture):
     def test_rule6_refute_line_blank(self):
         v = self._refute_violations(refute_file="src/Blank.php", refute_line=2)
         self.assertRule(v, 6, "triagemanual/confirmed#4", "blank")
+
+    def test_rule6_refute_line_is_comment(self):
+        for line in (2, 3, 4, 5, 6, 7):
+            with self.subTest(line=line):
+                v = self._refute_violations(refute_file="src/Comments.php", refute_line=line)
+                self.assertRule(v, 6, "triagemanual/confirmed#4", "comment")
+
+    def test_rule6_code_lines_are_not_comments(self):
+        for line in (8, 9):
+            with self.subTest(line=line):
+                v = self._refute_violations(refute_file="src/Comments.php", refute_line=line)
+                self.assertFalse([e for e in v if "rule 6" in e], v)
 
     def test_rule6_rejected_without_refute(self):
         v = self._refute_violations()
