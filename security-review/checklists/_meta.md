@@ -11,8 +11,6 @@ checklists/
 │   └── {theme}.md                     # auth, crypto, disclosure, injection, data-access,
 │                                      # output-render, serialization, ssrf-fileops, fintech, frontend-js,
 │                                      # security-headers, business-logic
-├── languages/                         # generic language layer (PHP/Python/Node)
-│   └── {language}/{theme}.md          # active iff CONTEXT.md frontmatter has `stack.language: <language>`
 ├── stacks/                            # framework layer (symfony, laravel, django, …)
 │   └── {stack}/                       # active iff `stack.framework == <stack>` and stack ∉ {none, unknown}
 │       ├── _detect.md                 # how detection fires (documentation)
@@ -21,24 +19,23 @@ checklists/
 │           └── {addon}/{theme}.md     # active iff `<addon>` is in `stack.addons`
 └── integrations/                      # vendor SDK / service integrations (auth0, stripe, …)
     └── {integration}/{theme}.md       # active iff `<integration>` is in `stack.integrations`
-                                       # — independent of stack/language
+                                       # — independent of the stack
 ```
 
-**Resolution rule (see `bin/plan_waves.py::resolve_checklists`):** for each wave theme, the worker assembles a chain of up to five layers, from least specific to most specific:
+**Resolution rule (see `bin/plan_waves.py::resolve_checklists`):** for each wave theme, the worker assembles a chain of up to four layers, from least specific to most specific:
 
 1. `core/{theme}.md` — always loaded if present.
-2. `languages/{language}/{theme}.md` — loaded if `ctx.language` is set (skip the whole layer otherwise).
-3. `stacks/{stack}/{theme}.md` — loaded if `ctx.stack ∉ {none, unknown}` (skip the stack and addons layers otherwise).
-4. `stacks/{stack}/addons/{addon}/{theme}.md` for each addon in `ctx.addons` (alphabetical, deterministic order).
-5. `integrations/{integration}/{theme}.md` for each integration in `ctx.integrations` (alphabetical, deterministic order). Integrations are **independent of stack** — they apply even on a generic / unknown stack.
+2. `stacks/{stack}/{theme}.md` — loaded if `ctx.stack ∉ {none, unknown}` (skip the stack and addons layers otherwise).
+3. `stacks/{stack}/addons/{addon}/{theme}.md` for each addon in `ctx.addons` (alphabetical, deterministic order).
+4. `integrations/{integration}/{theme}.md` for each integration in `ctx.integrations` (alphabetical, deterministic order). Integrations are **independent of stack** — they apply even on a generic / unknown stack.
 
 Missing files at any layer are silently skipped — every non-core layer is opt-in.
 
-**Priority on instruction conflict:** the more specific layer wins. Precedence (high → low): `integrations > addons > stacks > languages > core`. The worker loads the whole chain at once and applies the most-specific refinement where one exists.
+**Priority on instruction conflict:** the more specific layer wins. Precedence (high → low): `integrations > addons > stacks > core`. The worker loads the whole chain at once and applies the most-specific refinement where one exists.
 
-**Non-core file anchor.** Each non-core checklist (languages, stacks, addons, integrations) starts with a standard header (after the title):
+**Non-core file anchor.** Each non-core checklist (stacks, addons, integrations) starts with a standard header (after the title):
 
-> This checklist extends `core/{theme}.md` and follows the resolution chain (core → languages → stacks → addons → integrations). On instruction conflict, the more specific layer takes precedence. The worker loads the whole chain at once.
+> This checklist extends `core/{theme}.md` and follows the resolution chain (core → stacks → addons → integrations). On instruction conflict, the more specific layer takes precedence. The worker loads the whole chain at once.
 
 **Exception — integrations are stack-agnostic.** Files under `integrations/{integration}/` use a simplified anchor referencing only `core/{theme}.md` (the integration may activate on any stack, including `none`/`unknown`):
 
@@ -47,7 +44,6 @@ Missing files at any layer are silently skipped — every non-core layer is opt-
 ## Layer conventions
 
 - **core/** — language-agnostic, stack-agnostic patterns. Generic vulnerability categories (SQL injection, XSS, weak crypto, missing authz) described in terms that apply to any code base. The closed `sink_kind` enum lives here.
-- **languages/{language}/** — language-generic refinements that are not tied to any framework: PHP `preg_replace('/e')`, Python `pickle.loads`, Node `child_process.exec`, etc. Activated by `stack.language`.
 - **stacks/{stack}/** — framework-level refinements: Symfony Voters / `#[IsGranted]`, Laravel Policies / `Auth::user()`, Django middleware, FastAPI dependencies. Activated by `stack.framework`.
 - **stacks/{stack}/addons/{addon}/** — sub-frameworks or bundles that ride on top of a stack: EasyAdmin, Sonata, API Platform, Filament, Nova, Lighthouse. Activated by an entry in `stack.addons`.
 - **integrations/{integration}/** — vendor SDK / service integrations: Auth0, AWS Cognito, Stripe, Okta, KeyCloak. Activated by an entry in `stack.integrations`. Independent of the stack — a generic-PHP project using Stripe still loads `integrations/stripe/`.
@@ -56,7 +52,6 @@ Missing files at any layer are silently skipped — every non-core layer is opt-
 
 The following layer slots are reserved for future content. Files do not exist yet, so resolution silently skips them; orchestrator may pre-create the directories to make intent visible.
 
-- `languages/php/`, `languages/python/`
 - `stacks/django/`, `stacks/fastapi/`
 - `integrations/auth0/`, `integrations/aws-cognito/`
 
@@ -72,7 +67,7 @@ For non-core files, the precedence anchor (about the resolution chain) goes **be
 
 Each **core** checklist lists the values from the closed `sink_kind` enum that it covers. The worker picks `sink_kind` for each finding from this list (or `other:<name>` for categories that do not fit the enum).
 
-**Non-core files (languages, stacks, addons, integrations) DO NOT declare their own `## Recommended sink_kinds` section** — they refine the applicability of `sink_kind` values declared in the corresponding `core/{theme}.md`. This rule is fixed: a non-core checklist **does not introduce new `sink_kind` values**, but narrows/refines applicability of the core sink_kind. All worker findings are always classified by `sink_kind` from the core enum.
+**Non-core files (stacks, addons, integrations) DO NOT declare their own `## Recommended sink_kinds` section** — they refine the applicability of `sink_kind` values declared in the corresponding `core/{theme}.md`. This rule is fixed: a non-core checklist **does not introduce new `sink_kind` values**, but narrows/refines applicability of the core sink_kind. All worker findings are always classified by `sink_kind` from the core enum.
 
 `sink_kind` enum values:
 `dql_concat`, `native_sql_concat`, `unsafe_html_render`, `template_raw`, `ssti`, `unserialize_untrusted`, `command_exec`, `file_include_dynamic`, `path_traversal`, `ldap_injection`, `xpath_injection`, `nosql_injection`, `redirect_open`, `weak_hash`, `hardcoded_secret`, `cors_misconfig`, `missing_authz`, `idor_lookup`, `xxe`, `ssrf`, `mass_assignment`, `csrf_missing`, `decimal_arith`, `race_condition`, `webhook_unverified`, `pii_in_logs`, `stacktrace_exposed`, `type_juggling`, `oauth_state_missing`, `webhook_replay`, `weak_random`, `secret_in_response`, `sensitive_field_unmasked`, `csp_missing`, `csp_unsafe_inline`, `clickjacking_unprotected`, `hsts_missing`, `mime_sniff_unprotected`, `jwks_spoof`, `oidc_misconfig`, `tls_validation_bypass`.
@@ -246,7 +241,7 @@ See `core/auth.md` → Trusted patterns for the canonical CSPRNG list.
 - item
 ```
 
-## Non-core file structure (languages / stacks / addons / integrations)
+## Non-core file structure (stacks / addons / integrations)
 
 ```markdown
 # <Category name> ({layer-specific scope, e.g. {stack} / {addon} / {integration}})

@@ -93,7 +93,7 @@ Both bucket types carry `condition_keys` — the concrete precondition(s) that g
 
 ## TRUSTED PATTERNS (NEGATIVE FILTER)
 
-If a finding pattern matches an entry under any loaded `## Trusted patterns (do NOT flag)` section in the checklist chain, **do not report it** — these are safe-by-construction idioms (CSPRNG wrappers, framework auto-escape, ORM parameter binding for scalars, constant-time comparisons). Layer precedence matches `## Confidence floor rules`: the most-specific layer's trusted list wins on conflict (`integrations > addons > stacks > languages > core`).
+If a finding pattern matches an entry under any loaded `## Trusted patterns (do NOT flag)` section in the checklist chain, **do not report it** — these are safe-by-construction idioms (CSPRNG wrappers, framework auto-escape, ORM parameter binding for scalars, constant-time comparisons). Layer precedence matches `## Confidence floor rules`: the most-specific layer's trusted list wins on conflict (`integrations > addons > stacks > core`).
 
 **This is a hard filter, not a bucket.** A trusted pattern is not reported at all — not as `hardening`, not as `needs_validation`. Moving it into a bucket would recreate exactly the noise this section exists to remove.
 
