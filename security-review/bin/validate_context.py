@@ -1183,13 +1183,13 @@ def sanity_check(
             miss_preview = ", ".join(sorted(missing)[:5])
             miss_extra = f" (+{len(missing)-5} more)" if len(missing) > 5 else ""
             res.warnings.append(
-                f"sanity[{probe.label}]: declared {len(declared)} of {len(found)} filesystem matches "
+                f"sanity[{probe.label}]: declared {len(found) - len(missing)} of {len(found)} filesystem matches "
                 f"({diff:.0%} missing). Missing: {miss_preview}{miss_extra}"
             )
             res.gaps.append(_gap(
                 "coverage", probe.section_path, probe.label, payload,
                 f"{len(missing)} of {len(found)} filesystem matches not declared",
-                missing, declared=len(declared), found=len(found),
+                missing, declared=len(found) - len(missing), found=len(found),
                 missing_pct=round(100 * len(missing) / len(found), 1),
             ))
 

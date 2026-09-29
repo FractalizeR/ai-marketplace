@@ -1439,6 +1439,19 @@ class GapCollector(unittest.TestCase):
         self.assertEqual(item["files"], ["src/C18Controller.php", "src/C19Controller.php"])
         self.assertTrue(res.ok())
 
+    def test_declared_counts_only_declared_files_among_the_filesystem_matches(self):
+        self.php("src/A1Controller.php", "src/A2Controller.php", "src/A3Controller.php",
+                 "src/A4Controller.php", "src/A5Controller.php", "lib/Other.php")
+        items = "".join(f"\n  - kind: http_route\n    file: {f}" for f in (
+            "src/A1Controller.php", "src/A2Controller.php", "src/A3Controller.php",
+            "src/A4Controller.php", "lib/Other.php"))
+        self.context({"attack_surface": f"status: partial\nitems:{items}"})
+        probe = self.probe("attack_surface", "src/*Controller.php", "HTTP controllers")
+        res = self.sanity([probe])
+        (item,) = res.gaps
+        self.assertEqual((item["declared"], item["found"], item["missing_pct"]), (4, 5, 20.0))
+        self.assertIn("declared 4 of 5 filesystem matches (20% missing)", res.warnings[0])
+
     def test_partial_and_unknown_sections_report_any_missing(self):
         self.php(*(f"src/C{i:02d}Controller.php" for i in range(20)))
         probe = self.probe("attack_surface", "src/*Controller.php", "HTTP controllers")
