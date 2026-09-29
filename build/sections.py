@@ -1,38 +1,63 @@
-"""Section partition: the coarser, second IR layer for harness derivation.
+"""Section partition of an authoritative Claude artifact.
 
-`extract.extract()` gives a flat *token* partition (Phase 1, byte-faithful). This
-module gives an independent *section* partition of the **same** text, split at
-markdown headings (`#`..`####`). Both cover the exact source with no gaps. The
-Claude build never uses this layer (it stays on the token fold → byte-identical);
-the Codex build walks sections, replacing harness-coupled ones with authored
-templates and token-folding the rest (see ADR-0001 / the Phase-2B plan).
+The Codex derivation walks an artifact section by section: a section is either
+replaced by an authored template or rendered by token substitution
+(``derive.py``). This module only splits; ``assert_section_partition`` proves the
+sections concatenate back to the exact source.
 
-Boundary rule (AD-2B6): a `^#{1,4} ` line is a section boundary **only** when it is
-not inside a fenced code block or a `task_block` span. Fenced intervals are scanned
-per CommonMark (an N-backtick fence closes only on a line of ≥N backticks), so a
-nested ``` inside a ````markdown block — and a heading-looking line inside a
-triple-quoted Task prompt body — never split a section.
+Boundary rule: a ``^#{1,4} `` line is a section boundary **only** when it is not
+inside the leading frontmatter, a fenced code block, or a ``Task`` directive.
+Fenced intervals are scanned per CommonMark (an N-backtick fence closes only on a
+line of ≥N backticks), so a nested ``` inside a ````markdown block — and a
+heading-looking line inside a triple-quoted Task prompt body — never split a
+section.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field, replace
-
-from segments import Segment, Tier
-from extract import CAT_AUQ, CAT_TASK
+from dataclasses import dataclass
 
 
+FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
+# Task, paren + triple-quote form. The model value may contain commas
+# (``<from plan, field "model">``), so it is matched non-greedily up to ``, prompt=``.
+_TASK_PAREN_RE = re.compile(
+    r'Task\(subagent_type="[^"]+"'
+    r'(?:,\s*model=.*?)?'
+    r',\s*prompt=""".*?"""\)',
+    re.DOTALL,
+)
+# Task, bare form: ``Task subagent_type=<id> prompt="<body>"``. A body holding a
+# literal ``"`` ends the match early; the heading-skip would then miss headings
+# past that quote, which the leak gate would still surface.
+_TASK_BARE_RE = re.compile(
+    r'Task\s+subagent_type=\S+\s+prompt=".*?"',
+    re.DOTALL,
+)
 _FENCE_OPEN = re.compile(r"`{3,}")
 _HEADING = re.compile(r"(#{1,4})\s+(.*?)\s*$")
+
+
+def frontmatter_end(text: str) -> int:
+    """Offset just past the leading ``---`` frontmatter block, or 0 if none."""
+    m = FRONTMATTER_RE.match(text)
+    return m.end() if m else 0
+
+
+def task_spans(text: str, start: int = 0) -> list[tuple[int, int]]:
+    """Codepoint ranges of ``Task`` directives (both syntaxes) at or after ``start``."""
+    spans: list[tuple[int, int]] = []
+    for regex in (_TASK_PAREN_RE, _TASK_BARE_RE):
+        spans += [m.span() for m in regex.finditer(text, start)]
+    return spans
 
 
 def _fence_intervals(text: str) -> list[tuple[int, int]]:
     """Codepoint ranges of content inside ``` fenced blocks (n-backtick aware).
 
     Only backtick fences are recognized (the artifacts use no ``~~~`` or indented
-    code blocks); ``assert_section_partition`` keeps byte-faithfulness regardless,
-    and a spurious split would surface as a coupling-coverage gate failure.
+    code blocks); ``assert_section_partition`` keeps byte-faithfulness regardless.
     """
     intervals: list[tuple[int, int]] = []
     in_fence = False
@@ -84,9 +109,6 @@ class Section:
     section_anchor: str
     span: tuple[int, int]
     original_text: str
-    pins: list[str] = field(default_factory=list)        # PROSE_COUPLING ids matched
-    inner_segments: list[Segment] = field(default_factory=list)
-    is_coupled: bool = False
 
     def __post_init__(self) -> None:
         start, end = self.span
@@ -97,9 +119,12 @@ class Section:
             )
 
 
-def partition_sections(text: str, *, task_spans: list[tuple[int, int]]) -> list[Section]:
+def partition_sections(text: str) -> list[Section]:
     """Byte-faithful split at headings, skipping headings inside opaque regions."""
-    opaque = _merge(_fence_intervals(text) + list(task_spans))
+    fm_end = frontmatter_end(text)
+    opaque = _merge(
+        [(0, fm_end)] + _fence_intervals(text) + task_spans(text, fm_end)
+    )
 
     # Boundary offsets = the line-start of every heading line not inside an opaque span.
     boundaries: list[tuple[int, int, str]] = []  # (offset, level, heading_text)
@@ -111,7 +136,6 @@ def partition_sections(text: str, *, task_spans: list[tuple[int, int]]) -> list[
                 boundaries.append((offset, len(m.group(1)), m.group(2)))
         offset += len(line)
 
-    # Section starts = 0 (preamble) then each boundary offset.
     starts = [(0, 0, None)] + boundaries
     sections: list[Section] = []
     for i, (start, level, htext) in enumerate(starts):
@@ -146,65 +170,5 @@ def assert_section_partition(sections: list[Section], source: str) -> None:
         cursor = end
     if cursor != len(source):
         raise AssertionError(f"sections cover {cursor} chars but source has {len(source)}")
-
-
-def attach_segments(sections: list[Section], segments: list[Segment]) -> list[Section]:
-    """Bind each *tagged* token segment to the one section that contains it.
-
-    NEUTRAL segments are the connective prose and routinely span several headings,
-    so they are not attached — a neutral section renders from its own text with the
-    tagged tokens spliced in (build_sectioned). Tagged tokens are short, and Task
-    blocks are opaque to the splitter, so every tagged segment lies within exactly
-    one section; a crossing one means the partition logic broke and we fail loudly.
-    """
-    buckets: dict[int, list[Segment]] = {id(s): [] for s in sections}
-    for seg in segments:
-        if seg.tier is Tier.NEUTRAL:
-            continue
-        s_start, s_end = seg.span
-        owner = next(
-            (s for s in sections if s.span[0] <= s_start and s_end <= s.span[1]),
-            None,
-        )
-        if owner is None:
-            raise AssertionError(
-                f"tagged segment {seg.category} {seg.span} crosses a section boundary"
-            )
-        buckets[id(owner)].append(seg)
-    return [replace(s, inner_segments=buckets[id(s)]) for s in sections]
-
-
-def detect_coupling(sections: list[Section], pinned_literals: list[str]) -> list[Section]:
-    """Pin-driven coupling: a section is coupled iff it contains ≥1 pinned literal.
-
-    ``pinned_literals`` are the pins for *this* artifact only (filter upstream).
-    """
-    out: list[Section] = []
-    for s in sections:
-        matched = [p for p in pinned_literals if p in s.original_text]
-        out.append(replace(s, pins=matched, is_coupled=bool(matched)))
-    return out
-
-
-def assert_coupling_guards(sections: list[Section]) -> None:
-    """Completeness guards: every prose-coupled token sits in a coupled section.
-
-    `task_block` tokens and `labeled-block` AskUserQuestion tokens have no benign
-    prose form — if one lands in a section with no pin, the register is incomplete
-    and the Codex build would echo a broken instruction. Fail loudly instead.
-    Requires `attach_segments` + `detect_coupling` to have run first.
-    """
-    for s in sections:
-        if s.is_coupled:
-            continue
-        for seg in s.inner_segments:
-            if seg.category == CAT_TASK:
-                raise AssertionError(
-                    f"task_block at {seg.span} is in uncoupled section "
-                    f"{s.section_anchor!r} — add a PROSE_COUPLING pin for it"
-                )
-            if seg.category == CAT_AUQ and seg.attrs.get("occurrence_kind") == "labeled-block":
-                raise AssertionError(
-                    f"labeled-block AskUserQuestion at {seg.span} is in uncoupled "
-                    f"section {s.section_anchor!r} — add a PROSE_COUPLING pin for it"
-                )
+    if "".join(s.original_text for s in sections) != source:
+        raise AssertionError("joined sections != source")

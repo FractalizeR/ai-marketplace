@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -107,16 +108,59 @@ class CodexOutPathTests(unittest.TestCase):
                          plugin_out / "core" / "agents" / "security.md")
 
 
-class ClaudeOutNoteTests(unittest.TestCase):
-    def test_note_only_when_out_explicit(self):
-        # L3-DS: the "--out ignored" note must NOT print on a plain claude run.
-        _, err = capture_main(["--harness=claude", "--mode=check"])
-        self.assertNotIn("--out is ignored", err)
+class HarnessFlagTests(unittest.TestCase):
+    def test_claude_harness_no_longer_accepted(self):
+        with self.assertRaises(SystemExit) as cm:
+            run_main(["--harness=claude", "--mode=check"])
+        self.assertEqual(cm.exception.code, 2)
 
-    def test_note_prints_when_out_given_to_claude(self):
+    def test_harness_flag_defaults_to_codex(self):
+        self.assertEqual(run_main(["--mode=check"]), 0)
+
+
+class RefreshHashesCliTests(unittest.TestCase):
+    def _copy_templates(self, d):
+        root = Path(d) / "sections"
+        shutil.copytree(build_cli._TEMPLATES, root)
+        return root
+
+    def test_stale_template_fails_check_then_refresh_fixes_it(self):
         with tempfile.TemporaryDirectory() as d:
-            _, err = capture_main(["--harness=claude", "--mode=check", "--out", d])
-            self.assertIn("--out is ignored", err)
+            root = self._copy_templates(d)
+            tpl = root / "security-project" / "6-optional-interactive-checkpoint.md"
+            body = tpl.read_text(encoding="utf-8").split("\n", 1)[1]
+            tpl.write_text("<!-- source-sha256: " + "0" * 64 + " -->\n" + body,
+                           encoding="utf-8")
+            with mock.patch.object(build_cli, "_TEMPLATES", root):
+                rc, err = capture_main(["--mode=check"])
+                self.assertEqual(rc, 1)
+                self.assertIn("6-optional-interactive-checkpoint.md is stale", err)
+                self.assertEqual(run_main(["--mode=refresh-hashes"]), 0)
+                self.assertEqual(run_main(["--mode=check"]), 0)
+            self.assertTrue(tpl.read_text(encoding="utf-8").endswith(body))
+
+    def test_refresh_is_noop_when_current(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = self._copy_templates(d)
+            before = {p: p.read_bytes() for p in root.rglob("*.md")}
+            with mock.patch.object(build_cli, "_TEMPLATES", root):
+                self.assertEqual(run_main(["--mode=refresh-hashes"]), 0)
+            self.assertEqual(before, {p: p.read_bytes() for p in root.rglob("*.md")})
+
+    def test_refresh_rejects_foreign_plugin_root(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(run_main(["--mode=refresh-hashes", "--plugin-root", d]), 2)
+
+    def test_orphan_template_fails_check_and_refresh(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = self._copy_templates(d)
+            (root / "security-project" / "99-renamed-heading.md").write_text(
+                "x\n", encoding="utf-8")
+            with mock.patch.object(build_cli, "_TEMPLATES", root):
+                rc, err = capture_main(["--mode=check"])
+                self.assertEqual(rc, 1)
+                self.assertIn("matches no section", err)
+                self.assertEqual(run_main(["--mode=refresh-hashes"]), 1)
 
 
 if __name__ == "__main__":

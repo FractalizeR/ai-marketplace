@@ -1,3 +1,4 @@
+<!-- source-sha256: 67d3bac016537b604dc84f2fbcafbd9eaffdab4c10cb44e3934ebe8051ef0c7c -->
 ### 8. Parallel worker launch
 
 Codex has no named agents and no in-process subagent fan-out — each wave runs as its own external `codex exec` process that **reads and follows** the bundled worker agent file (`agents/security.md` under the shared core). The shared dispatcher (`shared/dispatch.py`, `dispatch_waves`) launches one worker per plan slice, **≤6 concurrent** (`ThreadPoolExecutor`, hard-capped), and enforces the wave-file contract: each worker writes its findings to `<REVIEW_ROOT>/waves/<slice_id>.md`.

@@ -1,13 +1,12 @@
 """Structural gates for derived Codex artifacts.
 
-There is no byte oracle for a non-Claude harness (the Claude round-trip proves we
-do not corrupt the authoritative files, not that the derived prose is portable).
-These gates are the negative+positive safety net that proves the section-fold
-*mechanism* consumed every coupled span:
+The derived prose has no byte oracle, so these gates are the safety net:
 
-  * no-leak — none of the Claude-specific tokens survive (CORE_ROOT, Task, AUQ,
-    MCP, ``$ARGUMENTS``). Sourced from ``tokens.REGISTRY`` so it tracks the registry,
-    not a hand-list (catches the bare ``Task subagent_type=`` form).
+  * no-leak — none of the Claude-specific tokens survive (``${CLAUDE_PLUGIN_ROOT}``,
+    a ``Task`` directive in either syntax, ``AskUserQuestion``, ``mcp__…``,
+    ``$ARGUMENTS``). The derivation deliberately leaves a ``Task`` directive and a
+    labeled ``AskUserQuestion:`` block untouched outside a templated section, so
+    this scan is what fails a build whose templates do not cover them.
   * frontmatter — a skill carries non-empty ``name`` + ``description`` and no Claude
     command keys (``allowed-tools`` / ``argument-hint``); a worker agent carries none.
   * xref — no orchestrator *file* ref (``security-project.md``) survives; the
@@ -22,12 +21,15 @@ from __future__ import annotations
 
 import re
 
-from tokens import REGISTRY
-from extract import CAT_ARGS, CAT_AUQ, CAT_CORE_ROOT, CAT_MCP, CAT_TASK
-
-# Claude-specific categories that must never survive into a Codex artifact;
-# $ARGUMENTS is included (no Codex substitution → must render to a neutral phrase).
-CODEX_FORBIDDEN_CATS = (CAT_CORE_ROOT, CAT_TASK, CAT_AUQ, CAT_MCP, CAT_ARGS)
+# (label, pattern) of Claude-specific tokens that must never survive into a Codex
+# artifact. Kept independent of the substitution in derive.py on purpose.
+_LEAK_PATTERNS = (
+    ("CORE_ROOT", re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}")),
+    ("task_block", re.compile(r"Task\(subagent_type=|Task\s+subagent_type=")),
+    ("auq", re.compile(r"AskUserQuestion")),
+    ("mcp_ref", re.compile(r"mcp__[A-Za-z0-9_]+__[A-Za-z0-9_*]+")),
+    ("args_injection", re.compile(r"\$ARGUMENTS")),
+)
 _FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 _FM_FORBIDDEN_KEY = re.compile(r"(?m)^(allowed-tools|argument-hint):")
 # Codex worker prose is a bundled read-follow file, so agent-role refs
@@ -39,25 +41,19 @@ _CODEX_ORCH_XREF_RE = re.compile(r"(?<![\w-])security-project\.md\b")
 _SKILL_NAME_RE = re.compile(r"(?m)^name:[^\S\n]*(.*)$")
 _SKILL_DESC_RE = re.compile(r"(?m)^description:[^\S\n]*(.*)$")
 
-# Coupled sections whose template MUST wire an external-process dispatch.
+# Templated sections whose template MUST wire an external-process dispatch.
 DISPATCH_ANCHORS = frozenset({
     "4-recon-phase",
     "8-parallel-worker-launch",
 })
 
 
-def forbidden_patterns(cats) -> list[tuple[str, re.Pattern[str]]]:
-    return [(c, re.compile(REGISTRY[c].leak_pattern)) for c in cats]
-
-
-def _leak_violations(text: str, cats) -> list[str]:
-    """No-leak scan sourced from ``tokens.REGISTRY`` (tracks the registry, not a
-    hand-list) — shared by every derived-artifact gate."""
+def _leak_violations(text: str) -> list[str]:
     out: list[str] = []
-    for cat, pat in forbidden_patterns(cats):
+    for label, pat in _LEAK_PATTERNS:
         m = pat.search(text)
         if m:
-            out.append(f"leak[{cat}]: {m.group(0)!r}")
+            out.append(f"leak[{label}]: {m.group(0)!r}")
     return out
 
 
@@ -79,7 +75,7 @@ def check_codex_output(text: str, *, is_skill: bool) -> list[str]:
     ``validate_plugin.py`` would reject). ``is_skill`` distinguishes an orchestrator
     skill (must carry name+description frontmatter) from a worker agent (frontmatter
     stripped → must NOT begin with a Claude ``---`` block, E-C3)."""
-    violations = _leak_violations(text, CODEX_FORBIDDEN_CATS)
+    violations = _leak_violations(text)
     fm = _FRONTMATTER_RE.match(text)
     if is_skill:
         if not fm:

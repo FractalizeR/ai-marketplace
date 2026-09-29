@@ -1,3 +1,4 @@
+<!-- source-sha256: d1d32530c735052fbbedd257a5447906d6648aed3ab626f2d0d7bea511380781 -->
 ### 3b. Resolve console runner (environment-aware)
 
 Console enrichment (running the project's `bin/console` for routes and the processed framework config / ceiling=high) is the only recon step that **executes the project**, and the only way recon interprets config. Running it on the host when the project lives **inside a container** distorts the environment (wrong PHP version, services unreachable). This step decides HOW to run it, expressed as a `CONSOLE_MODE` value forwarded to recon in step 4, then boot-tests it before recon depends on it. Codex runs headless (`codex exec`, approval `never`), so resolution is **non-interactive**: driven entirely by flags plus the static probe, and a console that is applicable but does not boot **stops the run** rather than degrading silently.

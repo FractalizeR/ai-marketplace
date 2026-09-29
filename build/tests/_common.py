@@ -1,7 +1,7 @@
 """Shared test fixtures: put build/ on sys.path and resolve the authoritative artifacts.
 
 Importing this module is the (intentional) side effect that makes the flat
-engine modules (``extract``, ``segments``, ``build`` …) importable from the
+build modules (``derive``, ``sections``, ``build`` …) importable from the
 ``build/tests`` discovery root — mirroring the ``sys.path.insert`` convention
 used by ``security-review/bin/tests``.
 """
@@ -12,10 +12,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUILD_DIR = REPO_ROOT / "build"
 PLUGIN_ROOT = REPO_ROOT / "security-review"
+TEMPLATES_ROOT = REPO_ROOT / "harness" / "codex" / "sections"
 
 sys.path.insert(0, str(BUILD_DIR))
 
-from extract import ArtifactKind  # noqa: E402  (after sys.path mutation)
+from derive import ArtifactKind  # noqa: E402  (after sys.path mutation)
 
 ARTIFACTS = {
     PLUGIN_ROOT / "commands" / "security-project.md": ArtifactKind.COMMAND,

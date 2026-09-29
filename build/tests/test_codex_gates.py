@@ -3,13 +3,13 @@
 import unittest
 
 import _common
-from _common import ARTIFACTS, BUILD_DIR, read
+from _common import ARTIFACTS
 
+from unittest import mock
+
+import build as build_cli
+from derive import ArtifactKind
 from gates import check_codex_output, check_codex_dispatch_template
-from prose_coupling import load_pins, pins_for
-from extract import extract, CAT_TASK, ArtifactKind
-from sections import partition_sections, attach_segments, detect_coupling
-from adapters import get_adapter, RenderContext
 from build import render_codex_artifact
 
 
@@ -120,25 +120,11 @@ class DispatchTemplateGateTests(unittest.TestCase):
 
 
 class FullBuildIntegrationTests(unittest.TestCase):
-    def setUp(self):
-        self.adapter = get_adapter("codex")
-        self.pins = load_pins(BUILD_DIR / "PROSE_COUPLING.md")
-
-    def _coupled_sections(self, path):
-        text = read(path)
-        kind = ARTIFACTS[path]
-        segs = extract(text, kind)
-        task_spans = [s.span for s in segs if s.category == CAT_TASK]
-        secs = partition_sections(text, task_spans=task_spans)
-        secs = attach_segments(secs, segs)
-        file_rel = f"{path.parent.name}/{path.name}"
-        secs = detect_coupling(secs, [p.pinned for p in pins_for(self.pins, file_rel)])
-        return [s for s in secs if s.is_coupled]
-
     def test_all_artifacts_pass_gates(self):
         for path, kind in ARTIFACTS.items():
             with self.subTest(artifact=path.name):
-                out = render_codex_artifact(path, self.adapter, self.pins)
+                out, problems = render_codex_artifact(path)
+                self.assertEqual(problems, [])
                 is_skill = kind is ArtifactKind.COMMAND
                 self.assertEqual(check_codex_output(out, is_skill=is_skill), [],
                                  f"gate violations in {path.name}")
@@ -146,49 +132,21 @@ class FullBuildIntegrationTests(unittest.TestCase):
     def test_render_is_deterministic(self):
         for path in ARTIFACTS:
             with self.subTest(artifact=path.name):
-                a = render_codex_artifact(path, self.adapter, self.pins)
-                b = render_codex_artifact(path, self.adapter, self.pins)
-                self.assertEqual(a, b)
-
-    def test_every_coupled_section_has_a_template(self):
-        for path in ARTIFACTS:
-            for sec in self._coupled_sections(path):
-                with self.subTest(artifact=path.name, anchor=sec.section_anchor):
-                    out = self.adapter.render_section(sec, RenderContext(path.stem))
-                    self.assertTrue(out.strip())
-
-    def test_no_orphan_templates(self):
-        sections_root = BUILD_DIR.parent / "harness" / "codex" / "sections"
-        valid = set()
-        for path in ARTIFACTS:
-            for sec in self._coupled_sections(path):
-                valid.add((path.stem, sec.section_anchor))
-        for tpl in sections_root.rglob("*.md"):
-            key = (tpl.parent.name, tpl.stem)
-            with self.subTest(template=str(tpl.relative_to(sections_root))):
-                self.assertIn(key, valid, f"orphan template {tpl}")
-
-    def test_dispatch_templates_wire_codex_exec(self):
-        dispatch_anchors = {
-            "4-recon-phase",
-            "8-parallel-worker-launch",
-        }
-        for path in ARTIFACTS:
-            for sec in self._coupled_sections(path):
-                if sec.section_anchor in dispatch_anchors:
-                    with self.subTest(anchor=sec.section_anchor):
-                        out = self.adapter.render_section(sec, RenderContext(path.stem))
-                        self.assertEqual(check_codex_dispatch_template(out), [])
+                self.assertEqual(render_codex_artifact(path), render_codex_artifact(path))
 
     def test_build_guard_rejects_dispatch_template_without_codex_exec(self):
         proj = next(p for p in ARTIFACTS if p.name == "security-project.md")
+        real = build_cli.load_templates
 
-        def bad_loader(basename, anchor):
-            return "### x\n\njust prose, no dispatch primitive\n"
+        def gutted(name, root):
+            return {a: t.__class__(t.path, t.source_sha256,
+                                   "### x\n\njust prose, no dispatch primitive\n")
+                    for a, t in real(name, root).items()}
 
-        broken = get_adapter("codex").__class__(template_loader=bad_loader)
-        with self.assertRaises(AssertionError):
-            render_codex_artifact(proj, broken, self.pins)
+        with mock.patch.object(build_cli, "load_templates", gutted):
+            _out, problems = render_codex_artifact(proj)
+        self.assertTrue(any("[4-recon-phase]" in p for p in problems), problems)
+        self.assertTrue(any("[8-parallel-worker-launch]" in p for p in problems), problems)
 
 
 if __name__ == "__main__":

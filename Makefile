@@ -26,9 +26,8 @@ install-launchers: ## Install the `frsr` launcher into BINDIR (default ~/.local/
 		*) echo "WARNING: $(BINDIR) is not on PATH — add it to your shell rc" ;; esac
 	@echo "Try: frsr project --harness codex --dry-run"
 
-check: ## Full local validation gate (2-harness anti-drift + build + engine + triage + plugin validate + leak check)
-	python3 build/build.py --harness=claude   --mode=check
-	python3 build/build.py --harness=codex    --mode=check
+check: ## Full local validation gate (Codex derivation gates + build + engine + triage + plugin validate + leak check)
+	python3 build/build.py --harness=codex --mode=check
 	python3 -m unittest discover -s build/tests
 	python3 -m unittest discover -s security-review/bin/tests
 	python3 -m unittest discover -s audit-triage/bin/tests

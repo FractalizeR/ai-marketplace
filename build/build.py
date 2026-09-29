@@ -1,47 +1,39 @@
-"""Build CLI: rebuild harness artifacts from the authoritative Claude prose.
+"""Build CLI: derive the Codex bundle from the authoritative Claude prose.
 
-``build(segments, adapter)`` is a pure fold. The CLI reads each artifact's
-bytes, decodes utf-8 strictly, partitions via ``extract``, renders via the
-chosen adapter, re-encodes, and compares **bytes-out == bytes-in**.
+Each artifact (``commands/*.md``, ``agents/*.md``) is split into sections and
+rendered by ``derive.derive_artifact`` (authored templates for the
+harness-coupled sections, token substitution for the rest), then gated
+(``gates.check_codex_output``).
 
-  --mode=check  (default)  compute output, diff vs on-disk, never write.
-                           exit 0 identical / 1 drift / 2 parse-or-error.
-  --mode=write             rewrite in place, only when bytes differ.
-
-For ``--harness=claude`` the round-trip is byte-identical by construction; the
-default ``--mode=check`` therefore doubles as a self-consistency gate that
-protects the authoritative files. ``codex`` walks the coarser *section* IR instead: it renders coupled sections from
-authored templates and token-folds the rest, then runs structural gates (no byte
-oracle). ``--mode=write`` bundles into a gitignored ``dist/codex/`` tree via a
-rename-aside atomic swap (a self-hosted marketplace root with
-``.codex-plugin``/skills/read-follow agents under ``core/``).
+  --mode=check  (default)  render in memory, run the structural gates, the
+                           authored-config validation and a determinism re-render;
+                           never write. exit 0 clean / 1 gate / 2 error.
+  --mode=write             same gates, fail-closed, then build a self-hosted
+                           marketplace bundle (default ``dist/codex/``, gitignored)
+                           via a rename-aside atomic swap.
+  --mode=refresh-hashes    rewrite each section template's ``source-sha256``
+                           header to the current Claude section (run after
+                           reviewing a template flagged stale); body untouched.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import sys
 import tempfile
 from pathlib import Path
 
-from segments import Segment, assert_partition
-from extract import ArtifactKind, extract, CAT_TASK
-from adapters import get_adapter, RenderContext
-from sections import (
-    partition_sections,
-    assert_section_partition,
-    attach_segments,
-    detect_coupling,
-    assert_coupling_guards,
+from derive import (
+    ArtifactKind,
+    derive_artifact,
+    kind_for,
+    load_templates,
+    refreshed_templates,
 )
-from prose_coupling import load_pins, pins_for
-from gates import (
-    check_codex_output,
-    check_codex_dispatch_template,
-    DISPATCH_ANCHORS,
-)
+from gates import check_codex_output
 from bundle import (
     bundle_core,
     copy_codex_static_configs,
@@ -54,47 +46,25 @@ from bundle import (
 _PLUGIN_DIRNAME = "security-review"
 _DEFAULT_PLUGIN_ROOT = Path(__file__).resolve().parent.parent / _PLUGIN_DIRNAME
 _BUILD_DIR = Path(__file__).resolve().parent
-_REGISTER = _BUILD_DIR / "PROSE_COUPLING.md"
 _DIST_ROOT = _BUILD_DIR.parent / "dist"
 _DIST_CODEX = _DIST_ROOT / "codex"
 _HARNESS_CODEX = _BUILD_DIR.parent / "harness" / "codex"
+_TEMPLATES = _HARNESS_CODEX / "sections"
 
 
-def build(segments: list[Segment], adapter) -> str:
-    """Pure fold: render each segment and concatenate, no injected separators."""
-    return "".join(adapter.render_segment(s) for s in segments)
-
-
-def build_sectioned(sections, adapter, ctx) -> str:
-    """Pure fold over the section partition (non-Claude derivation)."""
-    return "".join(adapter.render_section(s, ctx) for s in sections)
-
-
-def render_codex_artifact(path: Path, adapter, pins) -> str:
-    """Full Codex derivation pipeline for one authoritative artifact: section IR +
-    pins, coupled-section templates, and the dispatch guard
-    (``check_codex_dispatch_template``: ``codex exec`` read-follow)."""
+def render_codex_artifact(path: Path) -> tuple[str, list[str]]:
+    """Derive one artifact; returns ``(text, template problems)``."""
     source = path.read_bytes().decode("utf-8")
-    kind = _kind_for(path)
-    segments = extract(source, kind)
-    assert_partition(segments, source)
-    task_spans = [s.span for s in segments if s.category == CAT_TASK]
-    sections = partition_sections(source, task_spans=task_spans)
-    assert_section_partition(sections, source)
-    sections = attach_segments(sections, segments)
-    file_rel = f"{path.parent.name}/{path.name}"
-    sections = detect_coupling(sections, [p.pinned for p in pins_for(pins, file_rel)])
-    assert_coupling_guards(sections)
-    ctx = RenderContext(path.stem)
-    # Build-time guard: every dispatch template must wire `codex exec` read-follow.
-    for sec in sections:
-        if sec.is_coupled and sec.section_anchor in DISPATCH_ANCHORS:
-            problems = check_codex_dispatch_template(adapter.render_section(sec, ctx))
-            if problems:
-                raise AssertionError(
-                    f"{file_rel} [{sec.section_anchor}]: {'; '.join(problems)}"
-                )
-    return build_sectioned(sections, adapter, ctx)
+    return derive_artifact(source, kind=kind_for(path), name=path.stem,
+                           templates=load_templates(path.stem, _TEMPLATES))
+
+
+def _gate(rendered: dict[Path, str]) -> list[str]:
+    out: list[str] = []
+    for path, text in rendered.items():
+        is_skill = kind_for(path) is ArtifactKind.COMMAND
+        out += [f"{path.name}: {v}" for v in check_codex_output(text, is_skill=is_skill)]
+    return out
 
 
 def codex_out_path(path: Path, plugin_out: Path) -> Path:
@@ -155,22 +125,6 @@ def discover_artifacts(plugin_root: Path) -> list[Path]:
     return found
 
 
-def _kind_for(path: Path) -> ArtifactKind:
-    parent = path.parent.name
-    if parent == "commands":
-        return ArtifactKind.COMMAND
-    if parent == "agents":
-        return ArtifactKind.AGENT
-    raise ValueError(f"artifact {path} is not under commands/ or agents/")
-
-
-def _rebuild_bytes(path: Path, adapter) -> bytes:
-    source = path.read_bytes().decode("utf-8")
-    segments = extract(source, _kind_for(path))
-    assert_partition(segments, source)  # cheap structural guard before any write
-    return build(segments, adapter).encode("utf-8")
-
-
 def _atomic_write(path: Path, data: bytes) -> None:
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
     try:
@@ -189,29 +143,26 @@ def _run_codex(args) -> int:
     # A bundle must be complete: --artifact would emit only the listed artifacts
     # beside a full core/ + configs, i.e. a silently partial bundle.
     if args.mode == "write" and args.artifact:
-        print("ERROR: --artifact is incompatible with --harness=codex --mode=write "
+        print("ERROR: --artifact is incompatible with --mode=write "
               "(a bundle must contain the full skill/agent set).", file=sys.stderr)
         return 2
-    adapter = get_adapter("codex")
-    pins = load_pins(_REGISTER)
     artifacts = args.artifact or discover_artifacts(args.plugin_root)
-    rendered = {p: render_codex_artifact(p, adapter, pins) for p in artifacts}
+    rendered: dict[Path, str] = {}
+    violations: list[str] = []
+    for path in artifacts:
+        rendered[path], problems = render_codex_artifact(path)
+        violations += [f"{path.name}: {p}" for p in problems]
     plugin_name = safe_plugin_name(_HARNESS_CODEX)  # safe token or None (reported below)
     # Authored-config validation applies to BOTH modes: check vets the in-git files;
     # write is fail-closed on the same problems before emitting. It derives + validates
     # the plugin name itself, so a bad name is a structured gate problem (exit 1), not
     # an unhandled exception.
-    config_problems = validate_codex_configs(_HARNESS_CODEX)
+    violations = validate_codex_configs(_HARNESS_CODEX) + violations + _gate(rendered)
 
     if args.mode == "write":
         out = (args.out or _DIST_CODEX).resolve()
-        blocked = list(config_problems)
-        for path, text in rendered.items():
-            is_skill = _kind_for(path) is ArtifactKind.COMMAND
-            blocked += [f"{path.name}: {v}"
-                        for v in check_codex_output(text, is_skill=is_skill)]
-        if blocked or plugin_name is None:
-            for v in blocked:
+        if violations or plugin_name is None:
+            for v in violations:
                 print(f"GATE: {v}", file=sys.stderr)
             return 1
         _write_codex_bundle(out, rendered, plugin_root=args.plugin_root,
@@ -219,14 +170,8 @@ def _run_codex(args) -> int:
         print(f"wrote: {out}")
         return 0
 
-    # check: structural gates + configs + determinism (render again, compare).
-    violations: list[str] = list(config_problems)
-    for path, text in rendered.items():
-        is_skill = _kind_for(path) is ArtifactKind.COMMAND
-        violations += [f"{path.name}: {v}"
-                       for v in check_codex_output(text, is_skill=is_skill)]
     for path in artifacts:
-        if render_codex_artifact(path, adapter, pins) != rendered[path]:
+        if render_codex_artifact(path)[0] != rendered[path]:
             violations.append(f"{path.name}: non-deterministic render")
     if violations:
         for v in violations:
@@ -236,6 +181,27 @@ def _run_codex(args) -> int:
     return 0
 
 
+def _run_refresh(args) -> int:
+    # The templates are always the repo's, so hashing a scratch --plugin-root copy
+    # would silently bless prose that is not the authoritative one.
+    if args.plugin_root.resolve() != _DEFAULT_PLUGIN_ROOT.resolve() or args.artifact:
+        print("ERROR: --mode=refresh-hashes hashes the repo's own artifacts; "
+              "--plugin-root/--artifact are not accepted.", file=sys.stderr)
+        return 2
+    problems: list[str] = []
+    for path in discover_artifacts(args.plugin_root):
+        source = path.read_bytes().decode("utf-8")
+        updates, errs = refreshed_templates(
+            source, name=path.stem, templates=load_templates(path.stem, _TEMPLATES))
+        problems += [f"{path.name}: {e}" for e in errs]
+        for tpl_path, text in updates.items():
+            _atomic_write(tpl_path, text.encode("utf-8"))
+            print(f"refreshed: {tpl_path}")
+    for p in problems:
+        print(f"GATE: {p}", file=sys.stderr)
+    return 1 if problems else 0
+
+
 def _codex_readfollow_refs(rendered: dict[Path, str]) -> set[str]:
     """The set of ``agents/<file>.md`` filenames the dispatch templates read.
 
@@ -243,7 +209,6 @@ def _codex_readfollow_refs(rendered: dict[Path, str]) -> set[str]:
     or renamed ref to an agent file the bundle does NOT produce is caught by the
     write-path correspondence assertion — a narrow allowlist would fail *open* for a
     new/misspelled name (3B code review)."""
-    import re
     refs: set[str] = set()
     for text in rendered.values():
         for m in re.finditer(r"agents/([\w.-]+\.md)", text):
@@ -296,50 +261,23 @@ def _write_codex_bundle(out: Path, rendered: dict[Path, str], *, plugin_root: Pa
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Rebuild harness artifacts from Claude prose.")
-    parser.add_argument("--harness", choices=["claude", "codex"], default="claude")
-    parser.add_argument("--mode", choices=["check", "write"], default="check")
+    parser = argparse.ArgumentParser(description="Derive the Codex bundle from Claude prose.")
+    parser.add_argument("--harness", choices=["codex"], default="codex")
+    parser.add_argument("--mode", choices=["check", "write", "refresh-hashes"],
+                        default="check")
     parser.add_argument("--plugin-root", type=Path, default=_DEFAULT_PLUGIN_ROOT)
     parser.add_argument("--artifact", type=Path, action="append", default=None,
-                        help="Specific artifact(s); default = discovered set.")
+                        help="Specific artifact(s); default = discovered set (check only).")
     parser.add_argument("--out", type=Path, default=None,
-                        help="Bundle output root (codex --mode=write only; "
-                             "defaults to dist/codex; no-op for claude, "
-                             "which writes back to source).")
+                        help="Bundle output root (--mode=write; defaults to dist/codex).")
     args = parser.parse_args(argv)
-
-    if args.harness == "claude" and args.out is not None:
-        print("note: --out is ignored for --harness=claude (writes in place).",
-              file=sys.stderr)
-
     try:
-        if args.harness == "codex":
-            return _run_codex(args)
-        adapter = get_adapter(args.harness)
-        artifacts = args.artifact or discover_artifacts(args.plugin_root)
-        # Two-phase: rebuild everything (each with assert_partition) before
-        # touching disk, so a mid-run failure never leaves a partial rewrite.
-        rebuilt = {path: _rebuild_bytes(path, adapter) for path in artifacts}
-        drift = False
-        for path, data in rebuilt.items():
-            if data == path.read_bytes():
-                continue
-            if args.mode == "check":
-                drift = True
-                print(f"DRIFT: {path}", file=sys.stderr)
-            else:
-                _atomic_write(path, data)
-                print(f"wrote: {path}")
-    except NotImplementedError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 2
+        if args.mode == "refresh-hashes":
+            return _run_refresh(args)
+        return _run_codex(args)
     except Exception as exc:  # noqa: BLE001 - CLI boundary: any failure is exit 2
         print(f"ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
-
-    if args.mode == "check" and drift:
-        return 1
-    return 0
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+<!-- source-sha256: e24e246e1a2aec754762e2f27b3d2a2354a0f29677c78c83269b2000151fda17 -->
 ### 9. Safety net + progress per worker
 
 The unifying contract is unchanged: each worker writes `<REVIEW_ROOT>/waves/<slice_id>.md`, and that file is the only thing dedupe reads. On Codex the safety net works off the **dispatcher's captured stdout** (under `--capture-dir`, materialized from each worker's `-o {capture}` last message), not an in-process response message.
