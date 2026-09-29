@@ -713,6 +713,57 @@ class ExcludeAndSizeCap(unittest.TestCase):
 
 
 @unittest.skipUnless(_have_php(), "php not on PATH")
+class HiddenDirectoryPrune(unittest.TestCase):
+    """P8: any directory whose basename starts with "." is never descended
+    into — always on, independent of --exclude (real incident: `.cache/`
+    PHPStan result cache + `bin/.phpunit/` phpunit-bridge copies timed out the
+    extractor on every kind before it reached the real source tree).
+    """
+
+    def _make_project(self, td: Path) -> Path:
+        proj = td / "proj"
+        (proj / "app").mkdir(parents=True)
+        (proj / "app" / "Real.php").write_text(
+            "<?php\nnamespace App;\nclass Real {}\n"
+        )
+        (proj / ".cache" / "Generated").mkdir(parents=True)
+        (proj / ".cache" / "Generated" / "Ghost.php").write_text(
+            "<?php\nnamespace Cache\\Generated;\nclass Ghost {}\n"
+        )
+        (proj / "bin" / ".phpunit" / "phpunit-9.6-0" / "src").mkdir(parents=True)
+        (proj / "bin" / ".phpunit" / "phpunit-9.6-0" / "src" / "Ghost.php").write_text(
+            "<?php\nnamespace PHPUnitBridge;\nclass Ghost {}\n"
+        )
+        return proj
+
+    def test_hidden_dirs_pruned_with_default_exclude(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = self._make_project(Path(td))
+            rc, out, err = _run_with_args([], proj, kind="class", project_root=proj)
+            self.assertEqual(rc, 0, msg=err)
+            fqns = {i["fqn"] for i in out["items"]}
+            self.assertIn("App\\Real", fqns)
+            self.assertNotIn("Cache\\Generated\\Ghost", fqns)
+            self.assertNotIn("PHPUnitBridge\\Ghost", fqns)
+
+    def test_hidden_dirs_pruned_even_with_explicit_empty_exclude(self):
+        # The hidden-directory rule is a separate, always-on prune — NOT an
+        # EXCLUDE_PATHS/--exclude entry. An explicit empty --exclude= (which
+        # disables DEFAULT_EXCLUDE entirely at the PHP level, see
+        # test_explicit_exclude_replaces_defaults) must still prune it.
+        with tempfile.TemporaryDirectory() as td:
+            proj = self._make_project(Path(td))
+            rc, out, err = _run_with_args(
+                ["--exclude="], proj, kind="class", project_root=proj,
+            )
+            self.assertEqual(rc, 0, msg=err)
+            fqns = {i["fqn"] for i in out["items"]}
+            self.assertIn("App\\Real", fqns)
+            self.assertNotIn("Cache\\Generated\\Ghost", fqns)
+            self.assertNotIn("PHPUnitBridge\\Ghost", fqns)
+
+
+@unittest.skipUnless(_have_php(), "php not on PATH")
 class EasyadminCrud(unittest.TestCase):
     def test_collects_both_admin_fixture_crud_controllers(self):
         rc, out, err = _run("easyadmin-crud", FIX_ADM / "src")

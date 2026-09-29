@@ -15,12 +15,20 @@ CLI:
   recon_inventory.py --review-root <dir> --validate
       → Delegates to validate_context.py against <dir>/CONTEXT.md.
 
+  recon_inventory.py <project_root> --console-preflight [--console-cmd=<tpl>]
+                                    [--no-console] [--recipe=<name>]
+      → Probes whether the project console boots, without writing anything.
+        stdout: JSON {applicable, ok, mode, reason, suggestions}.
+        exit: 0 ok or not applicable; 3 console required but not booting;
+              2 usage error.
+
 stdlib only. Imports siblings via sys.path manipulation.
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import datetime
 import hashlib
 import json
@@ -39,6 +47,8 @@ import compute_fingerprint as fp  # noqa: E402
 from recon import recipes as recipes_pkg  # noqa: E402
 from recon import sandbox as _sandbox  # noqa: E402
 from recon import environment as _environment  # noqa: E402
+# Stack-agnostic despite its home: the free-text redactor for console stderr.
+from recon.recipes._symfony_introspection import redact_stderr_secrets  # noqa: E402
 from recon.recipes import (  # noqa: E402
     detect_best,
     load_recipe,
@@ -316,7 +326,18 @@ def _confidence(result: InventoryResult, no_console: bool) -> dict:
     ceiling = "high" if (console_used and not no_console) else "medium"
     if ceiling == "medium" and level == "high":
         level = "medium"
+    if _any_extractor_failed(result):
+        level = "low"
     return {"level": level, "ceiling": ceiling}
+
+
+def _any_extractor_failed(result: InventoryResult) -> bool:
+    payloads = list(result.core.values()) + [
+        p for names in result.recon_bags.values() for bag in names.values() for p in bag.values()
+    ]
+    return any(
+        isinstance(p.reason, str) and p.reason.startswith("extractor_failed:") for p in payloads
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -535,14 +556,17 @@ def cmd_inventory(
     )
 
     plugin_root = _BIN.parent
-    result: InventoryResult = recipe.build_inventory(
-        project_root,
-        diff_files=diff_files,
-        plugin_root=plugin_root,
-        no_console=no_console,
-        console_runner=console_runner,
-        exclude=exclude,
-    )
+    # One scope per run: after the first extractor timeout the remaining
+    # extractor calls are skipped instead of each waiting out its own timeout.
+    with _sandbox.extractor_run_scope():
+        result: InventoryResult = recipe.build_inventory(
+            project_root,
+            diff_files=diff_files,
+            plugin_root=plugin_root,
+            no_console=no_console,
+            console_runner=console_runner,
+            exclude=exclude,
+        )
 
     pf = fp.compute_project_fingerprint(project_root)
     cf = fp.compute_code_fingerprint(project_root)
@@ -622,6 +646,73 @@ def cmd_inventory(
     return 0
 
 
+def cmd_console_preflight(
+    project_root: Path,
+    recipe_name: Optional[str],
+    no_console: bool,
+    console_cmd_flag: Optional[str],
+) -> int:
+    """Probe console bootability without writing to any review_root.
+
+    Reuses `decide_console_runner` + `sandbox.try_console_smoke` verbatim — no
+    new decision logic lives here. `applicable` mirrors `_environment_block`'s
+    formula so the two paths never disagree on what counts as N/A.
+    """
+    project_root = project_root.resolve()
+    if not project_root.is_dir():
+        print(f"error: project root not a directory: {project_root}", file=sys.stderr)
+        return 2
+
+    if recipe_name is not None:
+        try:
+            recipe = load_recipe(recipe_name)
+        except ModuleNotFoundError:
+            print(
+                f"error: unknown recipe: {recipe_name} "
+                f"(available: {', '.join(available_recipes())})",
+                file=sys.stderr,
+            )
+            return 2
+    else:
+        picked = detect_best(project_root)
+        recipe = load_recipe(picked[0] if picked is not None else "generic_php")
+
+    entrypoint = recipes_pkg.console_entrypoint(recipe)
+    probe = _environment.probe_environment(project_root, console_entrypoint=entrypoint)
+    console_cmd = _resolve_console_cmd(console_cmd_flag, no_console)
+    runner = decide_console_runner(
+        probe, no_console=no_console, console_cmd=console_cmd,
+        entrypoint=entrypoint, cwd=project_root,
+    )
+
+    # applicable=false for a recipe with no console entrypoint
+    # (Laravel/generic) OR an explicit --no-console — both are "not asking the
+    # question", distinct from asking and getting `disabled` back.
+    applicable = entrypoint is not None and not no_console
+    if not applicable:
+        print(json.dumps({
+            "applicable": False, "ok": True, "mode": runner.mode,
+            "reason": None, "suggestions": [],
+        }))
+        return 0
+
+    suggestions = [dataclasses.asdict(s) for s in probe.suggestions]
+
+    if runner.mode == "disabled":
+        print(json.dumps({
+            "applicable": True, "ok": False, "mode": "disabled",
+            "reason": redact_stderr_secrets(runner.disabled_reason), "suggestions": suggestions,
+        }))
+        return 3
+
+    ok, warning = _sandbox.try_console_smoke(runner)
+    print(json.dumps({
+        "applicable": True, "ok": ok, "mode": runner.mode,
+        "reason": None if ok else redact_stderr_secrets(warning), "suggestions": suggestions,
+    }))
+    return 0 if ok else 3
+
+
 def cmd_validate(review_root_arg: Path) -> int:
     review_root = review_root_arg.resolve()
     context_path = review_root / "CONTEXT.md"
@@ -692,6 +783,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                              "project-specific CLAUDE.md exclusions.")
     parser.add_argument("--validate", action="store_true",
                         help="Validate <review-root>/CONTEXT.md against schema")
+    parser.add_argument("--console-preflight", action="store_true",
+                        help="Probe console bootability and exit; writes nothing")
     args = parser.parse_args(argv)
 
     if args.validate:
@@ -699,6 +792,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             print("error: --validate requires --review-root", file=sys.stderr)
             return 2
         return cmd_validate(args.review_root)
+
+    if args.console_preflight:
+        if args.project_root is None:
+            print("error: project_root is required with --console-preflight", file=sys.stderr)
+            return 2
+        return cmd_console_preflight(
+            args.project_root, args.recipe, args.no_console, args.console_cmd,
+        )
 
     if args.project_root is None:
         print("error: project_root is required (or use --validate --review-root)", file=sys.stderr)

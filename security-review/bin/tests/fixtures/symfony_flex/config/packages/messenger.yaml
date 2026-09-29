@@ -1,0 +1,18 @@
+framework:
+    messenger:
+        failure_transport: failed
+
+        transports:
+            # Synthetic credentials: the password must never reach CONTEXT.md.
+            async: 'amqp://guest:p4ssw0rd-synthetic@rabbit.example.test:5672/%2f/messages'
+            failed: 'doctrine://default?queue_name=failed'
+            sync: 'sync://'
+
+        routing:
+            'App\Message\ExampleMessage': async
+
+# when@test:
+#    framework:
+#        messenger:
+#            transports:
+#                async: 'in-memory://'

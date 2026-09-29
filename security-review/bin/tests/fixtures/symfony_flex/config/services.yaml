@@ -1,0 +1,15 @@
+# Synthetic fixture. The parameter below is a placeholder secret used to prove
+# that a %param% referenced from security config never reaches CONTEXT.md.
+parameters:
+    app.remember_secret: s3cr3t
+    app.payment_key: 'sk_live_SYNTHETICflexKEY0123456789'
+
+services:
+    _defaults:
+        autowire: true
+        autoconfigure: true
+
+    App\:
+        resource: '../src/'
+        exclude:
+            - '../src/Kernel.php'

@@ -32,7 +32,10 @@
  *                   so vendor/, var/cache/, node_modules/ never hit token_get_all).
  *                   When the flag is absent, a built-in default kicks in
  *                   (see DEFAULT_EXCLUDE below). Keep DEFAULT_EXCLUDE in sync
- *                   with sandbox.py:DEFAULT_EXCLUDE.
+ *                   with sandbox.py:DEFAULT_EXCLUDE. Independently of --exclude,
+ *                   any directory whose basename starts with "." is never
+ *                   descended into (tool caches like .cache/, .phpunit/,
+ *                   IDE folders) — one always-on rule, not an exclude entry.
  * --max-file-size:  per-file byte cap; oversize files are skipped with a
  *                   stderr warning. Defaults to 2 MiB. Protects against
  *                   auto-generated giants (e.g. vimeo/psalm CallMap_*.php)
@@ -172,10 +175,36 @@ if (is_file($realPath)) {
     // subtrees (vendor/, var/cache/, …) are NEVER descended into — extractor
     // does not even open files in those directories. Oversize files are
     // skipped at file-level with a stderr warning.
-    $rdi = new RecursiveDirectoryIterator($realPath, FilesystemIterator::SKIP_DOTS);
+    // FOLLOW_SYMLINKS: a source root may be a symlink (e.g. `src -> .build/src`).
+    // The hidden-dir rule below judges the walked (logical) name, not the link
+    // target; escapes are still rejected per file by pathInsideRoot().
+    $rdi = new RecursiveDirectoryIterator(
+        $realPath, FilesystemIterator::SKIP_DOTS | FilesystemIterator::FOLLOW_SYMLINKS
+    );
+    $visitedDirs = [$realPath => true];
     $filter = new RecursiveCallbackFilterIterator(
         $rdi,
-        function ($current, $key, $iterator) use ($excludePrefixes, $projectRoot, $projectRootPrefix, $maxFileSize) {
+        function ($current, $key, $iterator) use ($excludePrefixes, $projectRoot, $projectRootPrefix, $maxFileSize, &$visitedDirs) {
+            // Hidden directories (dot-prefixed basename) are never descended
+            // into — always on, independent of --exclude. Real incident:
+            // `.cache/` (PHPStan result cache) and `bin/.phpunit/`
+            // (phpunit-bridge PHPUnit copies) put ~30k extra PHP files in
+            // front of the extractor, timing it out before it reached src/.
+            // SKIP_DOTS above only omits the literal "." / ".." entries, not
+            // dot-prefixed names like ".cache", so this check is still needed.
+            if ($current->isDir() && str_starts_with($current->getFilename(), '.')) {
+                return false;
+            }
+            // With symlinks followed: never walk a directory twice (link cycles,
+            // `a -> .`) nor one that resolves outside the project.
+            if ($current->isDir()) {
+                $realDir = realpath($current->getPathname());
+                if ($realDir === false || isset($visitedDirs[$realDir])
+                    || !($realDir === $projectRoot || str_starts_with($realDir, $projectRootPrefix))) {
+                    return false;
+                }
+                $visitedDirs[$realDir] = true;
+            }
             $abs = $current->getPathname();
             $rel = relativeToProjectRoot($abs, $projectRoot, $projectRootPrefix);
             if ($rel !== '') {
@@ -197,8 +226,8 @@ if (is_file($realPath)) {
             return true;
         }
     );
-    // SKIP_DOTS only; symlinks are followed by RecursiveDirectoryIterator (PHP default),
-    // so we sanitize each file via realpath()-vs-projectRoot below.
+    // Symlinks are followed (FOLLOW_SYMLINKS above), so we sanitize each file
+    // via realpath()-vs-projectRoot below.
     $rii = new RecursiveIteratorIterator($filter);
     foreach ($rii as $f) {
         if (!$f->isFile() || $f->getExtension() !== 'php') continue;

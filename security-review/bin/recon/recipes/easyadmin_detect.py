@@ -78,7 +78,9 @@ def collect_easyadmin_crud_controllers(
     )
     if warn:
         warnings.append(warn)
-        return SectionPayload(status="unknown", reason=warn)
+        return SectionPayload(
+            status="partial", items=[], reason=f"extractor_failed: easyadmin-crud: {warn}",
+        )
     items: list[dict] = []
     has_unresolved = False
     for it in (out.get("items") or []):

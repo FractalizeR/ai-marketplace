@@ -19,7 +19,9 @@ are still vendor-neutral and apply to any JWT user):
 2. `.env` file referencing JWT-specific env names (`JWT_SECRET`,
    `JWT_PASSPHRASE`, `JWT_PRIVATE_KEY`) — a project may roll its own JWT
    helper without pulling a library.
-3. `config/packages/lexik_jwt_authentication.yaml` (Symfony Lexik bundle).
+3. `config/packages/lexik_jwt_authentication.{yaml,yml,php,xml}` (Symfony Lexik
+   bundle — Symfony merges bundle config across all four formats by extension
+   alias, so a project authoring it as `.php`/`.xml` is still a valid signal).
 
 PASETO (paragonie/paseto) is treated as JWT-adjacent for stage 4 purposes:
 the threat model overlaps heavily (claims-bearing token, signing keys) and
@@ -40,6 +42,8 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+
+from recon.recipes._shared import basename_exists_any_ext
 
 
 # Composer package names that gate JWT detection. Each tuple entry is matched
@@ -119,10 +123,10 @@ def _config_signal(project_root: Path) -> bool:
     """True iff a known JWT bundle config file is present.
 
     Probes:
-    - Symfony Lexik bundle's canonical config path (`config/packages/lexik_jwt_authentication.yaml`).
-    - Laravel Tymon-style published config (`config/jwt.php` from `vendor:publish`).
+    - Symfony Lexik bundle's canonical config path (`config/packages/lexik_jwt_authentication.{yaml,yml,php,xml}`).
+    - Laravel Tymon-style published config (`config/jwt.php` from `vendor:publish` — always `.php`).
     """
-    if (project_root / "config" / "packages" / "lexik_jwt_authentication.yaml").is_file():
+    if basename_exists_any_ext(project_root / "config" / "packages", "lexik_jwt_authentication"):
         return True
     if (project_root / "config" / "jwt.php").is_file():
         return True

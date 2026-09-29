@@ -377,6 +377,39 @@ class CoreSectionsV2(unittest.TestCase):
             self.assertFalse(res.ok())
             self.assertTrue(any("requires 'items'" in e for e in res.errors))
 
+    def test_status_partial_scalar_auth_layer_agent_written_shape_validates(self):
+        # An agent may not be able to resolve every data key from available
+        # evidence; it then writes `partial` + `reason` + `data` with the
+        # unresolved keys set to `unknown`/`false` + `source_files`, so routing
+        # to workers is never lost. `auth_layer`'s schema keys are `kind`,
+        # `provider`, `mfa`, `summary` (agents/security.md).
+        body = (
+            "## Auth Layer\n<!-- section_id: auth_layer -->\n\n"
+            "```yaml\n"
+            "status: partial\n"
+            "reason: \"console output not understood; static fallback frozen\"\n"
+            "data:\n"
+            "  kind: unknown\n"
+            "  provider: unknown\n"
+            "  mfa: false\n"
+            "  summary: \"could not classify auth provider from available evidence\"\n"
+            "source_files:\n"
+            "  - config/packages/security.yaml\n"
+            "```\n\n"
+        )
+        for sid, (shape, _) in vc.CORE_SECTIONS_V2.items():
+            if sid == "auth_layer":
+                continue
+            body += (
+                f"## {sid}\n<!-- section_id: {sid} -->\n\n"
+                f"```yaml\nstatus: pending_enrichment\nenrichment_hint: \"x\"\n"
+                f"{'items: []' if shape == 'list' else 'source_files: []'}\n```\n\n"
+            )
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), VALID_FRONTMATTER_V2, body)
+            res = vc.validate_context_file(p)
+            self.assertTrue(res.ok(), msg=f"errors: {res.errors}")
+
 
 # ---------------------------------------------------------------------------
 # recon_bags bag validation.
@@ -632,6 +665,54 @@ class SanityProbesIntegration(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# P8: hidden directories (.cache/, .phpunit/, …) must not inflate the sanity
+# coverage-diff ladder. `Path.glob("src/**/*Controller.php")` descends into
+# dot-prefixed directories by default (unlike shell globbing), so without the
+# hidden-dir skip a generated lookalike file the recipe never scans (because
+# the extractor prunes hidden dirs) would still count as a filesystem match
+# the recipe "should have" declared.
+# ---------------------------------------------------------------------------
+
+
+class HiddenDirSanityGlob(unittest.TestCase):
+    def test_glob_files_skips_hidden_directory(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "src" / "Controller").mkdir(parents=True)
+            (root / "src" / "Controller" / "PostController.php").write_text("<?php\n")
+            (root / "src" / ".cache").mkdir(parents=True)
+            (root / "src" / ".cache" / "FakeController.php").write_text("<?php\n")
+            found = vc._glob_files(root, ["src/**/*Controller.php"])
+            self.assertEqual(found, {"src/Controller/PostController.php"})
+
+    def test_sanity_check_does_not_flag_hidden_controller_as_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            project_root = Path(td) / "proj"
+            (project_root / "src" / "Controller").mkdir(parents=True)
+            (project_root / "src" / "Controller" / "PostController.php").write_text("<?php\n")
+            (project_root / "src" / ".cache").mkdir(parents=True)
+            (project_root / "src" / ".cache" / "FakeController.php").write_text("<?php\n")
+            body = (
+                "## Attack Surface\n<!-- section_id: attack_surface -->\n\n"
+                "```yaml\nstatus: ok\nitems:\n"
+                "  - kind: http_route\n    file: src/Controller/PostController.php\n"
+                "```\n\n"
+            )
+            for sid, (shape, _) in vc.CORE_SECTIONS_V2.items():
+                if sid == "attack_surface":
+                    continue
+                body += (
+                    f"## {sid}\n<!-- section_id: {sid} -->\n\n"
+                    f"```yaml\nstatus: unknown\nreason: \"S1 stub\"\n```\n\n"
+                )
+            review_root = Path(td) / "review"
+            write_context(review_root, VALID_FRONTMATTER_V2, body)
+            res = vc.sanity_check(review_root, project_root=project_root)
+            self.assertTrue(res.ok(), msg=f"errors: {res.errors}, warnings: {res.warnings}")
+            self.assertFalse(any("coverage diff" in w for w in res.warnings), msg=res.warnings)
+
+
+# ---------------------------------------------------------------------------
 # Sanity probe content_filter — narrows globs by file content (regex).
 # Used to disambiguate name-based collisions like *Command.php
 # (Symfony Console vs DDD/CQRS Command DTOs vs Messenger messages).
@@ -821,6 +902,104 @@ class SanityProbeContentFilter(unittest.TestCase):
             # Only the concrete SyncCommand is declared; the abstract base is
             # excluded from `found`, so declared 1 == found 1 → no gap.
             self.assertTrue(res.ok(), msg=f"errors: {res.errors}; warnings: {res.warnings}")
+
+    def _context_with_bag(self, kind: str, name: str, bag_key: str, items_yaml: str) -> str:
+        """Full CONTEXT.md body: every core section stubbed `unknown`, plus one
+        `recon_bags.{kind}.{name}.{bag_key}` bag with `status: ok` + `items_yaml`."""
+        body = ""
+        for sid, (shape, _) in vc.CORE_SECTIONS_V2.items():
+            body += (
+                f"## {sid}\n<!-- section_id: {sid} -->\n\n"
+                f"```yaml\nstatus: unknown\nreason: \"stub\"\n```\n\n"
+            )
+        body += (
+            "## Recon Bags\n<!-- section_id: recon_bags -->\n\n"
+            f"```yaml\n{kind}:\n  {name}:\n    {bag_key}:\n      status: ok\n      items:\n{items_yaml}```\n\n"
+        )
+        return body
+
+    def test_easyadmin_crud_probe_ignores_abstract_base(self):
+        # Regression: a project-local `abstract class BaseCrudController
+        # extends AbstractCrudController` matches the EasyAdmin CRUD probe's
+        # glob + content_filter (no kind_filter — the probe keys off
+        # content_filter alone) but is never inventoried (abstract classes are
+        # never a reachable CRUD surface), so it must not read as a coverage
+        # gap. Reference repro: "sanity[EasyAdmin CRUD controllers]: declared 6
+        # of 3 … Missing: src/Admin/Base/BaseCrudController.php" (ERROR).
+        with tempfile.TemporaryDirectory() as td:
+            project = Path(td) / "project"
+            self._write_php(project, "src/Admin/Base/BaseCrudController.php",
+                "<?php\nabstract class BaseCrudController extends AbstractCrudController {}\n")
+            self._write_php(project, "src/Admin/ClientCrudController.php",
+                "<?php\nclass ClientCrudController extends BaseCrudController {}\n")
+
+            from recon.types import SanityProbe
+
+            class FakeRecipe:
+                EXCLUDE_PATHS = ()
+
+                @staticmethod
+                def sanity_probes():
+                    return [SanityProbe(
+                        section_path="recon_bags.addon.easyadmin.crud_controllers",
+                        glob_patterns=["src/**/*CrudController.php"],
+                        label="EasyAdmin CRUD controllers",
+                        content_filter=r"extends\s+(AbstractCrudController|BaseCrudController)",
+                    )]
+
+            items = "        - file: src/Admin/ClientCrudController.php\n"
+            review_root = Path(td) / "review"
+            write_context(
+                review_root, VALID_FRONTMATTER_V2,
+                self._context_with_bag("addon", "easyadmin", "crud_controllers", items),
+            )
+            res = vc.sanity_check(review_root, project_root=project,
+                                  recipe_loader=lambda _name: FakeRecipe())
+            self.assertTrue(res.ok(), msg=f"errors: {res.errors}; warnings: {res.warnings}")
+
+    def test_data_access_probe_still_flags_abstract_repository(self):
+        # Control: `data_access` is deliberately excluded from the abstract-base
+        # exclusion (a repository/model probe may legitimately count an abstract
+        # base as declared inventory), so the SAME abstract-class layout must
+        # still surface as a coverage gap for a `data_access` probe — pinning
+        # that the fix is scoped by section_path, not a blanket exclusion.
+        with tempfile.TemporaryDirectory() as td:
+            project = Path(td) / "project"
+            self._write_php(project, "src/Repository/BaseRepository.php",
+                "<?php\nabstract class BaseRepository {}\n")
+            self._write_php(project, "src/Repository/UserRepository.php",
+                "<?php\nclass UserRepository extends BaseRepository {}\n")
+
+            from recon.types import SanityProbe
+
+            class FakeRecipe:
+                EXCLUDE_PATHS = ()
+
+                @staticmethod
+                def sanity_probes():
+                    return [SanityProbe(
+                        section_path="data_access",
+                        glob_patterns=["src/**/*Repository.php"],
+                        label="Doctrine repositories",
+                    )]
+
+            body = (
+                "## Data Access\n<!-- section_id: data_access -->\n\n"
+                "```yaml\nstatus: ok\nitems:\n  - file: src/Repository/UserRepository.php\n```\n\n"
+            )
+            for sid, (shape, _) in vc.CORE_SECTIONS_V2.items():
+                if sid == "data_access":
+                    continue
+                body += (
+                    f"## {sid}\n<!-- section_id: {sid} -->\n\n"
+                    f"```yaml\nstatus: unknown\nreason: \"stub\"\n```\n\n"
+                )
+            review_root = Path(td) / "review"
+            write_context(review_root, VALID_FRONTMATTER_V2, body)
+            res = vc.sanity_check(review_root, project_root=project,
+                                  recipe_loader=lambda _name: FakeRecipe())
+            self.assertFalse(res.ok(),
+                             msg="data_access probe must still flag the abstract base as missing")
 
     def _context_with_attack_surface(self, items_yaml: str) -> str:
         """Full CONTEXT.md body: an `## Attack Surface` section carrying

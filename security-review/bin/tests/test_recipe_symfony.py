@@ -36,6 +36,7 @@ FIX_MIN = THIS_DIR / "fixtures" / "symfony_minimal"
 FIX_ADM = THIS_DIR / "fixtures" / "symfony_admin"
 FIX_SONATA = THIS_DIR / "fixtures" / "symfony_sonata_admin"
 FIX_HOSTILE = THIS_DIR / "fixtures" / "symfony_hostile_console"
+FIX_HIDDEN_DIRS = THIS_DIR / "fixtures" / "symfony_hidden_dirs"
 
 sys.path.insert(0, str(BIN_DIR))
 from validate_context import parse_yaml_subset, FRONTMATTER_RE  # noqa: E402
@@ -761,6 +762,165 @@ class HostileFixtureSandbox(unittest.TestCase):
 
 
 @unittest.skipUnless(shutil.which("php"), "php not on PATH")
+class ExtractorFailurePartialStatus(unittest.TestCase):
+    """P8: a failed `run_extractor` call (timeout / non-zero / bad JSON) for a
+    kind a section depends on must mark that section `partial` with an
+    `extractor_failed: <kind>: <warning>` reason — not silently `ok` with a
+    suspiciously small item count. Sanity then reports each such section as an
+    error naming the cause, so recon aborts with the real reason.
+    """
+
+    def _inject_class_kind_failure(self):
+        from unittest import mock
+        from recon import sandbox
+        real_run_extractor = sandbox.run_extractor
+
+        def fake_run_extractor(plugin_root, project_root, kind, target, *args, **kwargs):
+            if kind == "class":
+                return None, "extract_php_metadata --kind=class timed out after 1s"
+            return real_run_extractor(plugin_root, project_root, kind, target, *args, **kwargs)
+
+        return mock.patch.object(sandbox, "run_extractor", side_effect=fake_run_extractor)
+
+    def test_attack_surface_and_data_access_become_partial(self):
+        with self._inject_class_kind_failure():
+            result = recipe_symfony.build_inventory(
+                FIX_MIN, plugin_root=PLUGIN_ROOT, no_console=True,
+            )
+        attack = result.core["attack_surface"]
+        self.assertEqual(attack.status, "partial")
+        self.assertIn("extractor_failed: class:", attack.reason)
+        # Static routes come from the independent "routes" kind, so they
+        # survive; class-derived kinds (cli_command/event_listener/…) do not.
+        self.assertTrue(any(it["kind"] == "http_route" for it in attack.items))
+        self.assertFalse(any(
+            it["kind"] in ("cli_command", "event_listener", "message_handler", "http_route_admin")
+            for it in attack.items
+        ))
+
+        data_access = result.core["data_access"]
+        self.assertEqual(data_access.status, "partial")
+        self.assertIn("extractor_failed: class:", data_access.reason)
+        self.assertEqual(data_access.items, [])
+
+        # voters kind ("voters") is unaffected by the injected "class" failure.
+        voters = result.recon_bags["stack"]["symfony"]["voters"]
+        self.assertEqual(voters.status, "ok")
+
+    def test_sanity_errors_name_the_extractor_cause(self):
+        import recon_inventory
+        from validate_context import sanity_check
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td) / "review"
+            with self._inject_class_kind_failure():
+                rc = recon_inventory.cmd_inventory(
+                    FIX_MIN, "symfony", review_root, None, True,
+                )
+            self.assertEqual(rc, 0)
+            res = sanity_check(review_root, project_root=FIX_MIN)
+        self.assertIn(
+            "sanity[extractor]: attack_surface not collected — extractor_failed: class: "
+            "extract_php_metadata --kind=class timed out after 1s",
+            res.errors,
+        )
+        self.assertTrue(all(e.startswith("sanity[extractor]: ") for e in res.errors), res.errors)
+
+
+class ExtractorFailedReasonPerCollector(unittest.TestCase):
+    """Direct unit coverage for every remaining extractor-backed bag collector's
+    failure path (P8 change 2): status=partial, empty items, and a
+    `extractor_failed: <kind>: <warning>` reason. A bogus `plugin_root` (no
+    `bin/recon/extract_php_metadata.php` under it) makes `run_extractor` fail
+    for real — no mocking needed.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.bogus_plugin_root = Path(self._tmp.name)
+
+    def _assert_partial(self, payload, kind: str):
+        self.assertEqual(payload.status, "partial")
+        self.assertEqual(payload.items, [])
+        self.assertIn(f"extractor_failed: {kind}:", payload.reason)
+
+    def test_voters(self):
+        payload = recipe_symfony.collect_voters(FIX_MIN, self.bogus_plugin_root, [])
+        self._assert_partial(payload, "voters")
+
+    def test_forms(self):
+        payload = recipe_symfony.collect_forms(FIX_MIN, self.bogus_plugin_root, [])
+        self._assert_partial(payload, "forms")
+
+    def test_serializer_groups(self):
+        payload = recipe_symfony.collect_serializer_groups(FIX_MIN, self.bogus_plugin_root, [])
+        self._assert_partial(payload, "serializer-groups")
+
+    def test_doctrine_listeners(self):
+        payload = recipe_symfony.collect_doctrine_listeners(FIX_MIN, self.bogus_plugin_root, [])
+        self._assert_partial(payload, "class")
+
+    def test_easyadmin_crud_controllers(self):
+        payload = recipe_symfony.collect_easyadmin_crud_controllers(
+            FIX_ADM, self.bogus_plugin_root, [],
+        )
+        self._assert_partial(payload, "easyadmin-crud")
+
+    def test_sonata_admin_classes(self):
+        payload = recipe_symfony.collect_sonata_admin_classes(
+            FIX_SONATA, self.bogus_plugin_root, [],
+        )
+        self._assert_partial(payload, "sonata-admin")
+
+    def test_routes_authz_matrix(self):
+        payload = recipe_symfony._build_routes_authz_matrix(FIX_MIN, self.bogus_plugin_root)
+        self._assert_partial(payload, "routes")
+
+
+@unittest.skipUnless(shutil.which("php"), "php not on PATH")
+class HiddenDirectoriesPruned(unittest.TestCase):
+    """P8 regression: `.cache/` and `bin/.phpunit/` subtrees are never walked.
+
+    Real incident: a PHPStan result cache (`.cache/`) and phpunit-bridge PHPUnit
+    copies (`bin/.phpunit/`) put tens of thousands of extra PHP files in front
+    of the extractor, timing it out before it ever reached `src/`. The fixture
+    plants a lookalike EasyAdmin CRUD controller and a lookalike CLI command
+    inside both hidden subtrees; neither may surface anywhere in CONTEXT.md,
+    while the real `src/` CRUD controller must still be classified.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.review_root = Path(cls.tmp.name) / "review"
+        proc = _run_recipe(FIX_HIDDEN_DIRS, cls.review_root, "--no-console")
+        assert proc.returncode == 0, proc.stderr
+        cls.text = (cls.review_root / "CONTEXT.md").read_text(encoding="utf-8")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_hidden_dir_classes_absent_from_context(self):
+        self.assertNotIn("Ghost", self.text)
+        self.assertNotIn(".cache", self.text)
+        self.assertNotIn(".phpunit", self.text)
+
+    def test_real_crud_controller_is_http_route_admin(self):
+        payload = _section_payload(self.text, "attack_surface")
+        admin_items = [it for it in payload["items"] if it.get("kind") == "http_route_admin"]
+        self.assertEqual(
+            [it["identifier"] for it in admin_items],
+            ["App\\Controller\\Admin\\PostCrudController"],
+        )
+
+    def test_sanity_passes_on_the_produced_context(self):
+        from validate_context import sanity_check
+        res = sanity_check(self.review_root, project_root=FIX_HIDDEN_DIRS)
+        self.assertEqual(res.errors, [])
+
+
+@unittest.skipUnless(shutil.which("php"), "php not on PATH")
 class WallClockBudget(unittest.TestCase):
     """rev 3.5 G-Concur.1: ≤ 30 s on minimal fixture in --no-console mode."""
 
@@ -866,6 +1026,15 @@ class RecipeUnitContract(unittest.TestCase):
         from recon.recipes.symfony import _is_excluded, EXCLUDE_PATHS
         self.assertTrue(_is_excluded("public/js/app.min.js", EXCLUDE_PATHS))
         self.assertFalse(_is_excluded("public/js/app.js", EXCLUDE_PATHS))
+
+    def test_has_hidden_dir_segment(self):
+        from recon.recipes.symfony import has_hidden_dir_segment
+        self.assertTrue(has_hidden_dir_segment(".cache/Generated/Ghost.php"))
+        self.assertTrue(has_hidden_dir_segment("bin/.phpunit/phpunit-9.6-0/src/Ghost.php"))
+        self.assertFalse(has_hidden_dir_segment("src/Controller/PostController.php"))
+        # Only DIRECTORY segments count — a dot-prefixed basename alone (no
+        # dot-prefixed directory) is not pruned by this rule.
+        self.assertFalse(has_hidden_dir_segment("src/.env.php"))
 
     def test_classify_dsn(self):
         from recon.recipes.symfony import _classify_dsn
@@ -979,7 +1148,7 @@ class TripleReviewRegressions(unittest.TestCase):
         # Claude MEDIUM M1 / Gemini Issue 3: hardcoded indent == 4 / 8 broke
         # parsing on 2-space indentation. Indent-relative parsers must work.
         from recon.recipes.symfony import (
-            _parse_firewalls, _parse_access_control, _first_key_under_nested,
+            security_view_from_yaml_text, _parse_access_control, _first_key_under_nested,
         )
         text = (
             "security:\n"
@@ -994,7 +1163,7 @@ class TripleReviewRegressions(unittest.TestCase):
             "  access_control:\n"
             "    - { path: ^/api, roles: ROLE_USER }\n"
         )
-        firewalls = _parse_firewalls(text)
+        firewalls = security_view_from_yaml_text(text).firewalls
         self.assertEqual([fw["name"] for fw in firewalls], ["main"])
         self.assertEqual(firewalls[0]["stateless"], "true")
         self.assertEqual(_first_key_under_nested(text, ("security", "providers")),
@@ -1278,10 +1447,13 @@ class ConsoleRouteFileResolution(unittest.TestCase):
                 return self._router_json(), None
             return None, None
 
+        sources: list[str] = []
+        warnings: list[str] = []
         with mock.patch.object(sandbox, "try_console_smoke", return_value=(True, None)), \
              mock.patch.object(sandbox, "run_console_command", side_effect=fake_run):
+            session = recipe_symfony.ConsoleSession(object(), sources, warnings)
             recipe_symfony._enrich_via_console(
-                Path("/proj"), items, [], [], diff_files, object(), fqn_to_file,
+                Path("/proj"), items, sources, warnings, diff_files, session, fqn_to_file,
             )
         return {it["identifier"]: it for it in items if it.get("kind") == "http_route"}
 
@@ -1308,6 +1480,27 @@ class ConsoleRouteFileResolution(unittest.TestCase):
             diff_files={"src/Api/Admin/Controller/AuthController.php"},
         )
         self.assertTrue(routes["app_admin_auth"]["touched_by_diff"])
+
+    def test_only_debug_router_is_run(self):
+        # The event-dispatcher / messenger debug probes had no consumer and
+        # reject --format on Symfony 8, adding a failure warning per run.
+        from unittest import mock
+        from recon import sandbox
+        calls: list[list[str]] = []
+
+        def fake_run(runner, args):
+            calls.append(list(args))
+            return "{}", None
+
+        sources: list[str] = []
+        warnings: list[str] = []
+        with mock.patch.object(sandbox, "try_console_smoke", return_value=(True, None)), \
+             mock.patch.object(sandbox, "run_console_command", side_effect=fake_run):
+            session = recipe_symfony.ConsoleSession(object(), sources, warnings)
+            recipe_symfony._enrich_via_console(Path("/proj"), [], sources, warnings, None, session)
+        self.assertEqual(calls, [["debug:router", "--format=json"]])
+        self.assertEqual(sources, ["console:smoke", "console:debug_router"])
+        self.assertEqual(warnings, [])
 
     def test_no_map_degrades_gracefully(self):
         # Back-compat: fqn_to_file omitted → file "" (old behaviour), no crash.
@@ -1340,10 +1533,13 @@ class ConsoleRouteFileResolution(unittest.TestCase):
                 return router, None
             return None, None
 
+        sources: list[str] = []
+        warnings: list[str] = []
         with mock.patch.object(sandbox, "try_console_smoke", return_value=(True, None)), \
              mock.patch.object(sandbox, "run_console_command", side_effect=fake_run):
+            session = recipe_symfony.ConsoleSession(object(), sources, warnings)
             recipe_symfony._enrich_via_console(
-                Path("/proj"), items, [], [], None, object(),
+                Path("/proj"), items, sources, warnings, None, session,
                 {"Liip\\MonitorBundle\\Controller\\HealthCheckController":
                  "vendor/liip/monitor-bundle/Controller/HealthCheckController.php"},
             )
@@ -1458,6 +1654,8 @@ class UnemittableKeysAreDroppedNotFatal(unittest.TestCase):
         self.assertTrue(dump_yaml_subset({"access_control": clean}))
         self.assertEqual(len(warnings), 1)
         self.assertIn("<<", warnings[0])
+        # Source-neutral: the rules may come from the console or php/xml files.
+        self.assertTrue(warnings[0].startswith("security config access_control:"), warnings[0])
 
     def test_rule_left_with_no_usable_key_is_dropped_whole(self):
         from recon.recipes.symfony import _drop_unemittable_keys

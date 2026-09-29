@@ -140,6 +140,21 @@ class DetectJwtGenericTests(unittest.TestCase):
             )
             self.assertTrue(detect_jwt_generic(root))
 
+    def test_returns_true_via_lexik_jwt_config_php_variant(self):
+        """Symfony merges bundle config across yaml/yml/php/xml by extension
+        alias — a project authoring `lexik_jwt_authentication.php` instead of
+        `.yaml` must still be a positive signal."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_composer(root, require={"symfony/framework-bundle": "^7.0"})
+            (root / "config" / "packages").mkdir(parents=True)
+            (root / "config" / "packages" / "lexik_jwt_authentication.php").write_text(
+                "<?php\nreturn static function (LexikJWTAuthenticationConfig $config): void {\n"
+                "    $config->secretKey('%env(resolve:JWT_SECRET_KEY)%');\n};\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(detect_jwt_generic(root))
+
     def test_returns_true_via_laravel_config_jwt_php(self):
         """Tymon-style published config `config/jwt.php` (Laravel) is a positive signal."""
         with tempfile.TemporaryDirectory() as td:
@@ -283,6 +298,21 @@ class DetectOauthOidcTests(unittest.TestCase):
             (root / "config" / "packages").mkdir(parents=True)
             (root / "config" / "packages" / "knpu_oauth2_client.yaml").write_text(
                 "knpu_oauth2_client:\n    clients: {}\n", encoding="utf-8",
+            )
+            self.assertTrue(detect_oauth_oidc(root))
+
+    def test_returns_true_via_knpu_config_php_variant(self):
+        """Symfony merges bundle config across yaml/yml/php/xml by extension
+        alias — a project authoring `knpu_oauth2_client.php` instead of
+        `.yaml` must still be a positive signal."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_composer(root, require={"symfony/framework-bundle": "^7.0"})
+            (root / "config" / "packages").mkdir(parents=True)
+            (root / "config" / "packages" / "knpu_oauth2_client.php").write_text(
+                "<?php\nreturn static function (KnpUOAuth2ClientConfig $config): void {\n"
+                "    $config->client('github')->type('github');\n};\n",
+                encoding="utf-8",
             )
             self.assertTrue(detect_oauth_oidc(root))
 

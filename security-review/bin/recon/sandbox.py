@@ -24,7 +24,10 @@ static-only with warning.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
+import os
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -38,7 +41,14 @@ from recon.types import PathOutsideProjectRoot, assert_inside_project
 # Extractor sandbox.
 # ---------------------------------------------------------------------------
 
-EXTRACTOR_TIMEOUT_SECONDS = 60
+# Bumped 60 → 180 after a 52-CRUD Symfony project (3741 files in src/) timed
+# out on every extractor kind once `.cache/` (PHPStan result cache) and
+# `bin/.phpunit/` were fixed to be pruned instead of walked — 22.5k + 5.2k
+# extra files still cost real wall-clock even excluded-at-directory-level on
+# a loaded machine. Overridable per-run via FR_SECURITY_EXTRACTOR_TIMEOUT so
+# CI / huge monorepos don't need a code change.
+EXTRACTOR_TIMEOUT_SECONDS = 180
+EXTRACTOR_TIMEOUT_ENV = "FR_SECURITY_EXTRACTOR_TIMEOUT"
 # Bumped 256M → 512M after vimeo/psalm CallMap_*.php blew memory_limit on a
 # real Symfony project. Extractor scans many files in one process — a single
 # auto-generated giant can starve the rest. Combined with --max-file-size cap
@@ -49,7 +59,9 @@ EXTRACTOR_MEMORY_LIMIT = "512M"
 # never descended into by extract_php_metadata.php's RecursiveDirectoryIterator,
 # so vendor/, var/cache/, node_modules/ files never reach token_get_all().
 # Keep aligned with extract_php_metadata.php:DEFAULT_EXCLUDE for parity when
-# users invoke the extractor manually for debugging.
+# users invoke the extractor manually for debugging. Dot-prefixed directories
+# (`.cache/`, `.phpunit/`, …) do NOT need an entry here: the extractor prunes
+# any hidden directory unconditionally, independently of this list.
 DEFAULT_EXCLUDE: tuple[str, ...] = (
     "vendor",
     "var/cache",
@@ -93,12 +105,53 @@ def _normalize_exclude(extra: Optional[tuple[str, ...]]) -> tuple[str, ...]:
     return tuple(out)
 
 
+def _resolve_extractor_timeout(explicit: Optional[int]) -> int:
+    """Explicit `timeout=` argument wins; else FR_SECURITY_EXTRACTOR_TIMEOUT
+    env var; else EXTRACTOR_TIMEOUT_SECONDS. Read at call time (not at import
+    / default-argument time) so a launcher-exported env var and per-test
+    monkeypatching both take effect — same pattern as recon_inventory's
+    FR_SECURITY_CONSOLE_CMD.
+    """
+    if explicit is not None:
+        return explicit
+    env_val = os.environ.get(EXTRACTOR_TIMEOUT_ENV)
+    if env_val and env_val.strip():
+        try:
+            parsed = int(env_val.strip())
+        except ValueError:
+            return EXTRACTOR_TIMEOUT_SECONDS
+        if parsed > 0:
+            return parsed
+    return EXTRACTOR_TIMEOUT_SECONDS
+
+
+# Per-run fail-fast latch (see `extractor_run_scope`). None outside a scope,
+# so direct callers and tests keep the old one-call-one-timeout behaviour.
+_EXTRACTOR_SCOPE: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "fr_security_extractor_scope", default=None,
+)
+EXTRACTOR_SKIPPED_AFTER_TIMEOUT = "skipped after earlier timeout"
+
+
+@contextlib.contextmanager
+def extractor_run_scope():
+    """Within the scope, the first extractor timeout makes every later
+    `run_extractor` call return `(None, EXTRACTOR_SKIPPED_AFTER_TIMEOUT)`
+    without spawning — a slow project costs one timeout, not one per kind.
+    Other failures (bad JSON, non-zero exit, no php) do not trip the latch."""
+    token = _EXTRACTOR_SCOPE.set({"timed_out": False})
+    try:
+        yield
+    finally:
+        _EXTRACTOR_SCOPE.reset(token)
+
+
 def run_extractor(
     plugin_root: Path,
     project_root: Path,
     kind: str,
     target: Path,
-    timeout: int = EXTRACTOR_TIMEOUT_SECONDS,
+    timeout: Optional[int] = None,
     *,
     exclude: Optional[tuple[str, ...]] = None,
     max_file_size: Optional[int] = None,
@@ -110,11 +163,18 @@ def run_extractor(
     The PHP extractor itself receives `--project-root=<project_root>` so it
     rejects any symlink that escapes the project tree.
 
+    `timeout`        — None (the default) resolves via
+                       FR_SECURITY_EXTRACTOR_TIMEOUT / EXTRACTOR_TIMEOUT_SECONDS
+                       (see `_resolve_extractor_timeout`); an explicit value
+                       always wins.
     `exclude`        — extra path prefixes (relative to project_root) appended
                        to DEFAULT_EXCLUDE. None == defaults only.
     `max_file_size`  — per-file byte cap; oversize files are skipped with
                        a stderr warning. None == DEFAULT_MAX_FILE_SIZE.
     """
+    scope = _EXTRACTOR_SCOPE.get()
+    if scope is not None and scope["timed_out"]:
+        return None, EXTRACTOR_SKIPPED_AFTER_TIMEOUT
     extractor = plugin_root / "bin" / "recon" / "extract_php_metadata.php"
     if not extractor.is_file():
         return None, f"extract_php_metadata.php missing at {extractor}"
@@ -124,6 +184,7 @@ def run_extractor(
         return None, f"path_outside_project_root: {e}"
     merged_exclude = _normalize_exclude(exclude)
     effective_max_size = DEFAULT_MAX_FILE_SIZE if max_file_size is None else max_file_size
+    effective_timeout = _resolve_extractor_timeout(timeout)
     cmd = [
         "php", "-d", f"memory_limit={EXTRACTOR_MEMORY_LIMIT}",
         str(extractor),
@@ -134,9 +195,11 @@ def run_extractor(
         str(target_safe),
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=effective_timeout)
     except subprocess.TimeoutExpired:
-        return None, f"extract_php_metadata --kind={kind} timed out after {timeout}s"
+        if scope is not None:
+            scope["timed_out"] = True
+        return None, f"extract_php_metadata --kind={kind} timed out after {effective_timeout}s"
     except FileNotFoundError:
         return None, "php executable not found on PATH"
     if proc.returncode != 0:

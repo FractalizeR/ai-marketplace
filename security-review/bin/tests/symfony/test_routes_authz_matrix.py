@@ -126,8 +126,10 @@ class RoutesAuthzMatrixSchemaInvariants(unittest.TestCase):
         )
 
     def test_each_item_has_contract_keys(self) -> None:
+        # `access_control_interpreted` is emitted only as `false`, when the
+        # security config could not be interpreted — never on this fixture.
         spec = recipe_symfony.RECON_BAGS_SCHEMA["stack"]["symfony"]["routes_authz_matrix"]
-        expected = spec.item_keys or frozenset()
+        expected = (spec.item_keys or frozenset()) - {"access_control_interpreted"}
         for item in (self.payload.items or []):
             self.assertEqual(
                 set(item.keys()), set(expected),

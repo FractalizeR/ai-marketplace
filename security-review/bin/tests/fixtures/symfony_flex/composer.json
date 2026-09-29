@@ -1,0 +1,19 @@
+{
+    "name": "fixture/symfony-flex",
+    "description": "Synthetic Flex-shaped Symfony fixture: multi-file framework config, when@test blocks, packages/test/ overrides",
+    "type": "project",
+    "require": {
+        "php": ">=8.2",
+        "symfony/framework-bundle": "^8.1",
+        "symfony/security-bundle": "^8.1",
+        "symfony/twig-bundle": "^8.1",
+        "symfony/messenger": "^8.1",
+        "symfony/lock": "^8.1",
+        "symfony/rate-limiter": "^8.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        }
+    }
+}

@@ -1,0 +1,48 @@
+security:
+    # https://symfony.com/doc/current/security.html#registering-the-user-hashing-passwords
+    password_hashers:
+        Symfony\Component\Security\Core\User\PasswordAuthenticatedUserInterface: 'auto'
+
+    providers:
+        app_user_provider:
+            entity:
+                class: App\Entity\User
+                property: email
+
+    firewalls:
+        dev:
+            # Ensure dev tools and static assets are always allowed
+            pattern: ^/(_profiler|_wdt|assets|build)/
+            security: false
+        main:
+            lazy: true
+            provider: app_user_provider
+            stateless: false
+            context: shared_ctx
+            form_login:
+                login_path: app_login
+                check_path: app_login
+                csrf_token_id: authenticate
+                password_parameter: _pass
+            login_throttling:
+                max_attempts: 3
+            remember_me:
+                secret: '%app.remember_secret%'
+                lifetime: 604800
+            logout: true
+            switch_user: true
+
+    # Note: Only the *first* matching rule is applied
+    access_control:
+        - { path: ^/admin, roles: ROLE_ADMIN }
+        - { path: ^/profile, roles: [ROLE_USER, ROLE_EDITOR], methods: [GET, POST] }
+        - { path: ^/internal, roles: PUBLIC_ACCESS, ips: [127.0.0.1, ::1] }
+
+when@test:
+    security:
+        password_hashers:
+            Symfony\Component\Security\Core\User\PasswordAuthenticatedUserInterface:
+                algorithm: auto
+                cost: 4 # Lowest possible value for bcrypt
+                time_cost: 3 # Lowest possible value for argon
+                memory_cost: 10 # Lowest possible value for argon

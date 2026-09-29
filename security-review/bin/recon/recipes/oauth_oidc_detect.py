@@ -19,7 +19,10 @@ Signals (any one suffices):
 2. `.env` file referencing `OAUTH_CLIENT_ID` / `OAUTH_CLIENT_SECRET` (or
    the underscored OIDC equivalents) — common when teams use a custom OAuth
    client without a library.
-3. `config/packages/knpu_oauth2_client.yaml` (Symfony KnpUOAuth2ClientBundle).
+3. `config/packages/knpu_oauth2_client.{yaml,yml,php,xml}` (Symfony
+   KnpUOAuth2ClientBundle — Symfony merges bundle config across all four
+   formats by extension alias, so a `.php`/`.xml`-authored config is still
+   a valid signal).
 4. Laravel Socialite `redirect=` patterns in `config/services.php`.
 
 Provider-specific integrations (auth0, aws-cognito, okta, keycloak,
@@ -41,6 +44,8 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+
+from recon.recipes._shared import basename_exists_any_ext
 
 
 # Composer package names that gate OAuth/OIDC detection.
@@ -134,7 +139,7 @@ def _env_signal(project_root: Path) -> bool:
 def _config_signal(project_root: Path) -> bool:
     """True iff a known OAuth/OIDC config file is present.
 
-    - Symfony: `config/packages/knpu_oauth2_client.yaml` (KnpUOAuth2ClientBundle).
+    - Symfony: `config/packages/knpu_oauth2_client.{yaml,yml,php,xml}` (KnpUOAuth2ClientBundle).
     - Laravel: `config/services.php` matching the canonical Socialite shape.
 
     The bare `'redirect' =>` key alone is ambiguous (Mailgun, Twilio, internal
@@ -144,7 +149,7 @@ def _config_signal(project_root: Path) -> bool:
       (b) the same file declares `client_id`, `client_secret`, and `redirect`
           together — the full Socialite provider block.
     """
-    if (project_root / "config" / "packages" / "knpu_oauth2_client.yaml").is_file():
+    if basename_exists_any_ext(project_root / "config" / "packages", "knpu_oauth2_client"):
         return True
     services = project_root / "config" / "services.php"
     if services.is_file():

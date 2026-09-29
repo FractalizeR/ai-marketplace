@@ -3,15 +3,15 @@
 Static-first architecture (rev 3.3):
 - Primary source for routes / forms / voters / serializer-groups / class metadata
   is `extract_php_metadata.php` (lexical, no PHP execution).
-- Console enrichment (`bin/console debug:router|debug:event-dispatcher|
-  debug:messenger|list`) is **optional** and merged on top of the static set.
+- Console enrichment (`bin/console debug:router`, `debug:config`) is
+  **optional** and merged on top of the static set.
   Disabled with `no_console=True`. On hostile / read-only repositories
   console must stay off — it boots Symfony Kernel = arbitrary code execution.
 
 build_inventory pipeline:
 1. attack_surface  — http routes (+ admin), CLI commands, messenger handlers, event listeners.
 2. data_access     — repositories (extends ServiceEntityRepository or *Repository.php).
-3. auth_layer      — abstract: kind/provider/mfa from security.yaml.
+3. auth_layer      — abstract: kind/provider/mfa from the `security` extension config.
 4. authz_usage     — call sites of denyAccessUnlessGranted / #[IsGranted] / #[Security] / etc.
 5. output_renderers — twig templates + per-controller render calls.
 6. serialization / file_operations / http_clients — grep with EXCLUDE_PATHS.
@@ -19,8 +19,13 @@ build_inventory pipeline:
 8. fintech_markers — composer deps + entity decimal columns.
 9. frontend_assets — JS bundles / Stimulus / importmap.
 10. recon_bags.stack.symfony.*: voters, forms, serializer_groups, twig_overrides,
-    doctrine_listeners, firewalls, trusted_config (framework.yaml request trust
+    doctrine_listeners, firewalls, trusted_config (framework request trust
     boundary), messenger_transports.
+
+Framework config (security / framework / twig extensions) is read from
+`debug:config <alias>` when the console runs, else from the single yaml file
+that carries it; config spread over php/xml/several files is reported as
+evidence the recipe could not interpret (see `_resolve_config`).
 """
 
 from __future__ import annotations
@@ -28,8 +33,9 @@ from __future__ import annotations
 import json
 import re
 import shlex
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from recon.types import (
     InventoryResult,
@@ -79,7 +85,10 @@ RECON_BAGS_SCHEMA: dict[str, dict[str, dict[str, SectionSpec]]] = {
             ),
             "twig_overrides": SectionSpec(
                 shape="scalar",
-                data_keys=frozenset({"autoescape_default", "raw_filter_count", "raw_filter_locations"}),
+                data_keys=frozenset({
+                    "autoescape_default", "raw_filter_count", "raw_filter_locations",
+                    "evidence_files",
+                }),
             ),
             "doctrine_listeners": SectionSpec(
                 shape="list",
@@ -87,21 +96,23 @@ RECON_BAGS_SCHEMA: dict[str, dict[str, dict[str, SectionSpec]]] = {
             ),
             "firewalls": SectionSpec(
                 shape="scalar",
-                data_keys=frozenset({"firewalls", "access_control"}),
+                data_keys=frozenset({"firewalls", "access_control", "evidence_files"}),
             ),
-            # Request trust boundary from config/packages/framework.yaml —
+            # Request trust boundary from the framework extension config —
             # trusted_proxies/hosts/headers govern the effective client IP/host
             # derived from X-Forwarded-* (spoofing → IP-authz / host-injection).
             # required=False: not every project configures it, and pre-4.x
             # CONTEXT.md without the bag must still validate.
             "trusted_config": SectionSpec(
                 shape="scalar",
-                data_keys=frozenset({"trusted_proxies", "trusted_hosts", "trusted_headers"}),
+                data_keys=frozenset({
+                    "trusted_proxies", "trusted_hosts", "trusted_headers", "evidence_files",
+                }),
                 required=False,
             ),
             "messenger_transports": SectionSpec(
                 shape="scalar",
-                data_keys=frozenset({"transports"}),
+                data_keys=frozenset({"transports", "evidence_files"}),
             ),
             "admin_authz_coverage": SectionSpec(
                 shape="scalar",
@@ -124,12 +135,15 @@ RECON_BAGS_SCHEMA: dict[str, dict[str, dict[str, SectionSpec]]] = {
             # multiple sources (#[IsGranted], denyAccessUnlessGranted, access_control,
             # voter wiring) to coexist per-route — workers diff this against admin
             # routes to detect missing protection.
+            # `access_control_interpreted: false` is emitted only when the
+            # security config could not be interpreted: the item's firewall /
+            # access_control layer is then unknown, not missing.
             "routes_authz_matrix": SectionSpec(
                 shape="list",
                 item_keys=frozenset({
                     "route_name", "file", "line", "methods", "path",
                     "effective_middleware", "matched_access_control", "firewall",
-                    "csrf_protection", "authz_evidence",
+                    "csrf_protection", "authz_evidence", "access_control_interpreted",
                 }),
                 required=False,
             ),
@@ -195,6 +209,7 @@ RECON_BAGS_SCHEMA: dict[str, dict[str, dict[str, SectionSpec]]] = {
 from recon.recipes._shared import (  # noqa: E402  (re-export)
     EXCLUDE_PATHS,
     expand_provider_implications,
+    has_hidden_dir_segment,
     is_excluded as _shared_is_excluded,
     to_relative as _shared_to_relative,
 )
@@ -222,21 +237,24 @@ from recon.recipes.aws_secrets_manager_detect import detect_aws_secrets_manager 
 from recon.recipes.vault_detect import detect_vault  # noqa: E402
 from recon.recipes.saml_detect import detect_saml  # noqa: E402
 from recon.recipes.webauthn_passkeys_detect import detect_webauthn_passkeys  # noqa: E402
+from recon.recipes._symfony_introspection import (  # noqa: E402
+    MESSENGER_SUBTREE_KEYS,
+    READ_MAX_BYTES,
+    SECURITY_SUBTREE_KEYS,
+    TRUSTED_SUBTREE_KEYS,
+    TWIG_SUBTREE_KEYS,
+    ConsoleSession,
+    find_config_evidence,
+    is_generated_config_reference,
+    redact_secret_value,
+    redact_stderr_secrets,
+    read_text_safe,
+)
 
 
 # Source-tree roots scanned for PHP. `templates/`, `config/`, `public/` are
 # scanned separately when needed; only `src/` and `app/` carry user-authored code.
 PHP_SCAN_ROOTS: tuple[str, ...] = ("src", "app")
-
-
-# Console probes: per rev 3.4 F-E.1 each command is independent — failure of
-# one does not skip the others.
-CONSOLE_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("debug_router", ("debug:router", "--format=json")),
-    ("debug_event_dispatcher", ("debug:event-dispatcher", "--format=json")),
-    ("debug_messenger", ("debug:messenger", "--format=json")),
-    ("list", ("list", "--format=json")),
-)
 
 
 # ---------------------------------------------------------------------------
@@ -453,26 +471,34 @@ def _list_php_files(project_root: Path) -> list[tuple[str, Path]]:
                 rel = resolved.relative_to(project_resolved).as_posix()
             except ValueError:
                 continue
-            if _is_excluded(rel, EXCLUDE_PATHS):
+            # The hidden-dir rule judges the walked path: `src -> .build/src` is still source.
+            if _is_excluded(rel, EXCLUDE_PATHS) or has_hidden_dir_segment(
+                f.relative_to(project_root).as_posix()
+            ):
                 continue
             out.append((rel, resolved))
     out.sort(key=lambda pair: pair[0])
     return out
 
 
-def _list_config_yaml_files(project_root: Path) -> list[tuple[str, Path]]:
-    """Return (rel_path, abs_path) pairs for *.yaml/*.yml under `config/`.
+_CONFIG_FILE_GLOBS: tuple[str, ...] = ("*.yaml", "*.yml", "*.php", "*.xml")
 
-    Used by secret-candidate scanning to surface yaml-resident credentials
+
+def _list_config_files(project_root: Path) -> list[tuple[str, Path]]:
+    """Return (rel_path, abs_path) pairs for *.yaml/*.yml/*.php/*.xml under
+    `config/` — every format Symfony loads configuration from.
+
+    Used by secret-candidate scanning to surface config-resident credentials
     (Symfony `parameters.*` blocks, embedded API keys in service definitions).
-    Mirrors `_list_php_files` symlink-containment logic.
+    Mirrors `_list_php_files` symlink-containment logic. Skips the generated
+    `config/reference.php` (IDE docs, no project values).
     """
     out: list[tuple[str, Path]] = []
     project_resolved = project_root.resolve()
     root = project_root / "config"
     if not root.is_dir():
         return out
-    for ext in ("*.yaml", "*.yml"):
+    for ext in _CONFIG_FILE_GLOBS:
         for f in root.rglob(ext):
             if not f.is_file():
                 continue
@@ -484,24 +510,23 @@ def _list_config_yaml_files(project_root: Path) -> list[tuple[str, Path]]:
                 rel = resolved.relative_to(project_resolved).as_posix()
             except ValueError:
                 continue
-            if _is_excluded(rel, EXCLUDE_PATHS):
+            # The hidden-dir rule judges the walked path: `src -> .build/src` is still source.
+            if _is_excluded(rel, EXCLUDE_PATHS) or has_hidden_dir_segment(
+                f.relative_to(project_root).as_posix()
+            ):
+                continue
+            if f.name == "reference.php" and is_generated_config_reference(
+                f.relative_to(root).as_posix(), _read_text_safe(resolved),
+            ):
                 continue
             out.append((rel, resolved))
     out.sort(key=lambda pair: pair[0])
     return out
 
 
-# Maximum file size to read for grep-style scanning (avoids OOM on huge files).
-GREP_MAX_BYTES = 1_000_000  # 1 MB
-
-
-def _read_text_safe(path: Path, max_bytes: int = GREP_MAX_BYTES) -> Optional[str]:
-    try:
-        if path.stat().st_size > max_bytes:
-            return None
-        return path.read_text(encoding="utf-8", errors="replace")
-    except (OSError, UnicodeError):
-        return None
+# Grep-style scans and config reads share one size cap and decoding rule.
+GREP_MAX_BYTES = READ_MAX_BYTES
+_read_text_safe = read_text_safe
 
 
 def _grep_files(
@@ -901,8 +926,9 @@ def collect_attack_surface(
     console_runner: "object",
     *,
     exclude: Optional[tuple[str, ...]] = None,
-) -> list[dict]:
-    """Build attack_surface items.
+    session: Optional[ConsoleSession] = None,
+) -> tuple[list[dict], list[str]]:
+    """Build attack_surface items. Returns (items, extractor_failures).
 
     `console_runner` is a `sandbox.ConsoleRunner`. Console enrichment runs only
     when its mode is not "disabled"; the runner already encodes WHERE the
@@ -913,15 +939,21 @@ def collect_attack_surface(
     `--console-cmd`), we emit a LOUD `coverage_gap:` warning so the auditor
     knows dynamic route enumeration was skipped — never a silent degrade.
 
-    Per-command console enrichment failures land in `warnings` (which the
-    utility surfaces via frontmatter). Per-section partial-status semantics
-    are out of S2 scope; the whole `attack_surface` is `status=ok` even
-    when console enrichment partially failed (static-collected items are
-    still authoritative for routes/cli/handlers/listeners).
+    Per-command console enrichment failures land in `warnings` only — they
+    don't downgrade the section, since static-collected items remain
+    authoritative for routes/cli/handlers/listeners either way. A STATIC
+    extractor call failing (timeout / non-zero / bad JSON) for the `routes`
+    or `class` kind is different: whole categories of items (all routes, or
+    all cli_command/message_handler/event_listener/http_route_admin) are then
+    silently absent, which used to leave the caller reporting `status=ok` with
+    a suspiciously small item count. `extractor_failures` surfaces each such
+    kind so the caller can mark the section `partial` with an
+    `extractor_failed: <kind>: <warning>` reason instead.
     """
     from recon import sandbox
 
     items: list[dict] = []
+    extractor_failures: list[str] = []
 
     # 1. http_route (atomic + admin).
     # Extractor now skips DEFAULT_EXCLUDE prefixes (vendor/, var/cache/, ...)
@@ -932,6 +964,7 @@ def collect_attack_surface(
     )
     if route_warn:
         warnings.append(route_warn)
+        extractor_failures.append(f"extractor_failed: routes: {route_warn}")
     else:
         sources_used.append("extract_php_metadata.php:routes")
         for r in routes_data.get("items", []):
@@ -947,6 +980,7 @@ def collect_attack_surface(
     fqn_to_file: dict[str, str] = {}
     if classes_warn:
         warnings.append(classes_warn)
+        extractor_failures.append(f"extractor_failed: class: {classes_warn}")
     elif classes_data:
         sources_used.append("extract_php_metadata.php:class")
         # fqn → file over ALL classes (pre-classification), so console
@@ -1036,8 +1070,10 @@ def collect_attack_surface(
 
     # 3. console enrichment (optional, environment-aware).
     if getattr(console_runner, "mode", "disabled") != "disabled":
+        if session is None:
+            session = ConsoleSession(console_runner, sources_used, warnings)
         _enrich_via_console(
-            project_root, items, sources_used, warnings, diff_files, console_runner,
+            project_root, items, sources_used, warnings, diff_files, session,
             fqn_to_file,
         )
     else:
@@ -1051,7 +1087,7 @@ def collect_attack_surface(
                 "enumeration NOT performed; static route set may be incomplete"
             )
 
-    return items
+    return items, extractor_failures
 
 
 def _route_item(
@@ -1108,31 +1144,24 @@ def _enrich_via_console(
     sources_used: list[str],
     warnings: list[str],
     diff_files: Optional[set[str]],
-    runner: "object",
+    session: ConsoleSession,
     fqn_to_file: Optional[dict[str, str]] = None,
 ) -> None:
-    """Run console probes via `runner` and fold their output into `items`.
-    Per-command failures are captured in `warnings`, not raised — degraded
-    gracefully.
+    """Run console probes via `session` and fold their output into `items`.
+    Per-command failures are captured in `warnings` (by the session), not
+    raised — degraded gracefully. The smoke probe is the session's, shared
+    with the config sections, so it runs once per inventory.
 
     SECURITY: caller must have decided that running console is safe and chosen
     the execution environment (`runner.mode != "disabled"`). This DOES boot the
     framework kernel = arbitrary code execution, possibly inside a container.
     """
-    from recon import sandbox
-
-    smoke_ok, smoke_warn = sandbox.try_console_smoke(runner)
-    if not smoke_ok:
-        warnings.append(smoke_warn or "console_smoke_failed: unknown")
+    if not session.ok:
         return
 
-    sources_used.append("console:smoke")
-
     # debug:router for additional routes.
-    out, warn = sandbox.run_console_command(runner, ["debug:router", "--format=json"])
-    if warn:
-        warnings.append(warn)
-    elif out is not None:
+    out = session.run(["debug:router", "--format=json"])
+    if out is not None:
         try:
             data = json.loads(out)
         except json.JSONDecodeError as e:
@@ -1180,19 +1209,6 @@ def _enrich_via_console(
                     "line": 0,
                 })
 
-    # debug:event-dispatcher / debug:messenger / list — currently we only
-    # record the data source; per-item reconciliation is out of S2 scope.
-    for label, args in (
-        ("console:debug_event_dispatcher", ["debug:event-dispatcher", "--format=json"]),
-        ("console:debug_messenger", ["debug:messenger", "--format=json"]),
-        ("console:list", ["list", "--format=json"]),
-    ):
-        out, warn = sandbox.run_console_command(runner, args)
-        if warn:
-            warnings.append(warn)
-        elif out is not None:
-            sources_used.append(label)
-
 
 # ---------------------------------------------------------------------------
 # data_access.
@@ -1215,8 +1231,13 @@ def collect_data_access(
     warnings: list[str],
     *,
     exclude: Optional[tuple[str, ...]] = None,
-) -> list[dict]:
-    """Repository / DAO classes — extends ServiceEntityRepository or matches *Repository.php."""
+) -> tuple[list[dict], Optional[str]]:
+    """Repository / DAO classes — extends ServiceEntityRepository or matches *Repository.php.
+
+    Returns (items, extractor_failure) — `extractor_failure` is the formatted
+    `extractor_failed: class: <warning>` reason when the extractor call itself
+    failed (timeout / non-zero / bad JSON), else None.
+    """
     from recon import sandbox
 
     items: list[dict] = []
@@ -1225,7 +1246,7 @@ def collect_data_access(
     )
     if classes_warn:
         warnings.append(classes_warn)
-        return items
+        return items, f"extractor_failed: class: {classes_warn}"
     sources_used.append("extract_php_metadata.php:class")
 
     for cls in classes_data.get("items", []):
@@ -1256,75 +1277,103 @@ def collect_data_access(
             "source": "extract_php_metadata.php:class",
             "touched_by_diff": _touched(file_rel, diff_files),
         })
-    return items
+    return items, None
 
 
 # ---------------------------------------------------------------------------
-# auth_layer + recon_bags.stack.symfony.firewalls (parsed from security.yaml).
+# auth_layer + recon_bags.stack.symfony.firewalls (the `security` extension).
 # ---------------------------------------------------------------------------
+
+
+_AUTH_LAYER_HINT = (
+    "The security config lives in files the recipe could not interpret without "
+    "the console (PHP/XML, several files, or a prod-only override). Read each file "
+    "in data.evidence_files and fill data with the schema keys: kind "
+    "(session|stateless|jwt|oauth), provider (first user provider name, or "
+    "unknown), mfa (true|false), summary (one line). Never copy secret values "
+    "(passwords, secrets, keys, DSN credentials) into CONTEXT.md."
+)
 
 
 def collect_auth_layer_and_firewalls(
     project_root: Path,
     warnings: list[str],
+    *,
+    security: Optional[_SecurityConfig] = None,
 ) -> tuple[Optional[SectionPayload], Optional[SectionPayload]]:
-    """Parse config/packages/security.yaml. Return (auth_layer, firewalls)."""
-    sec_file = project_root / "config" / "packages" / "security.yaml"
-    if not sec_file.is_file():
-        return (
-            SectionPayload(status="unknown", reason="security.yaml not found", source_files=[]),
-            SectionPayload(status="unknown", reason="security.yaml not found", source_files=[]),
-        )
-    text = _read_text_safe(sec_file)
-    if text is None:
-        return (
-            SectionPayload(status="unknown", reason="security.yaml unreadable", source_files=[]),
-            SectionPayload(status="unknown", reason="security.yaml unreadable", source_files=[]),
-        )
-    rel = sec_file.relative_to(project_root).as_posix()
+    """Return (auth_layer, firewalls) from the resolved `security` config."""
+    if security is None:
+        security = _resolve_security(project_root, None, warnings)
+    res, view = security.resolution, security.view
+    evidence = list(res.evidence)
 
-    firewalls = _drop_unemittable_keys(_parse_firewalls(text), rel_hint="firewalls",
-                                       warnings=warnings)
-    access_control = _drop_unemittable_keys(_parse_access_control(text),
-                                            rel_hint="access_control", warnings=warnings)
-    has_jwt = bool(re.search(r"jwt|lexik_jwt", text, re.I))
-    has_oauth = bool(re.search(r"oauth|knpu/oauth2", text, re.I))
-    stateless = any(fw.get("stateless") == "true" for fw in firewalls)
-    kind = "oauth" if has_oauth else ("jwt" if has_jwt else ("stateless" if stateless else "session"))
-    # provider name = the first key inside `security: -> providers:` (nested).
-    provider_name = _first_key_under_nested(text, ("security", "providers")) or "unknown"
+    if res.mode == "absent":
+        reason = _absent_reason("security")
+        return (
+            SectionPayload(status="unknown", reason=reason, source_files=[]),
+            SectionPayload(status="unknown", reason=reason, source_files=[]),
+        )
+
+    fw_data: dict = {}
+    if view is not None and view.firewalls:
+        fw_data["firewalls"] = view.firewalls
+    if view is not None and view.access_control:
+        fw_data["access_control"] = view.access_control
+
+    if res.mode == "uninterpreted":
+        return (
+            SectionPayload(
+                status="pending_enrichment",
+                enrichment_hint=_AUTH_LAYER_HINT,
+                data={"evidence_files": evidence},
+                source_files=evidence,
+            ),
+            SectionPayload(
+                status="partial",
+                reason=_uninterpreted_reason(res),
+                data={"evidence_files": evidence, **fw_data},
+                source_files=evidence,
+            ),
+        )
+
+    status = "partial" if res.env_gap else "ok"
+    if res.mode == "tree" and (fw_data or view.provider != "unknown"):
+        _note_unlocated(res, warnings)
+    via = "debug:config security" if res.mode == "tree" else Path(evidence[0]).name
     summary = (
-        f"{kind.title()} auth via security.yaml; provider={provider_name}; "
-        f"firewalls={len(firewalls)}; access_control rules={len(access_control)}"
+        f"{view.kind.title()} auth via {via}; provider={view.provider}; "
+        f"firewalls={len(view.firewalls)}; access_control rules={len(view.access_control)}"
     )
-
     auth_layer = SectionPayload(
-        status="ok",
+        status=status,
         data={
-            "kind": kind,
-            "provider": provider_name,
+            "kind": view.kind,
+            "provider": view.provider,
             "mfa": False,
             "summary": summary,
         },
-        source_files=[rel],
+        source_files=evidence,
     )
-    firewalls_payload_data: dict = {}
-    if firewalls:
-        firewalls_payload_data["firewalls"] = firewalls
-    if access_control:
-        firewalls_payload_data["access_control"] = access_control
-    if firewalls_payload_data:
+    if fw_data:
         firewalls_payload = SectionPayload(
-            status="ok",
-            data=firewalls_payload_data,
-            source_files=[rel],
+            status=status, data=fw_data, source_files=evidence, reason=res.env_gap,
+        )
+    elif res.env_gap:
+        # Empty in the console's env is not "none" when other-env overrides exist.
+        firewalls_payload = SectionPayload(
+            status="partial",
+            reason=res.env_gap,
+            data={"evidence_files": evidence},
+            source_files=evidence,
         )
     else:
         firewalls_payload = SectionPayload(
             status="none",
             reason="no firewalls or access_control declared",
-            source_files=[rel],
+            source_files=evidence,
         )
+    if res.env_gap:
+        auth_layer.reason = res.env_gap
     return auth_layer, firewalls_payload
 
 
@@ -1332,7 +1381,8 @@ def _framework_setting(text: str, sub_key: str) -> Optional[str]:
     """Value of `framework: -> sub_key:` from framework.yaml.
 
     Inline scalar (`trusted_proxies: '%env(TRUSTED_PROXIES)%'`) → its
-    inline-comment-stripped, quote-stripped string. List form — block
+    inline-comment-stripped, quote-stripped string. `[]`, `''`, `~`, `null`
+    → None (unset). List form — block
     (`trusted_headers:` then indented `- x-forwarded-for`) or inline flow
     (`['x-forwarded-for']`) — → the marker `"(list)"` (the bag is a hint; the
     worker reads the routed source_file for the exact items). Absent — or a
@@ -1367,6 +1417,10 @@ def _framework_setting(text: str, sub_key: str) -> Optional[str]:
             continue
         tail = _strip_inline_comment(m.group(1).strip()).strip()
         if tail:
+            # An empty list / string / null is the option left unset — the
+            # processed tree reports it as the default, not as a value.
+            if re.fullmatch(r"\[\s*\]|''|\"\"|~|null", tail, re.I):
+                return None
             # Inline flow-list → the same "(list)" marker as the block form.
             if tail.startswith("["):
                 return "(list)"
@@ -1383,37 +1437,83 @@ def _framework_setting(text: str, sub_key: str) -> Optional[str]:
     return None
 
 
-def collect_trusted_config(project_root: Path) -> SectionPayload:
-    """Parse config/packages/framework.yaml for the request trust boundary
-    (trusted_proxies / trusted_hosts / trusted_headers).
+def collect_trusted_config(
+    project_root: Path,
+    *,
+    session: Optional[ConsoleSession] = None,
+    warnings: Optional[list[str]] = None,
+) -> SectionPayload:
+    """Request trust boundary (trusted_proxies / trusted_hosts / trusted_headers)
+    from the `framework` extension config.
 
     Scalar bag `recon_bags.stack.symfony.trusted_config`, routed into W1 via
-    the `request_trust` concept (plan_waves) so a worker reads framework.yaml.
+    the `request_trust` concept (plan_waves) so a worker reads the config file.
     Status contract mirrors `firewalls`:
-      - file absent/unreadable → `unknown` (bag present in the skeleton, not
-        routed; `scalar_source_files` gates routing on status=="ok").
-      - ≥1 trusted_* key present → `ok` (data + source_files → routed).
-      - file present, no trusted_* key → `none` (safe default, nothing to review).
+      - no `framework:` config at all → `unknown` (bag present in the
+        skeleton, not routed; `scalar_source_files` routes ok|partial only).
+      - ≥1 trusted_* key → `ok` (data + source_files → routed); `partial`
+        when the keys sit in files the recipe cannot interpret.
+      - framework configured, no trusted_* key → `none` (safe default).
     See stacks/symfony/auth.md → "Request trust boundary".
     """
-    fw_file = project_root / "config" / "packages" / "framework.yaml"
-    if not fw_file.is_file():
-        return SectionPayload(status="unknown", reason="framework.yaml not found", source_files=[])
-    text = _read_text_safe(fw_file)
-    if text is None:
-        return SectionPayload(status="unknown", reason="framework.yaml unreadable", source_files=[])
-    rel = fw_file.relative_to(project_root).as_posix()
-    data: dict = {}
-    for key in ("trusted_proxies", "trusted_hosts", "trusted_headers"):
-        val = _framework_setting(text, key)
-        if val is not None:
-            data[key] = val
+    sink = warnings if warnings is not None else []
+
+    def tree_misses_static(tree: dict, yaml_texts, _evidence) -> bool:
+        # Only a non-default scalar the yaml sets can be compared: a "(list)"
+        # marker hides its items, and php/xml values are not parsed at all.
+        if elide_defaults(trusted_config_view_from_tree(tree)).settings:
+            return False
+        return any(
+            v != "(list)"
+            for _, text in yaml_texts
+            for v in elide_defaults(trusted_config_view_from_yaml_text(text)).settings.values()
+        )
+
+    res = _resolve_config(
+        project_root, session, "framework", TRUSTED_SUBTREE_KEYS, sink,
+        tree_misses_static=tree_misses_static,
+    )
+    if res.mode == "absent":
+        declared = _alias_declared(project_root, "framework")
+        if declared:
+            return SectionPayload(
+                status="none",
+                reason="no trusted_proxies/hosts/headers configured",
+                source_files=declared,
+            )
+        return SectionPayload(
+            status="unknown", reason=_absent_reason("framework"), source_files=[],
+        )
+    if res.mode == "uninterpreted":
+        merged: dict[str, str] = {}
+        for _, text in res.yaml_texts:
+            for k, v in trusted_config_view_from_yaml_text(text).settings.items():
+                merged.setdefault(k, v)
+        return SectionPayload(
+            status="partial",
+            reason=_uninterpreted_reason(res),
+            data={"evidence_files": res.evidence, **merged},
+            source_files=res.evidence,
+        )
+    if res.mode == "tree":
+        data = elide_defaults(trusted_config_view_from_tree(res.tree)).settings
+    else:
+        data = trusted_config_view_from_yaml_text(res.yaml_texts[0][1]).settings
     if data:
-        return SectionPayload(status="ok", data=data, source_files=[rel])
+        _note_unlocated(res, sink)
+        return SectionPayload(
+            status="partial" if res.env_gap else "ok", data=data, source_files=res.evidence,
+            reason=res.env_gap,
+        )
+    if res.env_gap:
+        return SectionPayload(
+            status="partial", reason=res.env_gap,
+            data={"evidence_files": res.evidence}, source_files=res.evidence,
+        )
     return SectionPayload(
         status="none",
         reason="no trusted_proxies/hosts/headers configured",
-        source_files=[rel],
+        source_files=res.evidence,
     )
 
 
@@ -1465,11 +1565,6 @@ def _first_key_under_nested(text: str, path: tuple[str, ...]) -> Optional[str]:
         if m:
             return m.group(1)
     return None
-
-
-def _first_key_under(text: str, top_key: str) -> Optional[str]:
-    """Backward-compat wrapper: top-level only (path of length 1)."""
-    return _first_key_under_nested(text, (top_key,))
 
 
 def _strip_inline_comment(s: str) -> str:
@@ -1540,49 +1635,11 @@ def _drop_unemittable_keys(
         for dropped in rule:
             if not yaml_emit.is_valid_key(dropped):
                 warnings.append(
-                    f"security.yaml {rel_hint}: unsupported key {dropped!r} dropped "
+                    f"security config {rel_hint}: unsupported key {dropped!r} dropped "
                     "(not representable in CONTEXT.md)"
                 )
         if clean:
             out.append(clean)
-    return out
-
-
-def _parse_firewalls(text: str) -> list[dict[str, str]]:
-    """Extract list of firewalls from `security: firewalls:` block.
-
-    Indent-relative: works with 2/4-space (or any consistent) indentation.
-    """
-    block = _enter_nested_block(text, ("security", "firewalls"))
-    if block is None:
-        return []
-    start_idx, firewalls_indent = block
-    lines = text.splitlines()
-    out: list[dict[str, str]] = []
-    cur_name: Optional[str] = None
-    cur: dict[str, str] = {}
-    name_indent: Optional[int] = None  # indent of `<firewall_name>:` lines
-    for raw in lines[start_idx:]:
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        indent = len(raw) - len(raw.lstrip(" "))
-        if indent <= firewalls_indent:
-            break
-        stripped = raw.strip()
-        if name_indent is None:
-            name_indent = indent
-        if indent == name_indent and stripped.endswith(":"):
-            if cur_name is not None:
-                out.append({"name": cur_name, **cur})
-            cur_name = stripped[:-1].strip()
-            cur = {}
-            continue
-        if indent > name_indent and ":" in stripped and cur_name is not None:
-            k, _, v = stripped.partition(":")
-            v = _strip_inline_comment(v.strip())
-            cur[k.strip()] = _strip_yaml_quotes(v)
-    if cur_name is not None:
-        out.append({"name": cur_name, **cur})
     return out
 
 
@@ -1682,6 +1739,709 @@ def _parse_access_control(text: str) -> list[dict[str, str]]:
     if cur_active:
         out.append(cur)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Normalized config views.
+#
+# The processed tree from `debug:config <alias>` and the frozen text parsers
+# above both normalize into the same whitelisted, string-valued views, so what
+# reaches CONTEXT.md does not depend on where it was read from. Views never
+# carry a raw tree; secret-like leaves are redacted on the way in.
+# ---------------------------------------------------------------------------
+
+
+# The CONTEXT.md key grammar has no `.`, so `<node>.<leaf>` renders with `__`.
+_NESTED_KEY_SEP = "__"
+
+# SecurityBundle firewall node options kept verbatim (string form).
+_FIREWALL_LEAF_KEYS = frozenset({
+    "pattern", "host", "methods", "security", "provider", "stateless", "lazy",
+    "context", "entry_point", "user_checker", "request_matcher",
+    "access_denied_url", "access_denied_handler", "required_badges",
+    "custom_authenticators",
+})
+
+# Every other firewall key is a factory / nested node rendered as presence
+# ("true"); of its children only these security-meaningful leaves survive.
+_FIREWALL_NESTED_LEAVES: dict[str, tuple[str, ...]] = {
+    "switch_user": ("role", "parameter"),
+    "login_throttling": ("max_attempts", "interval"),
+    "remember_me": ("lifetime", "secure"),
+    "logout": ("path",),
+    "access_token": ("token_handler",),
+}
+
+# SecurityBundle defaults as the processed tree reports them (string form).
+_FIREWALL_DEFAULTS: dict[str, frozenset[str]] = {
+    "security": frozenset({"true"}),
+    "stateless": frozenset({"false"}),
+    "lazy": frozenset({"false"}),
+    "methods": frozenset({"[]"}),
+    "required_badges": frozenset({"[]"}),
+    "custom_authenticators": frozenset({"[]"}),
+    "user_checker": frozenset({"security.user_checker"}),
+    f"switch_user{_NESTED_KEY_SEP}role": frozenset({"ROLE_ALLOWED_TO_SWITCH"}),
+    f"switch_user{_NESTED_KEY_SEP}parameter": frozenset({"_switch_user"}),
+    f"login_throttling{_NESTED_KEY_SEP}max_attempts": frozenset({"5"}),
+    f"login_throttling{_NESTED_KEY_SEP}interval": frozenset({"1 minute"}),
+    f"remember_me{_NESTED_KEY_SEP}lifetime": frozenset({"31536000"}),
+    f"remember_me{_NESTED_KEY_SEP}secure": frozenset({"auto"}),
+    f"logout{_NESTED_KEY_SEP}path": frozenset({"/logout"}),
+}
+
+# Keys whose yaml value may be a flow list; any other key keeps its raw text
+# (a `path:` / `pattern:` regex may legitimately start with `[`).
+_LIST_VALUED_KEYS = frozenset({"methods", "required_badges", "custom_authenticators", "roles", "ips"})
+
+# Literals that carry no secret even under a secret-like key.
+_NON_SECRET_LITERALS = frozenset({"", "~", "null", "true", "false"})
+
+
+def _redact(key: str, value: Any) -> Any:
+    if isinstance(value, str) and value.strip().lower() in _NON_SECRET_LITERALS:
+        return value
+    return redact_secret_value(key, value)
+
+
+def _canonical_list(items: list[str]) -> str:
+    """One element renders bare, several as `[a, b]` — the processed tree
+    cannot tell `roles: X` from `roles: [X]`, so neither side may."""
+    if not items:
+        return "[]"
+    if len(items) == 1:
+        return items[0]
+    return "[" + ", ".join(items) + "]"
+
+
+def _split_flow_list(raw: str) -> list[str]:
+    inner = raw.strip()[1:-1]
+    parts: list[str] = []
+    depth = 0
+    last = 0
+    for idx, ch in _iter_unquoted(inner):
+        if ch in "[{(":
+            depth += 1
+        elif ch in "]})":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            parts.append(inner[last:idx])
+            last = idx + 1
+    parts.append(inner[last:])
+    return [_strip_yaml_quotes(p.strip()) for p in parts if p.strip()]
+
+
+def _yaml_leaf(key: str, raw: str) -> str:
+    raw = _redact(key, raw)
+    if key in _LIST_VALUED_KEYS and raw.startswith("[") and raw.endswith("]"):
+        return _canonical_list(_split_flow_list(raw))
+    return raw
+
+
+def _tree_scalar(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    if isinstance(value, list):
+        return _canonical_list([_tree_scalar(v) for v in value])
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{k}: {_tree_scalar(v)}" for k, v in value.items()) + "}"
+    return str(value)
+
+
+def _tree_leaf(key: str, value: Any) -> Optional[str]:
+    """None — the option is unset: a processed tree spells that as null or an
+    empty collection, while the yaml side simply omits the key."""
+    if value is None or (isinstance(value, (list, dict)) and not value):
+        return None
+    return _tree_scalar(_redact(key, value))
+
+
+@dataclass
+class SecurityView:
+    kind: str
+    provider: str
+    firewalls: list[dict[str, str]]
+    access_control: list[dict[str, str]]
+    password_hasher: Optional[str]
+
+
+@dataclass
+class TrustedConfigView:
+    settings: dict[str, str]
+
+
+@dataclass
+class MessengerTransportView:
+    transports: list[dict[str, str]]
+    # Raw retry_strategy children per transport (yaml side only), so that
+    # `elide_defaults` can tell an explicitly-spelled default from a real change.
+    retry_values: dict[str, dict[str, str]] = field(default_factory=dict)
+
+
+@dataclass
+class TwigView:
+    autoescape_default: str
+
+
+def _security_kind(firewalls: list[dict[str, str]]) -> str:
+    keys: set[str] = set()
+    authenticators = ""
+    for fw in firewalls:
+        keys.update(fw)
+        authenticators += " " + fw.get("custom_authenticators", "")
+    if "oauth" in keys or re.search(r"oauth", authenticators, re.I):
+        return "oauth"
+    if keys & {"jwt", "access_token"} or re.search(r"jwt", authenticators, re.I):
+        return "jwt"
+    if any(fw.get("stateless") == "true" for fw in firewalls):
+        return "stateless"
+    return "session"
+
+
+@dataclass
+class _YamlChild:
+    key: str
+    inline: str
+    items: list[str] = field(default_factory=list)
+    children: dict[str, str] = field(default_factory=dict)
+
+
+def _yaml_firewall_children(text: str) -> list[tuple[str, list[_YamlChild]]]:
+    """Depth-aware walk of `security: firewalls:`: each firewall's options,
+    with the children nested under an option kept apart from it."""
+    block = _enter_nested_block(text, ("security", "firewalls"))
+    if block is None:
+        return []
+    start_idx, firewalls_indent = block
+    out: list[tuple[str, list[_YamlChild]]] = []
+    children: Optional[list[_YamlChild]] = None
+    name_indent: Optional[int] = None
+    child_indent: Optional[int] = None
+    grandchild_indent: Optional[int] = None
+    cur: Optional[_YamlChild] = None
+    for raw in text.splitlines()[start_idx:]:
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        if indent <= firewalls_indent:
+            break
+        stripped = raw.strip()
+        if name_indent is None:
+            name_indent = indent
+        if indent == name_indent and stripped.endswith(":"):
+            children = []
+            out.append((stripped[:-1].strip(), children))
+            child_indent = grandchild_indent = None
+            cur = None
+            continue
+        if children is None or indent <= name_indent:
+            continue
+        if child_indent is None:
+            child_indent = indent
+        if indent == child_indent:
+            if stripped.startswith("- "):
+                if cur is not None:
+                    cur.items.append(_clean_yaml_scalar(stripped[2:]))
+                continue
+            if ":" in stripped:
+                k, _, v = stripped.partition(":")
+                cur = _YamlChild(k.strip(), _strip_yaml_quotes(_strip_inline_comment(v.strip())))
+                children.append(cur)
+                grandchild_indent = None
+            continue
+        if cur is None:
+            continue
+        if stripped.startswith("- "):
+            cur.items.append(_clean_yaml_scalar(stripped[2:]))
+            continue
+        if grandchild_indent is None:
+            grandchild_indent = indent
+        if indent == grandchild_indent and ":" in stripped:
+            k, _, v = stripped.partition(":")
+            cur.children[k.strip()] = _clean_yaml_scalar(v)
+    return out
+
+
+def _firewall_from_yaml(name: str, children: list[_YamlChild]) -> dict[str, str]:
+    fw: dict[str, str] = {"name": name}
+    for ch in children:
+        if ch.key in _FIREWALL_LEAF_KEYS:
+            if not ch.inline and ch.items:
+                fw[ch.key] = _canonical_list([_redact(ch.key, i) for i in ch.items])
+            else:
+                fw[ch.key] = _yaml_leaf(ch.key, ch.inline)
+            continue
+        if ch.inline.lower() == "false":
+            continue
+        fw[ch.key] = "true"
+        nested = dict(ch.children)
+        if ch.inline.startswith("{"):
+            nested.update(_parse_flow_inline_kv(ch.inline))
+        for leaf in _FIREWALL_NESTED_LEAVES.get(ch.key, ()):
+            if leaf in nested:
+                fw[f"{ch.key}{_NESTED_KEY_SEP}{leaf}"] = _yaml_leaf(f"{ch.key}.{leaf}", nested[leaf])
+    return fw
+
+
+def _firewall_from_tree(name: str, node: dict) -> dict[str, str]:
+    fw: dict[str, str] = {"name": name}
+    for key, value in node.items():
+        if key in _FIREWALL_LEAF_KEYS:
+            rendered = _tree_leaf(key, value)
+            if rendered is not None:
+                fw[key] = rendered
+            continue
+        if value is None or value is False:
+            continue
+        fw[key] = "true"
+        if isinstance(value, dict):
+            for leaf in _FIREWALL_NESTED_LEAVES.get(key, ()):
+                rendered = _tree_leaf(f"{key}.{leaf}", value.get(leaf))
+                if rendered is not None:
+                    fw[f"{key}{_NESTED_KEY_SEP}{leaf}"] = rendered
+    return fw
+
+
+def _password_hasher_from_tree(hashers: Any) -> Optional[str]:
+    if not isinstance(hashers, dict):
+        return None
+    for value in hashers.values():
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            algo = value.get("algorithm") or value.get("id")
+            return str(algo) if algo else None
+        return None
+    return None
+
+
+def security_view_from_yaml_text(text: str, warnings: Optional[list[str]] = None) -> SecurityView:
+    sink = warnings if warnings is not None else []
+    firewalls = _drop_unemittable_keys(
+        [_firewall_from_yaml(name, ch) for name, ch in _yaml_firewall_children(text)],
+        rel_hint="firewalls", warnings=sink,
+    )
+    access_control = _drop_unemittable_keys(
+        [{k: _yaml_leaf(k, v) for k, v in rule.items()} for rule in _parse_access_control(text)],
+        rel_hint="access_control", warnings=sink,
+    )
+    return SecurityView(
+        kind=_security_kind(firewalls),
+        provider=_first_key_under_nested(text, ("security", "providers")) or "unknown",
+        firewalls=firewalls,
+        access_control=access_control,
+        password_hasher=_parse_password_hasher(text),
+    )
+
+
+def security_view_from_tree(tree: dict, warnings: Optional[list[str]] = None) -> SecurityView:
+    sink = warnings if warnings is not None else []
+    fw_nodes = tree.get("firewalls") if isinstance(tree.get("firewalls"), dict) else {}
+    firewalls = _drop_unemittable_keys(
+        [_firewall_from_tree(name, node) for name, node in fw_nodes.items() if isinstance(node, dict)],
+        rel_hint="firewalls", warnings=sink,
+    )
+    rules = tree.get("access_control") if isinstance(tree.get("access_control"), list) else []
+    access_control = _drop_unemittable_keys(
+        [
+            {k: r for k, v in rule.items() if (r := _tree_leaf(k, v)) is not None}
+            for rule in rules if isinstance(rule, dict)
+        ],
+        rel_hint="access_control", warnings=sink,
+    )
+    providers = tree.get("providers") if isinstance(tree.get("providers"), dict) else {}
+    return SecurityView(
+        kind=_security_kind(firewalls),
+        provider=next(iter(providers), "unknown"),
+        firewalls=firewalls,
+        access_control=access_control,
+        password_hasher=_password_hasher_from_tree(tree.get("password_hashers")),
+    )
+
+
+# FrameworkBundle defaults for the trusted_* options across supported
+# versions: env-backed placeholders (7.2+) and the older header list.
+_TRUSTED_DEFAULTS: dict[str, frozenset[tuple[str, ...]]] = {
+    "trusted_proxies": frozenset({("%env(default::SYMFONY_TRUSTED_PROXIES)%",)}),
+    "trusted_hosts": frozenset({("%env(default::SYMFONY_TRUSTED_HOSTS)%",)}),
+    "trusted_headers": frozenset({
+        ("%env(default::SYMFONY_TRUSTED_HEADERS)%",),
+        ("x-forwarded-for", "x-forwarded-port", "x-forwarded-proto"),
+    }),
+}
+
+
+def trusted_config_view_from_yaml_text(text: str) -> TrustedConfigView:
+    settings: dict[str, str] = {}
+    for key in TRUSTED_SUBTREE_KEYS:
+        val = _framework_setting(text, key)
+        if val is not None:
+            settings[key] = val
+    return TrustedConfigView(settings)
+
+
+def trusted_config_view_from_tree(tree: dict) -> TrustedConfigView:
+    settings: dict[str, str] = {}
+    for key in TRUSTED_SUBTREE_KEYS:
+        value = tree.get(key)
+        if value is None or value == "" or (isinstance(value, (list, dict)) and not value):
+            continue
+        if isinstance(value, list):
+            # The "(list)" marker (as `_framework_setting` renders a yaml list)
+            # hides the items, so a default list has to be dropped here.
+            if tuple(_tree_scalar(v) for v in value) in _TRUSTED_DEFAULTS.get(key, frozenset()):
+                continue
+            settings[key] = "(list)"
+        else:
+            settings[key] = _tree_scalar(value)
+    return TrustedConfigView(settings)
+
+
+_MESSENGER_RETRY_DEFAULTS: dict[str, frozenset[str]] = {
+    "service": frozenset({"null", "~", ""}),
+    "max_retries": frozenset({"3"}),
+    "delay": frozenset({"1000"}),
+    "multiplier": frozenset({"2"}),
+    "max_delay": frozenset({"0"}),
+    "jitter": frozenset({"0.1"}),
+}
+
+
+def _retry_is_default(values: dict[str, str]) -> bool:
+    return all(
+        v in _MESSENGER_RETRY_DEFAULTS.get(k, frozenset()) for k, v in values.items()
+    )
+
+
+def _yaml_messenger_retry_values(text: str) -> dict[str, dict[str, str]]:
+    """`retry_strategy` children per transport, from the same block
+    `_parse_messenger_transports` reads."""
+    block = _enter_nested_block(text, ("framework", "messenger", "transports"))
+    if block is None:
+        return {}
+    start_idx, transports_indent = block
+    out: dict[str, dict[str, str]] = {}
+    name_indent: Optional[int] = None
+    cur_name: Optional[str] = None
+    retry_indent: Optional[int] = None
+    child_indent: Optional[int] = None
+    for raw in text.splitlines()[start_idx:]:
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        if indent <= transports_indent:
+            break
+        stripped = raw.strip()
+        if name_indent is None:
+            name_indent = indent
+        if indent == name_indent:
+            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:", stripped)
+            cur_name = m.group(1) if m else None
+            retry_indent = child_indent = None
+            continue
+        if cur_name is None:
+            continue
+        if retry_indent is not None and indent > retry_indent:
+            if child_indent is None:
+                child_indent = indent
+            if indent == child_indent and ":" in stripped:
+                k, _, v = stripped.partition(":")
+                out[cur_name][k.strip()] = _clean_yaml_scalar(v)
+            continue
+        retry_indent = None
+        if stripped.startswith("retry_strategy:"):
+            _, _, v = stripped.partition(":")
+            inline = _strip_inline_comment(v.strip())
+            out[cur_name] = dict(_parse_flow_inline_kv(inline)) if inline.startswith("{") else {}
+            retry_indent = indent
+            child_indent = None
+    return out
+
+
+def messenger_view_from_yaml_text(text: str) -> MessengerTransportView:
+    return MessengerTransportView(
+        transports=_parse_messenger_transports(text),
+        retry_values=_yaml_messenger_retry_values(text),
+    )
+
+
+def messenger_view_from_tree(tree: dict) -> MessengerTransportView:
+    messenger = tree.get("messenger") if isinstance(tree.get("messenger"), dict) else {}
+    nodes = messenger.get("transports") if isinstance(messenger.get("transports"), dict) else {}
+    transports: list[dict[str, str]] = []
+    for name, node in nodes.items():
+        if not isinstance(node, dict):
+            continue
+        # The DSN is classified and dropped here — it never reaches the view.
+        item = {"name": name, "dsn_type": _classify_dsn(str(node.get("dsn") or ""))}
+        retry = node.get("retry_strategy")
+        retry_values = (
+            {k: _tree_scalar(v) for k, v in retry.items()} if isinstance(retry, dict) else {}
+        )
+        item["retry_strategy"] = "default" if _retry_is_default(retry_values) else "configured"
+        serializer = node.get("serializer")
+        if serializer:
+            item["serializer"] = _tree_scalar(serializer)
+        transports.append(item)
+    return MessengerTransportView(transports=transports)
+
+
+def twig_view_from_yaml_text(text: str) -> Optional[TwigView]:
+    """None when this file does not set `autoescape`."""
+    v = _yaml_value_at(text, "twig", "autoescape")
+    return TwigView(v) if v is not None else None
+
+
+def twig_view_from_tree(tree: dict) -> TwigView:
+    # TwigBundle 8 dropped the option; an absent key means the "name" default.
+    v = tree.get("autoescape")
+    return TwigView("name" if v is None else _tree_scalar(v))
+
+
+def elide_defaults(view):
+    """Drop values equal to the bundle default, so a tree (which spells out
+    every default) and a yaml file (which spells out only what the author
+    wrote) compare equal."""
+    if isinstance(view, SecurityView):
+        return replace(
+            view,
+            firewalls=[
+                {k: v for k, v in fw.items() if v not in _FIREWALL_DEFAULTS.get(k, frozenset())}
+                for fw in view.firewalls
+            ],
+            access_control=[
+                {k: v for k, v in rule.items() if v != "[]"} for rule in view.access_control
+            ],
+        )
+    if isinstance(view, TrustedConfigView):
+        return TrustedConfigView({
+            k: v for k, v in view.settings.items()
+            if (v,) not in _TRUSTED_DEFAULTS.get(k, frozenset())
+        })
+    if isinstance(view, MessengerTransportView):
+        out: list[dict[str, str]] = []
+        for t in view.transports:
+            item = dict(t)
+            retry = item.get("retry_strategy")
+            if retry == "default" or (
+                retry == "configured"
+                and item.get("name") in view.retry_values
+                and _retry_is_default(view.retry_values[item["name"]])
+            ):
+                item.pop("retry_strategy")
+            out.append(item)
+        return MessengerTransportView(transports=out)
+    return view
+
+
+# ---------------------------------------------------------------------------
+# Config resolution: console tree → single yaml file → evidence only.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _ConfigResolution:
+    """Where an extension's config came from.
+
+    mode:
+      tree          — `debug:config <alias>` (authoritative for the console's env).
+      yaml          — exactly one yaml evidence file, no prod-only override:
+                      the frozen text parser reads it.
+      uninterpreted — evidence exists but is php/xml, spread over several
+                      files, overridden for prod only, or the console's tree
+                      does not reflect it.
+      absent        — no file under config/** carries the section's keys.
+    `env_gap` holds the `config_env_*` warning(s) when the tree came from an
+    env whose view differs from production (prod-only overrides it did not
+    load, or dev-only overrides it did).
+    """
+
+    alias: str
+    mode: str
+    evidence: list[str]
+    tree: Optional[dict] = None
+    yaml_texts: list[tuple[str, str]] = field(default_factory=list)
+    env_gap: Optional[str] = None
+    # The console answered, but its tree lacks what the evidence declares.
+    tree_mismatch: bool = False
+
+
+def _alias_declared(project_root: Path, alias: str) -> list[str]:
+    return find_config_evidence(project_root, alias, ()).files
+
+
+_BUNDLE_ALIASES: dict[str, str] = {
+    "FrameworkBundle": "framework",
+    "SecurityBundle": "security",
+    "TwigBundle": "twig",
+}
+
+
+_BUNDLES_MAP_RE = re.compile(
+    r"^\s*<\?php\s*(?:declare\s*\([^)]*\)\s*;\s*)?return\s*\[(?P<body>.*)\]\s*;\s*$", re.S,
+)
+_BUNDLE_ENTRY = r"\\?[\w\\]+::class\s*=>\s*\[[^\[\]]*\]"
+_BUNDLES_BODY_RE = re.compile(rf"\s*(?:{_BUNDLE_ENTRY}\s*,\s*)*(?:{_BUNDLE_ENTRY}\s*,?\s*)?")
+
+
+def _strip_php_comments(text: str) -> str:
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return re.sub(r"(?m)(?://|#(?!\[)).*$", "", text)
+
+
+def _registered_aliases(project_root: Path) -> Optional[frozenset[str]]:
+    """Extension aliases whose bundle `config/bundles.php` registers, or None
+    when the file is absent or not a plain literal `return [Bundle::class =>
+    [...], ...];` map (array_merge, require, variables…): then the registered
+    set is unknown and every alias is asked quietly."""
+    text = _read_text_safe(project_root / "config" / "bundles.php")
+    if text is None:
+        return None
+    m = _BUNDLES_MAP_RE.match(_strip_php_comments(text))
+    if m is None:
+        return None
+    body = m.group("body")
+    if not _BUNDLES_BODY_RE.fullmatch(body):
+        return None
+    return frozenset(
+        alias for bundle, alias in _BUNDLE_ALIASES.items()
+        if re.search(rf"\b{bundle}::class\b", body)
+    )
+
+
+def _env_gaps(session: ConsoleSession, ev, alias: str, warnings: list[str]) -> Optional[str]:
+    if not (ev.prod_override or ev.dev_override):
+        return None
+    env = session.kernel_environment()
+    gaps: list[str] = []
+    if ev.prod_override and env != "prod":
+        gap = f"config_env_{env or 'unknown'}_only: {alias}"
+        gaps.append(gap)
+        warnings.append(f"{gap} — prod-only overrides exist that the console did not load")
+    if ev.dev_override and env in ("dev", None):
+        gap = f"config_env_dev_overrides: {alias}"
+        gaps.append(gap)
+        warnings.append(f"{gap} — dev-only overrides shape the console's tree")
+    return "; ".join(gaps) or None
+
+
+def _resolve_config(
+    project_root: Path,
+    session: Optional[ConsoleSession],
+    alias: str,
+    subtree_keys: tuple[str, ...],
+    warnings: list[str],
+    *,
+    tree_misses_static: Optional[Callable[[dict, list[tuple[str, str]], list[str]], bool]] = None,
+) -> _ConfigResolution:
+    """`tree_misses_static(tree, yaml_texts, evidence)` — True when the console
+    answered but its tree lacks what the static evidence declares (e.g.
+    prod-only rules under a dev console): "found but not understood"."""
+    ev = find_config_evidence(project_root, alias, subtree_keys)
+    yaml_texts: list[tuple[str, str]] = []
+    for rel in ev.files:
+        if rel.endswith((".yaml", ".yml")):
+            text = _read_text_safe(project_root / rel)
+            if text is not None:
+                yaml_texts.append((rel, text))
+
+    tree: Optional[dict] = None
+    env_gap: Optional[str] = None
+    if session is not None:
+        # Evidence never gates the console: config in forms the static
+        # heuristic misses (MicroKernel, bundle prepends) still reaches it.
+        registered = _registered_aliases(project_root)
+        if registered is None or alias in registered:
+            tree = session.extension_config(alias, quiet=registered is None)
+    if tree is not None:
+        env_gap = _env_gaps(session, ev, alias, warnings)
+        if not ev.files and ev.dev_files and session.kernel_environment() == "dev":
+            # Configured only for dev and read in dev: those files are the source.
+            return _ConfigResolution(alias, "tree", list(ev.dev_files), tree, [], env_gap)
+        if not (ev.files and tree_misses_static and tree_misses_static(tree, yaml_texts, ev.files)):
+            return _ConfigResolution(alias, "tree", ev.files, tree, yaml_texts, env_gap)
+        return _ConfigResolution(
+            alias, "uninterpreted", ev.files, None, yaml_texts, env_gap, tree_mismatch=True,
+        )
+    if not ev.files:
+        return _ConfigResolution(alias, "absent", [])
+    if len(ev.files) == 1 and len(yaml_texts) == 1 and not ev.prod_override:
+        return _ConfigResolution(alias, "yaml", ev.files, None, yaml_texts)
+    return _ConfigResolution(alias, "uninterpreted", ev.files, None, yaml_texts)
+
+
+def _note_unlocated(res: _ConfigResolution, warnings: list[str]) -> None:
+    """A tree section with content but no located file routes nowhere."""
+    if res.mode == "tree" and not res.evidence:
+        msg = f"config_source_files_not_located: {res.alias}"
+        if msg not in warnings:
+            warnings.append(msg)
+
+
+def _absent_reason(alias: str) -> str:
+    return f"no {alias} config in scanned config/**"
+
+
+def _uninterpreted_reason(res: _ConfigResolution) -> str:
+    if res.tree_mismatch:
+        return (
+            f"{res.alias} config in source_files is missing from the console's tree "
+            f"({res.env_gap or 'not loaded in its env'}); read source_files"
+        )
+    return (
+        f"{res.alias} config not interpreted without the console (php/xml, several "
+        "files, or a prod-only override); read source_files"
+    )
+
+
+@dataclass
+class _SecurityConfig:
+    resolution: _ConfigResolution
+    # tree / yaml: the interpreted view. uninterpreted: whatever the frozen
+    # parser got from the yaml evidence files (possibly empty). absent: None.
+    view: Optional[SecurityView]
+
+    @property
+    def interpreted(self) -> bool:
+        return self.resolution.mode in ("tree", "yaml")
+
+
+_SECURITY_RULE_KEYS: tuple[str, ...] = ("firewalls", "access_control")
+
+
+def _resolve_security(
+    project_root: Path, session: Optional[ConsoleSession], warnings: list[str],
+) -> _SecurityConfig:
+    def tree_misses_static(tree: dict, _yaml_texts, _evidence) -> bool:
+        return not (tree.get("firewalls") or tree.get("access_control")) and bool(
+            find_config_evidence(project_root, "security", _SECURITY_RULE_KEYS).files
+        )
+
+    res = _resolve_config(
+        project_root, session, "security", SECURITY_SUBTREE_KEYS, warnings,
+        tree_misses_static=tree_misses_static,
+    )
+    if res.mode == "tree":
+        view = elide_defaults(security_view_from_tree(res.tree, warnings))
+        if not res.evidence and not (view.firewalls or view.access_control):
+            # A registered bundle with nothing configured: the tree is defaults only.
+            return _SecurityConfig(_ConfigResolution("security", "absent", []), None)
+        return _SecurityConfig(res, view)
+    if res.mode == "yaml":
+        return _SecurityConfig(res, security_view_from_yaml_text(res.yaml_texts[0][1], warnings))
+    if res.mode == "uninterpreted":
+        views = [security_view_from_yaml_text(text, warnings) for _, text in res.yaml_texts]
+        firewalls = [fw for v in views for fw in v.firewalls]
+        return _SecurityConfig(res, SecurityView(
+            kind=_security_kind(firewalls),
+            provider=next((v.provider for v in views if v.provider != "unknown"), "unknown"),
+            firewalls=firewalls,
+            access_control=[rule for v in views for rule in v.access_control],
+            password_hasher=next((v.password_hasher for v in views if v.password_hasher), None),
+        ))
+    return _SecurityConfig(res, None)
 
 
 # ---------------------------------------------------------------------------
@@ -1865,16 +2625,19 @@ def collect_grep_section(
 # ---------------------------------------------------------------------------
 
 
+# Every pattern captures the secret itself as `value`; a vendor prefix stays
+# outside it so the masked snippet still shows what kind of credential it is.
 _SECRET_CRED_REGEXES = [
-    (re.compile(r"sk_live_[A-Za-z0-9_-]{8,}"), "stripe_live_key"),
-    (re.compile(r"sk_test_[A-Za-z0-9_-]{8,}"), "stripe_test_key"),
-    (re.compile(r"AIza[A-Za-z0-9_-]{20,}"), "google_api_key"),
-    (re.compile(r"AKIA[A-Z0-9]{16}"), "aws_access_key"),
-    (re.compile(r"\bxox[bpoa]-[A-Za-z0-9-]{10,}"), "slack_token"),
+    (re.compile(r"sk_live_(?P<value>[A-Za-z0-9_-]{8,})"), "stripe_live_key"),
+    (re.compile(r"sk_test_(?P<value>[A-Za-z0-9_-]{8,})"), "stripe_test_key"),
+    (re.compile(r"AIza(?P<value>[A-Za-z0-9_-]{20,})"), "google_api_key"),
+    (re.compile(r"AKIA(?P<value>[A-Z0-9]{16})"), "aws_access_key"),
+    (re.compile(r"\bxox[bpoa]-(?P<value>[A-Za-z0-9-]{10,})"), "slack_token"),
 ]
 _SECRET_REGEXES = _SECRET_CRED_REGEXES + [
-    (re.compile(r"['\"](?:api_?key|secret|password|token)['\"]\s*=>\s*['\"][^'\"]{8,}['\"]"),
-     "key_value_pair"),
+    (re.compile(
+        r"['\"](?:api_?key|secret|password|token)['\"]\s*=>\s*['\"](?P<value>[^'\"]{8,})['\"]"
+    ), "key_value_pair"),
 ]
 # YAML scanner uses only credential-prefix patterns; the PHP-arrow `=>` form
 # does not occur in yaml. Adding a yaml-style `key: value` pattern would flag
@@ -1883,6 +2646,105 @@ _SECRET_REGEXES = _SECRET_CRED_REGEXES + [
 # checklists, not the static recipe.
 _SECRET_REGEXES_YAML = _SECRET_CRED_REGEXES
 _SECRETS_CANDIDATES_CAP = 50
+
+
+# Snippet masking. A candidate line reaches the recon agent, whose job is to
+# tell a real secret from a placeholder — so values that carry that signal
+# stay visible, and every credential-shaped value on the line is masked:
+#   masked    — vendor-key tails (a known vendor prefix such as `sk_live_`
+#               is kept in front of any masked value); whole URL userinfo
+#               (`scheme://<redacted:N>@host`, token-only and `KEY:DOMAIN`
+#               forms included); the value after a secret-like key (`=>`, `:`,
+#               `=`), the argument of a `->set*Password|Secret|Token|Key(…)`
+#               call, and any other quoted literal of ≥ 20 token characters
+#               mixing letters and digits.
+#   visible   — `%env(...)%` / `%param%`, empty values, obvious placeholders
+#               (whole value: `changeme`, `secret`, `xxx`, `<…>`, `***`, `your_…`, …),
+#               values of lookalike keys (`password_parameter`, `csrf_token_id`) and
+#               unquoted code (`$var`, calls, `Class::CONST`, CONSTANT, literals).
+# The key must END in a secret word: `password_parameter`, `csrf_token_id`,
+# `token_provider`, `*_path`, `*_route`, `*_name` … name something else.
+_SNIPPET_KEY_RE = re.compile(
+    r"(?i)(?<![\w-])(?P<qk>['\"]?)(?P<key>[\w.-]*?"
+    r"(?:api_?key|secret(?:_?key)?|access_?key|auth_?key|signing_?key|encryption_?key"
+    r"|private_?key|password|passphrase|passwd|pwd|token|dsn|credentials?))"
+    r"(?P=qk)(?P<sep>\s*(?:=>|:|=)\s*)"
+    r"(?P<value>\"[^\"]*\"|'[^']*'|[^\s,;)\]}{]+)"
+)
+# Exact key names that end in a secret word but are Symfony option names whose
+# values are ids / service references, not credentials.
+_SNIPPET_LOOKALIKE_KEYS = frozenset({"access_token", "csrf_token"})
+_SNIPPET_SETTER_RE = re.compile(
+    r"(?i)->set\w*(?:password|secret|token|key|credential)\w*\(\s*(?P<value>\"[^\"]*\"|'[^']*')"
+)
+_SNIPPET_LONG_LITERAL_RE = re.compile(r"(?P<q>['\"])(?P<inner>[A-Za-z0-9+/_=.\-]{20,})(?P=q)")
+_SNIPPET_USERINFO_RE = re.compile(r"(?i)[a-z][a-z0-9+.-]*://(?P<userinfo>[^@/\s'\"]+)@")
+# Whole-value placeholders (after stripping non-alphanumeric decoration such as
+# quotes, dashes, brackets). Letters only, so `todo-set-real-one-2024` or
+# `example9f8e` are NOT placeholders and get masked.
+_SNIPPET_PLACEHOLDER_RE = re.compile(
+    r"(?i)(?:change[-_ ]?me(?:[-_ ][a-z]+){0,3}|secret|password|passwd|x{3,}|todo|tbd|dummy"
+    r"|example|placeholder|null|none|true|false|your[-_][a-z_-]{1,24})"
+)
+_SNIPPET_DECORATED_PLACEHOLDER_RE = re.compile(r"\*+|<[^<>]*>|~|\.{3}")
+# Kept in front of a masked span: it names the credential type for the classifier.
+_SNIPPET_VENDOR_PREFIX_RE = re.compile(r"sk_live_|sk_test_|AIza|AKIA|xox[bpoa]-|ghp_|gho_|github_pat_|glpat-|SG\.")
+_SNIPPET_CODE_RE = re.compile(r"^(?:\$|[\w\\]+\s*\(|[\w\\]+::|[A-Z_][A-Z0-9_]*$|\d+$)|->|\(")
+
+
+def _snippet_value_visible(value: str, *, quoted: bool) -> bool:
+    inner = value.strip()
+    if not inner or re.fullmatch(r"%(?:env\([^)]*\)|[\w.\-]+)%", inner):
+        return True
+    if _SNIPPET_DECORATED_PLACEHOLDER_RE.fullmatch(inner):
+        return True
+    core = re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9]+$", "", inner)
+    if core and _SNIPPET_PLACEHOLDER_RE.fullmatch(core):
+        return True
+    return not quoted and bool(_SNIPPET_CODE_RE.search(inner))
+
+
+def _mask_secret_snippet(line: str) -> str:
+    spans: list[tuple[int, int]] = []
+
+    def add_value(m: re.Match, group: str = "value") -> None:
+        start, end = m.span(group)
+        value = line[start:end]
+        if value[:1] in ("'", '"') and len(value) >= 2 and value[-1] == value[0]:
+            start, end, quoted = start + 1, end - 1, True
+        else:
+            quoted = False
+        if not _snippet_value_visible(line[start:end], quoted=quoted):
+            spans.append((start, end))
+
+    for pat, _ in _SECRET_CRED_REGEXES:
+        spans.extend(m.span("value") for m in pat.finditer(line))
+    for m in _SNIPPET_USERINFO_RE.finditer(line):
+        if "%" not in m.group("userinfo"):
+            spans.append(m.span("userinfo"))
+    for m in _SNIPPET_KEY_RE.finditer(line):
+        if m.group("key").lower() not in _SNIPPET_LOOKALIKE_KEYS:
+            add_value(m)
+    for m in _SNIPPET_SETTER_RE.finditer(line):
+        add_value(m)
+    for m in _SNIPPET_LONG_LITERAL_RE.finditer(line):
+        inner = m.group("inner")
+        if re.search(r"\d", inner) and re.search(r"[A-Za-z]", inner):
+            add_value(m, "inner")
+
+    merged: list[list[int]] = []
+    for start, end in sorted(spans):
+        prefix = _SNIPPET_VENDOR_PREFIX_RE.match(line, start)
+        if prefix and prefix.end() < end:
+            start = prefix.end()
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    out = line
+    for start, end in reversed(merged):
+        out = f"{out[:start]}<redacted:{end - start}>{out[end:]}"
+    return out
 
 
 def _scan_secrets_in_files(
@@ -1904,7 +2766,7 @@ def _scan_secrets_in_files(
                 m = pat.search(line)
                 if m is None:
                     continue
-                snippet = line.strip()[:120]
+                snippet = _mask_secret_snippet(line.strip())[:120]
                 candidates.append({
                     "file": rel,
                     "line": lineno,
@@ -1919,12 +2781,17 @@ def collect_secrets(
     project_root: Path,
     files: list[tuple[str, Path]],
     warnings: list[str],
+    *,
+    security: "Optional[_SecurityConfig]" = None,
 ) -> SectionPayload:
     candidates: list[dict] = []
     capped = _scan_secrets_in_files(files, _SECRET_REGEXES, candidates)
     if not capped:
-        yaml_files = _list_config_yaml_files(project_root)
-        capped = _scan_secrets_in_files(yaml_files, _SECRET_REGEXES_YAML, candidates)
+        for rel, abs_path in _list_config_files(project_root):
+            regexes = _SECRET_REGEXES if rel.endswith(".php") else _SECRET_REGEXES_YAML
+            if _scan_secrets_in_files([(rel, abs_path)], regexes, candidates):
+                capped = True
+                break
     if capped:
         warnings.append(
             f"secrets_candidates_capped: stopped at {_SECRETS_CANDIDATES_CAP} hits "
@@ -1940,11 +2807,9 @@ def collect_secrets(
         if re.search(r"^APP_SECRET=.+", text, re.M):
             app_secret_in_repo = True
 
-    sec_yaml = project_root / "config" / "packages" / "security.yaml"
-    password_hasher: Optional[str] = None
-    if sec_yaml.is_file():
-        sec_text = _read_text_safe(sec_yaml) or ""
-        password_hasher = _parse_password_hasher(sec_text)
+    if security is None:
+        security = _resolve_security(project_root, None, warnings)
+    password_hasher = security.view.password_hasher if security.view is not None else None
 
     data = {
         "app_secret_in_repo": app_secret_in_repo,
@@ -1959,10 +2824,12 @@ def collect_secrets(
             f"Static recipe collected {len(candidates)} candidate hardcoded-secret matches "
             f"(cap={_SECRETS_CANDIDATES_CAP}). Classify each in `candidates`: "
             "is_real_secret yes/no, severity (info/medium/critical), sink_kind. "
+            "Credential values in `snippet` are masked as `<redacted:N>` (N = length); "
+            "Read the file at `line` when classifying needs the value itself. "
             "Promote real secrets into items with status=ok."
         ),
         data=data,
-        source_files=[".env", "config/packages/security.yaml"],
+        source_files=[".env", *security.resolution.evidence],
     )
 
 
@@ -2146,7 +3013,7 @@ def collect_voters(
     )
     if warn:
         warnings.append(warn)
-        return SectionPayload(status="unknown", reason=warn)
+        return SectionPayload(status="partial", items=[], reason=f"extractor_failed: voters: {warn}")
     items: list[dict] = []
     for v in (out.get("items") or []):
         rel = _to_relative(v.get("file"), project_root)
@@ -2176,7 +3043,7 @@ def collect_forms(
     )
     if warn:
         warnings.append(warn)
-        return SectionPayload(status="unknown", reason=warn)
+        return SectionPayload(status="partial", items=[], reason=f"extractor_failed: forms: {warn}")
     items: list[dict] = []
     for f in (out.get("items") or []):
         rel = _to_relative(f.get("file"), project_root)
@@ -2207,7 +3074,9 @@ def collect_serializer_groups(
     )
     if warn:
         warnings.append(warn)
-        return SectionPayload(status="unknown", reason=warn)
+        return SectionPayload(
+            status="partial", items=[], reason=f"extractor_failed: serializer-groups: {warn}",
+        )
     items: list[dict] = []
     for g in (out.get("items") or []):
         rel = _to_relative(g.get("file"), project_root)
@@ -2224,17 +3093,28 @@ def collect_serializer_groups(
     return SectionPayload(status="ok", items=items)
 
 
-def collect_twig_overrides(project_root: Path) -> SectionPayload:
+def collect_twig_overrides(
+    project_root: Path,
+    *,
+    session: Optional[ConsoleSession] = None,
+    warnings: Optional[list[str]] = None,
+) -> SectionPayload:
     """twig_overrides scalar — autoescape default + |raw filter usage."""
-    twig_yaml = project_root / "config" / "packages" / "twig.yaml"
-    autoescape_default = "name"  # Symfony default
-    source_files: list[str] = []
-    if twig_yaml.is_file():
-        source_files.append(twig_yaml.relative_to(project_root).as_posix())
-        text = _read_text_safe(twig_yaml) or ""
-        v = _yaml_value_at(text, "twig", "autoescape")
-        if v is not None:
-            autoescape_default = v
+    sink = warnings if warnings is not None else []
+    res = _resolve_config(project_root, session, "twig", TWIG_SUBTREE_KEYS, sink)
+    autoescape_default: Optional[str] = "name"  # Symfony default
+    if res.mode == "tree":
+        autoescape_default = twig_view_from_tree(res.tree).autoescape_default
+    elif res.mode in ("yaml", "uninterpreted"):
+        found = next(
+            (v for _, text in res.yaml_texts if (v := twig_view_from_yaml_text(text)) is not None),
+            None,
+        )
+        if found is not None:
+            autoescape_default = found.autoescape_default
+        elif res.mode == "uninterpreted":
+            autoescape_default = None
+    source_files: list[str] = list(res.evidence)
 
     # |raw filter occurrences in templates/. Use \|raw\b to skip false-positive
     # `|raw` substring inside string literals or comments (`{# |raw #}` etc).
@@ -2261,38 +3141,84 @@ def collect_twig_overrides(project_root: Path) -> SectionPayload:
                         if rel not in source_files:
                             source_files.append(rel)
 
-    return SectionPayload(
-        status="ok",
-        data={
-            "autoescape_default": autoescape_default,
-            "raw_filter_count": raw_count,
-            "raw_filter_locations": raw_locations,
-        },
-        source_files=source_files,
+    data: dict = {}
+    if res.mode == "uninterpreted":
+        data["evidence_files"] = list(res.evidence)
+    if autoescape_default is not None:
+        data["autoescape_default"] = autoescape_default
+    data["raw_filter_count"] = raw_count
+    data["raw_filter_locations"] = raw_locations
+    status = "partial" if (res.mode == "uninterpreted" or res.env_gap) else "ok"
+    if res.mode == "tree" and autoescape_default != "name":
+        _note_unlocated(res, sink)
+    payload = SectionPayload(status=status, data=data, source_files=source_files)
+    if res.mode == "uninterpreted":
+        payload.reason = _uninterpreted_reason(res)
+    elif res.env_gap:
+        payload.reason = res.env_gap
+    return payload
+
+
+def collect_messenger_transports(
+    project_root: Path,
+    *,
+    session: Optional[ConsoleSession] = None,
+    warnings: Optional[list[str]] = None,
+) -> SectionPayload:
+    sink = warnings if warnings is not None else []
+    def tree_misses_static(tree: dict, yaml_texts, _evidence) -> bool:
+        # A php/xml `messenger` mention may configure only buses/routing.
+        if messenger_view_from_tree(tree).transports:
+            return False
+        return any(_parse_messenger_transports(text) for _, text in yaml_texts)
+
+    res = _resolve_config(
+        project_root, session, "framework", MESSENGER_SUBTREE_KEYS, sink,
+        tree_misses_static=tree_misses_static,
     )
-
-
-def collect_messenger_transports(project_root: Path) -> SectionPayload:
-    msg_yaml = project_root / "config" / "packages" / "messenger.yaml"
-    if not msg_yaml.is_file():
+    if res.mode == "absent":
         return SectionPayload(
-            status="none",
-            reason="messenger.yaml not present",
-            source_files=[],
+            status="none", reason=_absent_reason("messenger"), source_files=[],
         )
-    text = _read_text_safe(msg_yaml) or ""
-    rel = msg_yaml.relative_to(project_root).as_posix()
-    transports = _parse_messenger_transports(text)
+    if res.mode == "uninterpreted":
+        transports = [
+            t for _, text in res.yaml_texts for t in _parse_messenger_transports(text)
+        ]
+        data: dict = {"evidence_files": res.evidence}
+        if transports:
+            data["transports"] = transports
+        return SectionPayload(
+            status="partial",
+            reason=_uninterpreted_reason(res),
+            data=data,
+            source_files=res.evidence,
+        )
+    if res.mode == "tree":
+        # Not elided: `retry_strategy` is already a default/configured verdict,
+        # and keeping it keeps the item shape of the yaml shorthand form.
+        transports = messenger_view_from_tree(res.tree).transports
+    else:
+        transports = messenger_view_from_yaml_text(res.yaml_texts[0][1]).transports
+    if not transports and res.env_gap:
+        return SectionPayload(
+            status="partial", reason=res.env_gap,
+            data={"evidence_files": res.evidence}, source_files=res.evidence,
+        )
     if not transports:
         return SectionPayload(
             status="none",
-            reason="messenger.yaml present but no transports section parsed",
-            source_files=[rel],
+            reason=(
+                "no messenger transports configured" if res.mode == "tree"
+                else "messenger config present but no transports section parsed"
+            ),
+            source_files=res.evidence,
         )
+    _note_unlocated(res, sink)
     return SectionPayload(
-        status="ok",
+        status="partial" if res.env_gap else "ok",
         data={"transports": transports},
-        source_files=[rel],
+        source_files=res.evidence,
+        reason=res.env_gap,
     )
 
 
@@ -2432,7 +3358,7 @@ def collect_doctrine_listeners(
     )
     if warn:
         warnings.append(warn)
-        return SectionPayload(status="unknown", reason=warn)
+        return SectionPayload(status="partial", items=[], reason=f"extractor_failed: class: {warn}")
     items: list[dict] = []
     for cls in out.get("items", []):
         attrs = cls.get("attributes") or []
@@ -2512,6 +3438,7 @@ def _build_routes_authz_matrix(
     *,
     exclude: Optional[tuple[str, ...]] = None,
     console_router_data: Optional[dict] = None,
+    security: Optional[_SecurityConfig] = None,
 ) -> SectionPayload:
     """Per-route effective authz fingerprint.
 
@@ -2520,9 +3447,12 @@ def _build_routes_authz_matrix(
          Yields (route_name, path, methods, controller=Class::method, file, line).
       2. Class metadata (--kind=class) — to find #[IsGranted] on methods and
          denyAccessUnlessGranted() in method bodies.
-      3. config/packages/security.yaml — `firewalls:` and `access_control:`
-         rules. Each route's effective `firewall` and `matched_access_control`
-         is the FIRST rule whose `path:` regex matches the route path.
+      3. The resolved `security` config (`_resolve_security`) — `firewalls`
+         and `access_control` rules. Each route's effective `firewall` and
+         `matched_access_control` is the FIRST rule whose `path:` regex matches
+         the route path. When the config exists but could not be interpreted,
+         every item carries `access_control_interpreted: false` with `firewall`
+         and `matched_access_control` null and the bag is `partial`.
       4. Optional `console_router_data` (output of debug:router as dict) —
          when supplied, authoritative for path/methods (overrides static parse
          on identifier collision).
@@ -2546,10 +3476,11 @@ def _build_routes_authz_matrix(
     )
     static_routes: list[dict] = []
     if route_warn or routes_data is None:
-        # Without the extractor we can't enumerate routes — return unknown.
+        # Without the extractor we can't enumerate routes at all.
         return SectionPayload(
-            status="unknown",
-            reason=route_warn or "extractor returned no data",
+            status="partial",
+            items=[],
+            reason=f"extractor_failed: routes: {route_warn or 'extractor returned no data'}",
             source_files=[],
         )
     sources.append("extract_php_metadata.php:routes")
@@ -2639,16 +3570,20 @@ def _build_routes_authz_matrix(
         if calls:
             deny_calls_by_file[file_rel] = calls
 
-    # 3. security.yaml: firewalls + access_control.
-    sec_yaml = project_root / "config" / "packages" / "security.yaml"
+    # 3. security config: firewalls + access_control.
+    if security is None:
+        security = _resolve_security(project_root, None, [])
+    sec_evidence = list(security.resolution.evidence)
+    interpreted = security.interpreted
     firewalls: list[dict[str, str]] = []
     access_control: list[dict[str, str]] = []
-    if sec_yaml.is_file():
-        text = _read_text_safe(sec_yaml) or ""
-        if text:
-            firewalls = _parse_firewalls(text)
-            access_control = _parse_access_control(text)
-            sources.append("config/packages/security.yaml")
+    if interpreted and security.view is not None:
+        firewalls = security.view.firewalls
+        access_control = security.view.access_control
+        sources.extend(sec_evidence)
+    # An access_control rule carries no line from either source; its file is
+    # known only when a single file holds the security config.
+    ac_file = sec_evidence[0] if len(sec_evidence) == 1 else ""
 
     def _match_firewall(route_path: str) -> Optional[str]:
         for fw in firewalls:
@@ -2703,12 +3638,7 @@ def _build_routes_authz_matrix(
 
     # Build per-route items.
     items: list[dict] = []
-    src_files: set[str] = set()
-    if sec_yaml.is_file():
-        try:
-            src_files.add(sec_yaml.relative_to(project_root).as_posix())
-        except ValueError:
-            pass
+    src_files: set[str] = set(sec_evidence)
 
     for r in static_routes:
         route_name = r["route_name"]
@@ -2750,7 +3680,7 @@ def _build_routes_authz_matrix(
             )
             evidence.append({
                 "source": "access_control",
-                "file": "config/packages/security.yaml",
+                "file": ac_file,
                 "line": 0,  # access_control rules don't carry line info from our parser
                 "roles": roles,
                 # access_control denies the request when role check fails → hard_deny.
@@ -2759,7 +3689,7 @@ def _build_routes_authz_matrix(
 
         src_files.add(r["file"])
 
-        items.append({
+        item = {
             "route_name": route_name,
             "file": r["file"],
             "line": r["line"],
@@ -2771,12 +3701,33 @@ def _build_routes_authz_matrix(
             "firewall": fw_name,
             "csrf_protection": "unknown",
             "authz_evidence": evidence,
-        })
+        }
+        if not interpreted and security.resolution.mode != "absent":
+            item["access_control_interpreted"] = False
+        items.append(item)
 
     if not items:
         return SectionPayload(
             status="none",
             reason="no #[Route]-annotated controller methods found",
+            source_files=sorted(src_files),
+        )
+    if not interpreted and security.resolution.mode != "absent":
+        reason = "access_control_not_interpreted"
+        if security.resolution.env_gap:
+            reason += f" ({security.resolution.env_gap})"
+        return SectionPayload(
+            status="partial",
+            reason=reason,
+            items=items,
+            source_files=sorted(src_files),
+        )
+    if security.resolution.env_gap:
+        # Matches come from the console's env; the bag says which env gap applies.
+        return SectionPayload(
+            status="partial",
+            reason=security.resolution.env_gap,
+            items=items,
             source_files=sorted(src_files),
         )
     return SectionPayload(
@@ -2953,7 +3904,10 @@ def _list_entity_files(project_root: Path) -> list[tuple[str, Path]]:
                 rel = resolved.relative_to(project_resolved).as_posix()
             except (OSError, ValueError, RuntimeError):
                 continue
-            if _is_excluded(rel, EXCLUDE_PATHS):
+            # The hidden-dir rule judges the walked path: `src -> .build/src` is still source.
+            if _is_excluded(rel, EXCLUDE_PATHS) or has_hidden_dir_segment(
+                f.relative_to(project_root).as_posix()
+            ):
                 continue
             # Match either /Entity/<file>.php or anywhere under */Entity/*.
             if "/Entity/" not in ("/" + rel) and not rel.startswith(f"{root_name}/Entity/"):
@@ -3068,22 +4022,35 @@ def build_inventory(
 
     files = _list_php_files(project_root)
 
+    # One session per run: a single smoke probe shared by console enrichment
+    # and the config sections. None for a disabled runner — its reason
+    # (`console_disabled_by_flag`, `env_runner_unknown:*`) is already reported
+    # by the utility / collect_attack_surface, so nothing may re-warn it.
+    session: Optional[ConsoleSession] = (
+        ConsoleSession(console_runner, sources_used, warnings)
+        if getattr(console_runner, "mode", "disabled") != "disabled"
+        else None
+    )
+
     # 1. attack_surface.
     # `console_disabled_by_flag` is appended by the utility (cmd_inventory),
     # not the recipe, so we don't emit it here to avoid duplication.
-    attack_items = collect_attack_surface(
+    attack_items, attack_extractor_failures = collect_attack_surface(
         project_root, plugin_root, diff_files, sources_used, warnings, console_runner,
-        exclude=exclude,
+        exclude=exclude, session=session,
     )
 
     # 2. data_access.
-    data_items = collect_data_access(
+    data_items, data_extractor_failure = collect_data_access(
         project_root, plugin_root, diff_files, sources_used, warnings,
         exclude=exclude,
     )
 
     # 3. auth_layer + firewalls.
-    auth_payload, firewalls_payload = collect_auth_layer_and_firewalls(project_root, warnings)
+    security_config = _resolve_security(project_root, session, warnings)
+    auth_payload, firewalls_payload = collect_auth_layer_and_firewalls(
+        project_root, warnings, security=security_config,
+    )
 
     # 4. authz_usage.
     authz_items = collect_authz_usage(files, project_root, diff_files)
@@ -3097,7 +4064,7 @@ def build_inventory(
     http_client_items = collect_grep_section(files, _HTTP_CLIENT_RE, "http_client", diff_files)
 
     # 7. secrets.
-    secrets_payload = collect_secrets(project_root, files, warnings)
+    secrets_payload = collect_secrets(project_root, files, warnings, security=security_config)
 
     # 8. fintech_markers + frontend_assets.
     fintech_items = collect_fintech_markers(project_root, files, diff_files)
@@ -3107,9 +4074,11 @@ def build_inventory(
     voters_payload = collect_voters(project_root, plugin_root, warnings, exclude=exclude)
     forms_payload = collect_forms(project_root, plugin_root, warnings, exclude=exclude)
     sg_payload = collect_serializer_groups(project_root, plugin_root, warnings, exclude=exclude)
-    twig_payload = collect_twig_overrides(project_root)
-    trusted_config_payload = collect_trusted_config(project_root)
-    msg_payload = collect_messenger_transports(project_root)
+    twig_payload = collect_twig_overrides(project_root, session=session, warnings=warnings)
+    trusted_config_payload = collect_trusted_config(
+        project_root, session=session, warnings=warnings,
+    )
+    msg_payload = collect_messenger_transports(project_root, session=session, warnings=warnings)
     listeners_payload = collect_doctrine_listeners(project_root, plugin_root, warnings, exclude=exclude)
     easyadmin_crud_payload = collect_easyadmin_crud_controllers(
         project_root, plugin_root, warnings, exclude=exclude,
@@ -3122,8 +4091,16 @@ def build_inventory(
     )
 
     core: dict[str, SectionPayload] = {
-        "attack_surface": SectionPayload(status="ok", items=attack_items),
-        "data_access": SectionPayload(status="ok", items=data_items),
+        "attack_surface": SectionPayload(
+            status="partial" if attack_extractor_failures else "ok",
+            items=attack_items,
+            reason="; ".join(attack_extractor_failures) or None,
+        ),
+        "data_access": SectionPayload(
+            status="partial" if data_extractor_failure else "ok",
+            items=data_items,
+            reason=data_extractor_failure,
+        ),
         "auth_layer": auth_payload,
         "authz_usage": SectionPayload(status="ok", items=authz_items),
         "output_renderers": SectionPayload(status="ok", items=renderers_items),
@@ -3147,6 +4124,7 @@ def build_inventory(
     # for #[Route] attributes (extractor's --kind=routes covers them).
     routes_authz_payload = _build_routes_authz_matrix(
         project_root, plugin_root, exclude=exclude, console_router_data=None,
+        security=security_config,
     )
     sensitive_columns_payload = _build_sensitive_columns(project_root)
 

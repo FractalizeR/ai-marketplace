@@ -852,16 +852,34 @@ def _path_excluded(rel: str, exclude: tuple[str, ...]) -> bool:
     return False
 
 
+def _has_hidden_dir_segment(rel_path: str) -> bool:
+    """True iff any DIRECTORY segment of `rel_path` is dot-prefixed.
+
+    Mirrors the extractor's always-on hidden-directory prune (see
+    extract_php_metadata.php / recon.recipes._shared.has_hidden_dir_segment) so
+    the sanity coverage glob doesn't count `.cache/`, `.phpunit/`, etc. as
+    files the recipe "should have" declared. Independent of `exclude` — one
+    rule, not a growing dot-name list.
+    """
+    parts = rel_path.split("/")
+    return any(p.startswith(".") for p in parts[:-1])
+
+
 def _glob_files(project_root: Path, patterns: list[str], exclude: tuple[str, ...] = ()) -> set[str]:
     found = set()
     for pat in patterns:
         for p in project_root.glob(pat):
             if not p.is_file():
                 continue
-            rel = p.relative_to(project_root).as_posix()
-            if _path_excluded(rel, exclude):
+            walked = p.relative_to(project_root).as_posix()
+            if _path_excluded(walked, exclude) or _has_hidden_dir_segment(walked):
                 continue
-            found.add(rel)
+            # Recipes declare symlink-resolved paths (`src -> .build/src` gives
+            # `.build/src/…`), so compare in that form; escapes are dropped.
+            try:
+                found.add(p.resolve().relative_to(project_root.resolve()).as_posix())
+            except (ValueError, OSError):
+                continue
     return found
 
 
@@ -898,9 +916,12 @@ def _exclude_abstract_class_files(project_root: Path, files: set[str]) -> set[st
     returns None for them and they are absent from the declared inventory. A
     name-glob sanity probe (`*Command.php`, `*Listener.php`) still matches the
     base file, so without this exclusion the abstract base reads as a coverage
-    gap and can abort the audit (pdf-renderer: abstract `LockableCommand`).
-    Applied only to probes with a `kind_filter`, i.e. exactly the kinds whose
-    classifier skips abstract classes.
+    gap and can abort the audit (pdf-renderer: abstract `LockableCommand`;
+    EasyAdmin: abstract `BaseCrudController` → false "declared 6 of 3").
+    Applied to every class-inventory coverage probe EXCEPT `section_path ==
+    "data_access"` — repositories/models may legitimately have an abstract
+    base counted in the inventory (an abstract Repository is still a
+    data-access surface), so that probe is deliberately excluded.
     """
     out = set()
     for rel in files:
@@ -925,6 +946,33 @@ def _enforce_ceiling(fm: dict, res: ValidationResult) -> None:
         res.errors.append("ceiling=medium clamps level — frontmatter has level=high which is invalid")
 
 
+EXTRACTOR_FAILED_PREFIX = "extractor_failed:"
+
+
+def _extractor_failures(text: str) -> list[tuple[str, str]]:
+    """(section_path, reason) for every core section or recon_bags payload the
+    recipe could not collect because the PHP extractor failed. Recipe-agnostic:
+    keyed on the reason prefix, not on a probe list."""
+    out: list[tuple[str, str]] = []
+
+    def walk(node: object, path: str) -> None:
+        if not isinstance(node, dict):
+            return
+        reason = node.get("reason")
+        if "status" in node and isinstance(reason, str) and reason.startswith(EXTRACTOR_FAILED_PREFIX):
+            out.append((path, reason))
+            return
+        for key, child in node.items():
+            if isinstance(child, dict):
+                walk(child, f"{path}.{key}")
+
+    for section_id, section in extract_sections(text).items():
+        payload = _section_payload(section.body)
+        if payload is not None:
+            walk(payload, section_id)
+    return out
+
+
 def sanity_check(
     review_root: Path,
     project_root: Optional[Path] = None,
@@ -940,6 +988,10 @@ def sanity_check(
     fm = _validate_frontmatter_v2(text, res)
     if fm is None:
         return res
+    # A failed extractor leaves sections `partial` with no items, which the
+    # coverage ladder below skips — so it is reported here, loudly, with its cause.
+    for section_path, reason in _extractor_failures(text):
+        res.errors.append(f"sanity[extractor]: {section_path} not collected — {reason}")
     recipe_used = fm.get("recipe_used")
     if not isinstance(recipe_used, str):
         res.warnings.append("recipe_used missing — skipping sanity probes")
@@ -1009,10 +1061,8 @@ def sanity_check(
         found = _glob_files(project_root, probe.glob_patterns, exclude=exclude_paths)
         if probe.content_filter:
             found = _filter_by_content(project_root, found, probe.content_filter)
-        if probe.kind_filter:
-            # kind_filter probes map to attack-surface kinds whose classifier
-            # skips abstract classes; drop abstract bases so they don't read as
-            # coverage gaps against a declared inventory that rightly omits them.
+        if probe.section_path != "data_access":
+            # See _exclude_abstract_class_files docstring for the data_access opt-out.
             found = _exclude_abstract_class_files(project_root, found)
         if not found:
             continue  # nothing to glob; legit empty case

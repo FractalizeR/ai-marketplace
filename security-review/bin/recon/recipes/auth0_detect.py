@@ -19,7 +19,9 @@ Signals (any one suffices):
 2. `.env` file referencing `AUTH0_DOMAIN` / `AUTH0_CLIENT_ID` /
    `AUTH0_CLIENT_SECRET` / `AUTH0_AUDIENCE` — strong indicator even when the
    project uses a hand-rolled JWKS verifier instead of the SDK.
-3. `config/auth0.php` (Laravel) or `config/packages/auth0.yaml` (Symfony).
+3. `config/auth0.php` (Laravel, always `.php` — `vendor:publish` output) or
+   `config/packages/auth0.{yaml,yml,php,xml}` (Symfony — bundle config merges
+   across all four formats by extension alias).
 
 This module deliberately does NOT define RECIPE_NAME / build_inventory /
 sanity_probes — `recon.recipes.__init__.available_recipes()` filters out
@@ -35,6 +37,8 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+
+from recon.recipes._shared import basename_exists_any_ext
 
 
 # Composer package names that gate Auth0 detection. All names verified to
@@ -95,12 +99,12 @@ def _env_signal(project_root: Path) -> bool:
 def _config_signal(project_root: Path) -> bool:
     """True iff a known Auth0 config file is present.
 
-    - Laravel: `config/auth0.php` (published via the laravel-auth0 vendor:publish).
-    - Symfony: `config/packages/auth0.yaml` (bundle config path).
+    - Laravel: `config/auth0.php` (published via the laravel-auth0 vendor:publish — always `.php`).
+    - Symfony: `config/packages/auth0.{yaml,yml,php,xml}` (bundle config path).
     """
     if (project_root / "config" / "auth0.php").is_file():
         return True
-    if (project_root / "config" / "packages" / "auth0.yaml").is_file():
+    if basename_exists_any_ext(project_root / "config" / "packages", "auth0"):
         return True
     return False
 

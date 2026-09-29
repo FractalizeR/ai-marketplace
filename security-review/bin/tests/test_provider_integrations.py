@@ -119,6 +119,21 @@ class DetectAuth0Tests(unittest.TestCase):
             )
             self.assertTrue(detect_auth0(root))
 
+    def test_returns_true_via_symfony_config_php_variant(self):
+        """Symfony merges bundle config across yaml/yml/php/xml by extension
+        alias — a project authoring `config/packages/auth0.php` instead of
+        `.yaml` must still be a positive signal."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_composer(root, require={"symfony/framework-bundle": "^7.0"})
+            (root / "config" / "packages").mkdir(parents=True)
+            (root / "config" / "packages" / "auth0.php").write_text(
+                "<?php\nreturn static function (Auth0Config $config): void {\n"
+                "    $config->domain('%env(AUTH0_DOMAIN)%');\n};\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(detect_auth0(root))
+
     def test_returns_false_when_no_signal(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

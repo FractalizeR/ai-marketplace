@@ -1,0 +1,81 @@
+{
+    "security": {
+        "providers": {
+            "in_memory": {
+                "memory": {
+                    "users": []
+                }
+            }
+        },
+        "firewalls": {
+            "dev": {
+                "pattern": "^/(_(profiler|wdt)|css|images|js)/",
+                "security": false,
+                "methods": [],
+                "user_checker": "security.user_checker",
+                "stateless": false,
+                "lazy": false,
+                "required_badges": []
+            },
+            "admin": {
+                "pattern": "^/admin",
+                "stateless": true,
+                "methods": [],
+                "security": true,
+                "user_checker": "security.user_checker",
+                "lazy": false,
+                "required_badges": []
+            },
+            "main": {
+                "lazy": true,
+                "methods": [],
+                "security": true,
+                "user_checker": "security.user_checker",
+                "stateless": false,
+                "required_badges": []
+            }
+        },
+        "access_control": [
+            {
+                "path": "^/admin",
+                "roles": [
+                    "ROLE_ADMIN"
+                ],
+                "request_matcher": null,
+                "requires_channel": null,
+                "host": null,
+                "port": null,
+                "ips": [],
+                "attributes": [],
+                "route": null,
+                "methods": [],
+                "allow_if": null
+            },
+            {
+                "path": "^/health",
+                "roles": [
+                    "PUBLIC_ACCESS"
+                ],
+                "request_matcher": null,
+                "requires_channel": null,
+                "host": null,
+                "port": null,
+                "ips": [],
+                "attributes": [],
+                "route": null,
+                "methods": [],
+                "allow_if": null
+            }
+        ],
+        "access_denied_url": null,
+        "session_fixation_strategy": "migrate",
+        "expose_security_errors": "none",
+        "erase_credentials": true,
+        "access_decision_manager": {
+            "allow_if_all_abstain": false,
+            "allow_if_equal_granted_denied": true
+        },
+        "password_hashers": [],
+        "role_hierarchy": []
+    }
+}

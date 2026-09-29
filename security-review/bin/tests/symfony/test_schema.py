@@ -31,7 +31,7 @@ class RoutesAuthzMatrixSchema(unittest.TestCase):
         expected = frozenset({
             "route_name", "file", "line", "methods", "path",
             "effective_middleware", "matched_access_control", "firewall",
-            "csrf_protection", "authz_evidence",
+            "csrf_protection", "authz_evidence", "access_control_interpreted",
         })
         self.assertEqual(spec.item_keys, expected)
 

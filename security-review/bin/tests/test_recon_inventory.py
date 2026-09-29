@@ -20,6 +20,7 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 THIS_DIR = Path(__file__).resolve().parent
 BIN_DIR = THIS_DIR.parent
@@ -477,6 +478,107 @@ class DefaultExcludePythonPhpParity(unittest.TestCase):
         self.assertIsNotNone(m, "const DEFAULT_EXCLUDE not found in the extractor")
         php_entries = tuple(re.findall(r"'([^']*)'", m.group(1)))
         self.assertEqual(php_entries, sandbox.DEFAULT_EXCLUDE)
+
+
+class HiddenDirsAlwaysPrunedBySandbox(unittest.TestCase):
+    """P8: run_extractor's hidden-directory prune is on the PHP side and
+    applies regardless of the `exclude=` sandbox.py forwards — an explicit
+    empty tuple (i.e. DEFAULT_EXCLUDE only, no user extras) must still drop
+    `.cache/`.
+    """
+
+    def setUp(self):
+        if not shutil.which("php"):
+            self.skipTest("php not on PATH")
+        sys.path.insert(0, str(BIN_DIR))
+        from recon import sandbox
+        self.sandbox = sandbox
+
+    def test_dot_cache_subtree_never_reaches_token_get_all(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td) / "p"
+            (proj / "app").mkdir(parents=True)
+            (proj / "app" / "Real.php").write_text(
+                "<?php\nnamespace App;\nclass Real {}\n"
+            )
+            (proj / ".cache" / "Generated").mkdir(parents=True)
+            (proj / ".cache" / "Generated" / "Ghost.php").write_text(
+                "<?php\nnamespace Cache\\Generated;\nclass Ghost {}\n"
+            )
+            out, warn = self.sandbox.run_extractor(
+                PLUGIN_ROOT, proj, "class", proj, exclude=(),
+            )
+            self.assertIsNone(warn, msg=warn)
+            fqns = {i["fqn"] for i in out["items"]}
+            self.assertIn("App\\Real", fqns)
+            self.assertNotIn("Cache\\Generated\\Ghost", fqns)
+
+
+class ExtractorTimeoutEnvOverride(unittest.TestCase):
+    """P8: EXTRACTOR_TIMEOUT_SECONDS default 60 → 180, overridable per-run via
+    FR_SECURITY_EXTRACTOR_TIMEOUT (int seconds > 0). Subprocess is mocked —
+    no real PHP boot needed to exercise the timeout-resolution logic.
+    """
+
+    def setUp(self):
+        sys.path.insert(0, str(BIN_DIR))
+        from recon import sandbox
+        self.sandbox = sandbox
+
+    def test_default_is_180(self):
+        self.assertEqual(self.sandbox.EXTRACTOR_TIMEOUT_SECONDS, 180)
+
+    def _run_with_mocked_timeout(self, project_root: Path):
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["timeout"] = kwargs["timeout"]
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs["timeout"])
+
+        with patch("recon.sandbox.subprocess.run", side_effect=fake_run):
+            out, warn = self.sandbox.run_extractor(
+                PLUGIN_ROOT, project_root, "class", project_root,
+            )
+        return captured, out, warn
+
+    def test_env_var_overrides_default(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td)
+            with patch.dict(os.environ, {"FR_SECURITY_EXTRACTOR_TIMEOUT": "5"}):
+                captured, out, warn = self._run_with_mocked_timeout(proj)
+        self.assertEqual(captured["timeout"], 5)
+        self.assertIsNone(out)
+        self.assertIn("timed out after 5s", warn)
+
+    def test_invalid_env_var_falls_back_to_default(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td)
+            with patch.dict(os.environ, {"FR_SECURITY_EXTRACTOR_TIMEOUT": "not-a-number"}):
+                captured, _out, _warn = self._run_with_mocked_timeout(proj)
+        self.assertEqual(captured["timeout"], 180)
+
+    def test_non_positive_env_var_falls_back_to_default(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td)
+            with patch.dict(os.environ, {"FR_SECURITY_EXTRACTOR_TIMEOUT": "0"}):
+                captured, _out, _warn = self._run_with_mocked_timeout(proj)
+        self.assertEqual(captured["timeout"], 180)
+
+    def test_explicit_timeout_argument_wins_over_env(self):
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td)
+            captured: dict = {}
+
+            def fake_run(cmd, **kwargs):
+                captured["timeout"] = kwargs["timeout"]
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs["timeout"])
+
+            with patch.dict(os.environ, {"FR_SECURITY_EXTRACTOR_TIMEOUT": "999"}), \
+                 patch("recon.sandbox.subprocess.run", side_effect=fake_run):
+                self.sandbox.run_extractor(
+                    PLUGIN_ROOT, proj, "class", proj, timeout=7,
+                )
+            self.assertEqual(captured["timeout"], 7)
 
 
 if __name__ == "__main__":

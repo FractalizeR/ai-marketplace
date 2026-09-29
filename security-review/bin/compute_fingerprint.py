@@ -31,6 +31,7 @@ PROJECT_FILES_FIXED = [
     "package.json",
     "config/bundles.php",
     "config/services.yaml",
+    "config/services.php",
     "importmap.php",
     "webpack.config.js",
     "assets/entrypoints.json",
@@ -44,6 +45,15 @@ PROJECT_FILES_GLOB = [
     "config/routes/*.php",
     "config/routes/*.xml",
     "config/services/*.yaml",
+    "config/services/*.php",
+    # Symfony env-scoped overrides (`config/packages/prod/security.yaml`,
+    # `config/routes/prod/*.yaml`) — a `--skip-recon` invalidation must catch
+    # an env-only override even though the base `config/packages/*.<ext>`
+    # glob above never descends into these subdirectories.
+    "config/packages/*/*.yaml",
+    "config/packages/*/*.php",
+    "config/packages/*/*.xml",
+    "config/routes/*/*",
 ]
 
 CODE_SCOPE_DIRS = ["src", "templates", "assets", "migrations"]

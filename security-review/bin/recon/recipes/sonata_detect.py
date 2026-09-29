@@ -74,7 +74,9 @@ def collect_sonata_admin_classes(
     )
     if warn:
         warnings.append(warn)
-        return SectionPayload(status="unknown", reason=warn)
+        return SectionPayload(
+            status="partial", items=[], reason=f"extractor_failed: sonata-admin: {warn}",
+        )
     items: list[dict] = []
     has_unresolved = False
     for it in (out.get("items") or []):

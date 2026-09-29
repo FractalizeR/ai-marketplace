@@ -51,6 +51,20 @@ def is_excluded(rel_path: str, exclude: tuple[str, ...]) -> bool:
     return False
 
 
+def has_hidden_dir_segment(rel_path: str) -> bool:
+    """True iff any DIRECTORY segment of `rel_path` is dot-prefixed.
+
+    Mirrors the extractor's own hidden-directory prune (extract_php_metadata.php)
+    for the recipe's Python-side file walks (`Path.rglob`), which enumerate the
+    whole subtree before any filtering runs. One rule (dot-prefix), not a growing
+    list of dot-names to keep in sync with EXCLUDE_PATHS — always on, independent
+    of `--exclude` / EXCLUDE_PATHS. Only directory segments count (the file's own
+    basename is not checked), matching the extractor's directories-only prune.
+    """
+    parts = rel_path.split("/")
+    return any(p.startswith(".") for p in parts[:-1])
+
+
 # Provider integrations imply generic layers (semantic invariant: Auth0 IS
 # JWT+OAuth, Cognito IS JWT+OAuth, etc.). Forced inclusion ensures workers
 # always get the generic checklists alongside provider-specific refinements,
@@ -86,6 +100,18 @@ def expand_provider_implications(detected: list[str]) -> list[str]:
                 if imp not in result:
                     result.append(imp)
     return result
+
+
+# Symfony merges bundle config across extensions by alias (not just `.yaml`).
+# Used by the integration detectors (jwt_generic_detect, oauth_oidc_detect,
+# auth0_detect) whose file-presence probes must accept whichever format a
+# project (or a Flex recipe) chose to author a given bundle's config in.
+SYMFONY_CONFIG_EXTS: tuple[str, ...] = ("yaml", "yml", "php", "xml")
+
+
+def basename_exists_any_ext(directory: Path, basename: str) -> bool:
+    """True iff `directory/<basename>.<ext>` exists for any Symfony config ext."""
+    return any((directory / f"{basename}.{ext}").is_file() for ext in SYMFONY_CONFIG_EXTS)
 
 
 def to_relative(abs_path: Any, project_root: Path) -> Optional[str]:

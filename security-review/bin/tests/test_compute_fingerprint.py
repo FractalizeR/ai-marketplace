@@ -96,6 +96,53 @@ class ProjectFingerprintTests(unittest.TestCase):
             h2 = cf.compute_project_fingerprint(root)
             self.assertNotEqual(h1, h2)
 
+    def test_env_scoped_package_config_captured(self):
+        # Symfony env-scoped override (`config/packages/prod/security.yaml`)
+        # lives one directory deeper than the base `config/packages/*.<ext>`
+        # glob reaches; editing it must still invalidate the fingerprint.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "config" / "packages" / "prod").mkdir(parents=True)
+            (root / "config" / "packages" / "prod" / "security.yaml").write_text(
+                "security:\n    firewalls: {}\n"
+            )
+            h1 = cf.compute_project_fingerprint(root)
+            (root / "config" / "packages" / "prod" / "security.yaml").write_text(
+                "security:\n    firewalls: { main: {} }\n"
+            )
+            h2 = cf.compute_project_fingerprint(root)
+            self.assertNotEqual(h1, h2)
+
+    def test_services_php_captured(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "config").mkdir(parents=True)
+            (root / "config" / "services.php").write_text("<?php return static function () {};\n")
+            h1 = cf.compute_project_fingerprint(root)
+            (root / "config" / "services.php").write_text("<?php return static function () { /* x */ };\n")
+            h2 = cf.compute_project_fingerprint(root)
+            self.assertNotEqual(h1, h2)
+
+    def test_services_dir_php_glob_captured(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "config" / "services").mkdir(parents=True)
+            (root / "config" / "services" / "extra.php").write_text("<?php return [];\n")
+            h1 = cf.compute_project_fingerprint(root)
+            (root / "config" / "services" / "extra.php").write_text("<?php return ['x'];\n")
+            h2 = cf.compute_project_fingerprint(root)
+            self.assertNotEqual(h1, h2)
+
+    def test_env_scoped_routes_captured(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "config" / "routes" / "prod").mkdir(parents=True)
+            (root / "config" / "routes" / "prod" / "extra.yaml").write_text("foo: bar\n")
+            h1 = cf.compute_project_fingerprint(root)
+            (root / "config" / "routes" / "prod" / "extra.yaml").write_text("foo: baz\n")
+            h2 = cf.compute_project_fingerprint(root)
+            self.assertNotEqual(h1, h2)
+
 
 class CodeFingerprintTests(unittest.TestCase):
     def test_no_git_no_scope_is_deterministic(self):
