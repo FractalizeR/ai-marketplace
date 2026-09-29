@@ -56,20 +56,17 @@ everywhere. The dispatcher lives at
 
 Waves are tiered into `{high, fast}` — trust-boundary waves run on `high`,
 mechanical data-flow waves on `fast`. On Claude these map to `opus`/`sonnet`
-statically. On Codex the concrete model IDs are **resolved at run time**
-by [`security-review/bin/shared/model_resolver.py`](../security-review/bin/shared/model_resolver.py):
+statically. On Codex the operator names both concrete model IDs once:
 
-1. **discover** — `codex debug models`;
-2. **propose** — rank the discovered models by capability signals (fast-first);
-3. **confirm** — accept the proposal, or override with
-   `--models high=<id>,fast=<id>`;
-4. **persist** — write `<review_root>/.model_map.json`, reused on re-runs unless
-   `--remodel`.
+```bash
+frsr project --models high=<id>,fast=<id>     # list the ids with: codex debug models
+```
 
-It is non-interactive by default and never silently picks a model for a tier it
-can't resolve — it fails loudly. Auto-proposal is best-effort; the operator
-override is the safety net (a real run once saw Codex auto-pick a review-only
-model for `high` — corrected with `--models`).
+[`security-review/bin/shared/model_resolver.py`](../security-review/bin/shared/model_resolver.py)
+writes them to `<review_root>/.model_map.json`, and later runs against the same
+review root reuse the saved map. With neither `--models` nor a saved map the run
+stops with that hint — there is no automatic model discovery or guessing, and the
+ids are not validated (a wrong id shows up as crashed waves).
 
 ### Offline / permission posture
 
@@ -114,13 +111,14 @@ plugin cachebuster (a local marketplace can't be `marketplace upgrade`d).
 it, so you can run an audit from **any directory**:
 
 ```bash
-frsr project  --harness codex                        # prints the prepared command; add --go to run
-frsr changes  --harness codex -- --no-console        # extra flags after --
+frsr project --models high=<id>,fast=<id>          # prints the prepared command; add --go to run
+frsr project -- --quick --no-console              # orchestrator flags go after --
 ```
 
-It exports `FR_SECURITY_CORE_ROOT`, resolves the model tiers, and invokes the harness. Options:
-`--review-root`, `--project-root`, `--models high=…,fast=…`, `--no-resolve`,
-`--dry-run`, and `-- <extra>` passthrough to the orchestrator.
+It exports `FR_SECURITY_CORE_ROOT`, saves the model tiers, and invokes Codex. Options:
+`--review-root`, `--project-root`, `--models high=…,fast=…`, `--console-cmd <tpl>`,
+`--go`, `--dry-run`, `-h/--help` (writes nothing), and `-- <extra>` passthrough to
+the orchestrator. An unknown option before `--` is an error, not a passthrough.
 
 **Why Codex only prints by default:** the headless full-autonomy path runs the
 orchestrator *unsandboxed* (`--dangerously-bypass-approvals-and-sandbox`) so it
@@ -130,8 +128,8 @@ can spawn worker processes — the workers it launches stay sandboxed and offlin
 ### Manual path
 
 If you'd rather not use `make`/`frsr`, the [Codex INSTALL guide](../harness/codex/INSTALL.md)
-walks every step (build → register → export `FR_SECURITY_CORE_ROOT` → resolve
-models → run → permissions).
+walks every step (build → register → export `FR_SECURITY_CORE_ROOT` → set
+model tiers → run → permissions).
 
 ---
 
@@ -144,7 +142,7 @@ models → run → permissions).
   up changes without a cachebuster bump + reinstall — `make install-codex` does
   this automatically. `FR_SECURITY_CORE_ROOT` should point at the built
   `dist/codex/plugins/fr-security-review/core` (stable across cachebuster bumps).
-- **`--review-root` is output-only.** Both orchestrators reject a value that looks
+- **`--review-root` is output-only.** The orchestrator rejects a value that looks
   like a source tree (a past incident clobbered a `src/.gitignore`). Point it at a
   fresh `security-review-*` directory.
 - **Verify the offline posture before a hostile-repo audit.** Confirm your
@@ -219,14 +217,14 @@ distinct when editing the build.
   from stdin, so a fanned-out worker inheriting a non-EOF stdin would block. The
   dispatcher now feeds workers `stdin=DEVNULL`. If you see this, rebuild the bundle
   so `core/bin/shared/dispatch.py` carries the fix.
-- **Recon fails with a literal `<HIGH_TIER>` / `-m <HIGH_TIER>`.** The recon/refute
-  role templates use `<…>` slots the orchestrator must substitute *before* calling
+- **Recon fails with a literal `<HIGH_TIER>` / `-m <HIGH_TIER>`.** The recon
+  role template uses `<…>` slots the orchestrator must substitute *before* calling
   `dispatch.py` (which only expands `{…}` placeholders). Inline every `<…>` slot.
 - **A dispatched `--flag` is eaten as the harness CLI's own option.** Recon inputs
   are passed as flag-free `key=value` (e.g. `console_mode=off`) precisely to avoid
   this; the agent maps them to `recon_inventory.py` flags. Keep dispatched inputs
   flag-free.
-- **Model auto-pick chose the wrong `high`.** Override with
-  `frsr … --models high=<id>,fast=<id>` (or `model_resolver.py --models …`), then
-  it persists to `.model_map.json`.
+- **"model tiers are not set".** Pass `frsr … --models high=<id>,fast=<id>` (or
+  `model_resolver.py --models …`) once; it persists to `.model_map.json`. To switch
+  models later, pass `--models` again.
 - **`FR_SECURITY_CORE_ROOT` is empty / paths break.** You did not export it. Use `frsr`, or export it in the session where you run the audit.

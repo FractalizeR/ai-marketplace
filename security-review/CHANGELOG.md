@@ -4,6 +4,60 @@ All notable changes to this plugin will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.0] — 2026-09-29
+
+### Fewer mechanisms: one audit mode, one derived harness, no self-refute; recon gaps become a wave instead of a stop
+
+A simplification release. Mechanisms without a proven payoff are removed, false-positive filtering moves to `fr-audit-triage`, and a recon that could not collect or interpret something no longer stops the run — the uncovered files get their own review wave instead.
+
+#### Removed
+
+- **The diff-only audit mode.** The `/fr-security-review:security-changes` command, its Codex skill and section templates, the changes-mode rules in the worker and recon agents, `plan_waves.py --diff-files` / `--extra-target-files`, `recon_inventory.py --diff-files`, the per-item `touched_by_diff` key, and the diff-only helpers `diff_removed_defenses.py` / `map_consumers_to_waves.py`. Run `/fr-security-review:security-project` (optionally with `--scope=<glob>`) instead.
+- **Recon reuse.** `--skip-recon` / `--force-skip-recon`, the `project_fingerprint` / `code_fingerprint` frontmatter keys and the `scope` key. Every run does a fresh recon.
+- **Legacy v1 detection.** The orchestrator no longer probes for `SECURITY_CONTEXT.md`, and `validate_context.py` drops its v1 section map.
+- **The adversarial refute pass.** The `security-refute` agent, the orchestrator's refute step, `--no-adversarial`, `dedupe_findings.py --refute` (now an argparse error), `refute.md`, the `[REFUTE_CLAIMED]` flag and the refute summary block in REPORT.md. The verdict channel `--verdicts-in` and the remembered-verdict journal stay; its wire keys `refute_file` / `refute_line` keep their names.
+- **The cross-run New / Recurring / Closed diff.** REPORT.md loses its `Diff vs previous run` block, `REPORT.prev.md` is no longer kept, and `.findings_state.json` no longer stores the finding snapshot, `baseline` or `run_id`. A repeated render over the same waves is now byte-identical.
+- **The OpenCode harness.** `build.py --harness=opencode`, `make build-opencode` / `install-opencode`, `scripts/install-opencode.sh`, `harness/opencode/` and the OpenCode bundle. Codex is the only derived harness.
+- **The static Symfony config parser.** Without a `debug:config` tree, recon no longer reads `security` / `framework` / `twig` values out of yaml (see Changed for what it does instead).
+- **`config/bundles.php` alias gating.** The console is asked for every config alias; see Fixed.
+- **php/xml env-conditional detection.** Env-conditional blocks in php and xml config no longer set the prod/dev override flags; the files stay evidence. yaml `when@<env>` blocks and `config/packages/{dev,prod}/` keep flagging.
+- **The `languages` checklist layer** (it had no files). The resolver is now four layers: `core → stacks → addons → integrations`.
+- **Model discovery and auto-proposal** in `bin/shared/model_resolver.py` (`--discovery-cmd`, `--interactive`, `--remodel`), the `provenance` field of `.model_map.json`, and `model_discovery_cmd` / `tier_defaults` / the model gate in the Codex `adapter.json`.
+- **The unused `recover_capture` hook** of `bin/shared/dispatch.py` and its refute role; `recon` is the only dispatched role.
+
+#### Changed
+
+- **Sanity warns instead of stopping.** `validate_context.py --sanity` exits non-zero only for a structurally invalid CONTEXT.md. Coverage gaps, extractor failures, uninterpreted config and list sections left in `pending_enrichment` are `WARNING:` lines plus records in `<review_root>/recon_gaps.json`, written by the new `--gaps-out` flag (`schema_version: 1`; empty `items` when there is nothing). Sections without a sanity probe fall back to the recipe's new `SOURCE_ROOTS` glob. The orchestrator's repeat-recon prompt is gone; the recon agent gets one attempt to fix hallucinated paths.
+- **New always-on `WGAP` wave.** `plan_waves.py --recon-gaps` (default: `recon_gaps.json` next to CONTEXT.md) turns the gap files into `WGAP_PART<n>` slices on opus: they survive `--quick`, honour `--scope`, skip files another slice already carries and are capped at 150 files. A worker on a `WGAP_` slice reads `recon_gaps.json` first. No gap records → no WGAP slices.
+- **`## Coverage Gaps` shows what was and was not reviewed.** `dedupe_findings.py` reads `recon_gaps.json` and, with `--waves-plan`, splits each entry's files into reviewed (in some slice's `target_files`) and NOT reviewed (cut by the cap, `--scope` or the vendor/tests filter). Without a plan the line says the review status is unknown; `fr-audit-triage`'s re-render command now passes `--waves-plan` as well.
+- **`--no-console` means config is not interpreted.** Recon interprets framework config only through the booted console. Without a tree the config sections come back `partial` (`auth_layer` stays `pending_enrichment`) with the reason `config_uninterpreted: <alias>: <no_console|console_failed|tree_mismatch|env_mismatch>`, and their files are routed to the workers and the WGAP wave, which read the config directly. The route → firewall / `access_control` mapping is no longer precomputed in that case. The tree-vs-file mismatch check is kept for `security` only; `twig.yaml` is evidence only when it sets `autoescape`, so a default project keeps an `ok` `twig_overrides`; `.env` is listed in `secrets.source_files` only when it exists; `secrets.password_hasher` is `unknown` without a tree.
+- **`plan_waves` routes the `source_files` of `pending_enrichment` scalar sections**, so an `auth_layer` the recon agent never enriched still puts the security config into W1. `unknown` sections are not routed; their files reach workers only through `recon_gaps.json`.
+- **False-positive filtering is handed to `fr-audit-triage` 0.4.0.** The final output points to `/fr-audit-triage:triage-findings` on `findings.json`. The triage verifier gains Principle 14 — the grounds that can never close a finding (no caller, admin-only source without cross-tenant analysis, a validator without bypass analysis, defense-in-depth reasoning) and the ones that can (a cited in-code control or an enforced config/deployment restriction) — and `build_index` rejects a cited evidence line that is a comment.
+- **The "Previously rejected" note names the verdict source** next to the evidence `file:line`.
+- **Codex model tiers come only from `--models high=<id>,fast=<id>`** (both required). The map is saved to `.model_map.json` and reused; with neither, the run stops with a `codex debug models` hint. Model ids are not validated.
+- **`frsr`:** `--help` / `-h` works anywhere before `--` and has no side effects; every argument is validated before anything is written or run, and the model map is saved only with `--go`. The `project` subcommand is optional. Unknown options before `--` are an error — orchestrator flags go after it (`frsr project -- --quick`). `frsr changes` and `--harness opencode` fail with an explanation.
+- **`exclude_paths_user` frontmatter list.** Recon records the user's excludes as a structured list, which sanity uses to keep excluded files out of `recon_gaps.json`; the human-readable warning line stays.
+- **`recon_confidence` is display-only.** Its level is no longer cross-checked against the ceiling or coverage.
+- **Codex build: one section layer.** Each Claude artifact is split into sections; a section is replaced iff `harness/codex/sections/<artifact>/<anchor>.md` exists, the rest get frontmatter handling and token substitution, and a leak gate on the output replaces the completeness guards. Each template carries a `source-sha256` header of the Claude section it was written against; a changed section fails the check until the template is reviewed and `python3 build/build.py --mode=refresh-hashes` records the new hash. The Claude byte-identity gate (`--harness=claude`), the token partitioner, `PROSE_COUPLING.md` and `TOKENS.md` are gone. The Codex bundle output is unchanged.
+- **Laravel's class extractor runs once per inventory** instead of twice.
+
+#### Fixed
+
+- **A project whose `config/bundles.php` is not a plain literal map (e.g. an empty stub with a custom kernel registering the bundles) no longer loses its console config.** `debug:config` was skipped for every alias; it is now asked for all of them, and a failure warning is suppressed only when the alias has no config evidence at all.
+- **Laravel extractor failures are visible.** A timed-out or crashed class extractor left `attack_surface`, `data_access`, `policies`, `service_providers`, `form_requests` and `routes_authz_matrix` as `ok` with a short list; they now go `partial` with `extractor_failed: class: <cause>`, and sanity reports the cause as it does for Symfony.
+- **`--verdicts-in` rejects evidence it cannot locate:** the `nohash00` sink hash, absolute or `..` evidence paths, and an evidence line that is missing or blank (its hash would never change, so the rejection would never lift).
+- **The recon agent passes `--project-root` to its sanity call**, so composite repositories no longer skip the coverage check.
+- **`--all-opus` documentation** names the waves it promotes (W4 / W5 / W∞); W3 stays on sonnet.
+
+#### Migration
+
+- **Old review directories stay readable.** A `.findings_state.json` with a schema other than 2 is read as an empty verdict journal with a stderr warning; the remembered verdicts must be fed again via `--verdicts-in`. Schema-2 state files drop their old `findings` / `baseline` / `run_id` keys on the next write.
+- **An old CONTEXT.md with fingerprints or `scope` still validates** — extra frontmatter keys are allowed; the next run rewrites it anyway.
+- **Removed orchestrator flags are warned and ignored:** `--no-adversarial`, `--skip-recon` and `--force-skip-recon` print a `was removed in 5.0.0 and is ignored` warning and the run continues.
+- **Codex:** reinstall the plugin (`make install-codex`, which bumps the cachebuster), pass `--models high=<id>,fast=<id>` on the first run for each review root, and move orchestrator flags after `--` (`frsr project -- --quick`).
+- **Diff-only audits:** use `/fr-security-review:security-project`, narrowed with `--scope=<glob>` if needed.
+- **False-positive filtering:** run `/fr-audit-triage:triage-findings` on `findings.json` and feed its verdicts back with `dedupe_findings.py --verdicts-in=<path>`.
+
 ## [4.5.0] — 2026-09-29
 
 ### Recon reads what Symfony actually loaded, not just `config/packages/*.yaml`

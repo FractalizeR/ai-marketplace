@@ -8,7 +8,7 @@ Turns a `fr-security-review` audit's `findings.json` into deduplicated, code-ver
 
 ## Claude Code only
 
-Unlike `fr-security-review`, this plugin is **not** part of the multi-environment build (`build/`). It relies on native parallel `Task` subagents (Phase 4 batch verification, Phase 6 independent review) and on ad-hoc MCP tracker tools, neither of which the Codex derivation currently supports. The build tooling under repo-top `build/` knows about exactly the five `fr-security-review` artifacts; adding this plugin to it is a separate, later piece of work, not something this package does.
+Unlike `fr-security-review`, this plugin is **not** part of the multi-environment build (`build/`). It relies on native parallel `Task` subagents (Phase 4 batch verification, Phase 6 independent review) and on ad-hoc MCP tracker tools, neither of which the Codex derivation currently supports. The build tooling under repo-top `build/` knows only the `fr-security-review` artifacts (its orchestrator command and two agents); adding this plugin to it is a separate, later piece of work, not something this package does.
 
 ## Prerequisite
 

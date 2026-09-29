@@ -4,18 +4,11 @@ Framework-aware static-first security audit for Claude Code: recipe-driven recon
 
 Supported stacks: Symfony, Laravel, generic PHP. The GraphQL layer (lighthouse, rebing-laravel, api-platform, webonyx) is detected automatically in Symfony and Laravel.
 
-Primarily a Claude Code plugin, but the same engine also runs on **Codex CLI** and **OpenCode** (derived from the Claude prose, with external-process fan-out) — see [`harness/codex/INSTALL.md`](../harness/codex/INSTALL.md) and [`harness/opencode/INSTALL.md`](../harness/opencode/INSTALL.md).
+Primarily a Claude Code plugin, but the same engine also runs on **Codex CLI** (derived from the Claude prose, with external-process fan-out) — see [`harness/codex/INSTALL.md`](../harness/codex/INSTALL.md).
 
 ## Quick start
 
-After installing the plugin from the marketplace, use two slash commands:
-
-| Command | Purpose |
-| --- | --- |
-| `/fr-security-review:security-project` | Security audit of the whole project |
-| `/fr-security-review:security-changes` | Security audit of the current branch diff against master |
-
-Minimum run:
+After installing the plugin from the marketplace, run the whole-project audit:
 
 ```
 /fr-security-review:security-project
@@ -23,23 +16,27 @@ Minimum run:
 
 Artifacts are written to `security-review-<label>/` in the current working directory. The folder is automatically added to a local `.gitignore` (`<review_root>/.gitignore` with the content `*`). The plugin does not modify the project-level `.gitignore`; if review artifacts are already tracked by git, it warns and prints the command to stop tracking them instead of touching git state itself.
 
-For a Symfony project, a working project environment (a `bin/console` that actually boots) is a precondition of full-quality recon — the orchestrator resolves the runner and confirms it boots before recon starts, and stops with fix-it flags if it can't. `--no-console` is the conscious static-only opt-out; see [Security model](#security-model).
+For a Symfony project, a working project environment (a `bin/console` that actually boots) is a precondition of full-quality recon — the orchestrator resolves the runner and confirms it boots before recon starts, and stops with fix-it flags if it can't. `--no-console` is the conscious opt-out (framework config is then not interpreted); see [Security model](#security-model).
 
 ## Pipeline
 
 1. **Recon.** A recipe (Symfony / Laravel / generic PHP) collects a structured inventory of the project without an LLM: routes, middleware, controllers, data models, voters, form classes, listeners, messenger handlers, etc. The result is `<review_root>/CONTEXT.md` (schema v2 with frontmatter and closed shape specs).
-2. **Plan waves.** `plan_waves.py` slices the inventory into thematic waves (auth+disclosure, injection+data-access, output-render, serialization+crypto, ssrf+fileops, fintech, exploratory) and assigns each one its own set of checklists and target files.
-3. **Workers.** Parallel workers, 6 per batch, balanced-profile models: opus for analysis of trust boundaries (W1/W2/W6), sonnet for mechanical data-flow (W3/W4/W5/W∞).
-4. **Dedupe.** `dedupe_findings.py` stitches per-wave findings into a split report: `REPORT.md` (executive summary + index) + `REPORT/<root_cause_family>.md` (details) + `findings.json` (schema-versioned, machine-readable — every finding across all three worker verdicts). Workers report three verdicts, not just exploitable vulnerabilities: `confirmed` (the classic severity/confidence-gated finding), `needs_validation` (a traced path blocked on a fact outside the repo), and `hardening` (a traced observation with no affected principal or resource) — the latter two render as `## Needs validation` / `## Hardening notes` in `REPORT.md`.
+   A sanity check then compares the inventory against the filesystem. It does not stop the run: whatever recon could not collect or interpret (files a section missed, a failed extractor, config it could not read) is printed as a warning and recorded in `<review_root>/recon_gaps.json`.
+2. **Plan waves.** `plan_waves.py` slices the inventory into thematic waves (auth+disclosure, injection+data-access, output-render, serialization+crypto, ssrf+fileops, fintech, exploratory) and assigns each one its own set of checklists and target files. The files from `recon_gaps.json` go to a separate follow-up wave, **WGAP**, so a recon gap costs an extra pass instead of the run.
+3. **Workers.** Parallel workers, 6 per batch, balanced-profile models: opus for analysis of trust boundaries and recon gaps (W1/W2/W6/WGAP), sonnet for mechanical data-flow (W3/W4/W5/W∞).
+4. **Dedupe.** `dedupe_findings.py` stitches per-wave findings into a split report: `REPORT.md` (executive summary + index) + `REPORT/<root_cause_family>.md` (details) + `findings.json` (schema-versioned, machine-readable — every finding across all three worker verdicts). Workers report three verdicts, not just exploitable vulnerabilities: `confirmed` (the classic severity/confidence-gated finding), `needs_validation` (a traced path blocked on a fact outside the repo), and `hardening` (a traced observation with no affected principal or resource) — the latter two render as `## Needs validation` / `## Hardening notes` in `REPORT.md`. A `## Coverage Gaps` section lists what recon could not cover (a skipped console, crashed waves, each `recon_gaps.json` entry with the files that were and were not reviewed).
+
+### False-positive filtering
+
+The audit reports recall-first and has no false-positive pass of its own. To filter false positives, run the `fr-audit-triage` Claude Code plugin (`/fr-audit-triage:triage-findings`) on `<review_root>/findings.json` — it re-verifies each finding against the code, and its verdicts can be folded back into the report with `dedupe_findings.py --verdicts-in=<path>`, which remembers them across re-runs.
 
 ### ⚠️ Token consumption
 
-`/fr-security-review:security-project` launches several parallel Opus/Sonnet workers on each run (W1–W6 + W∞ + adversarial pass). Cost depends on the model and project size.
+`/fr-security-review:security-project` launches several parallel Opus/Sonnet workers on each run (W1–W6 + W∞ + WGAP when recon left gaps). Cost depends on the model and project size.
 
 **Flags for CI / cost saving:**
-- `--quick` — disables W∞ (cross-layer chain analysis).
-- `--no-adversarial` — disables the refute pass.
-- `--ci` — alias for `--quick --no-adversarial`.
+- `--quick` — disables W∞ (cross-layer chain analysis). WGAP stays on.
+- `--scope=<glob>` — restricts target files to a subset (for example `src/Api/**`).
 
 For your own project, `bin/dedupe/cost.py estimate <review_root>` after the first run shows the actual tokens.
 
@@ -48,7 +45,7 @@ For your own project, `bin/dedupe/cost.py estimate <review_root>` after the firs
 **What the plugin reads and executes:**
 
 - **Read-only.** The recipe and checklists only read the project source code; they never modify files outside `<review_root>/`.
-- **Console smoke by default (environment-aware), boot-tested up front.** The recon utility may run `bin/console list` / `debug:router` (Symfony) to enrich sections (routes, registered services, etc.) — **the project's bootstrap code is executed**. Before recon starts, the orchestrator probes the execution environment and boot-tests the resolved runner: if the project looks **containerized** (docker compose / Makefile / ddev / Sail) — where running on the host would use the wrong PHP version / unreachable services — it **asks you how to run the console** (or to skip) rather than executing on the host, then confirms the chosen runner actually boots. Pass `--console-cmd="docker compose exec -T php php bin/console"` to run it inside the container. A console that's required but doesn't boot stops the run with the reason and the exact fix-it flags (`--console-cmd=...` / `--no-console`) — non-interactively (CI) this is a hard stop, not a silent degrade, so pass one of these flags explicitly in CI. Choosing (or passing) `--no-console` records a `console_gap` (ceiling=medium), surfaced in REPORT.md.
+- **Console smoke by default (environment-aware), boot-tested up front.** The recon utility may run `bin/console debug:router` / `debug:config` (Symfony) to enrich sections (routes, the processed security/framework/messenger/twig config) — **the project's bootstrap code is executed**. Before recon starts, the orchestrator probes the execution environment and boot-tests the resolved runner: if the project looks **containerized** (docker compose / Makefile / ddev / Sail) — where running on the host would use the wrong PHP version / unreachable services — it **asks you how to run the console** (or to skip) rather than executing on the host, then confirms the chosen runner actually boots. Pass `--console-cmd="docker compose exec -T php php bin/console"` to run it inside the container. A console that's required but doesn't boot stops the run with the reason and the exact fix-it flags (`--console-cmd=...` / `--no-console`) — non-interactively (CI) this is a hard stop, not a silent degrade, so pass one of these flags explicitly in CI. Choosing (or passing) `--no-console` records a `console_gap` (ceiling=medium), surfaced in REPORT.md.
 - **PHP metadata extractor.** `bin/recon/extract_php_metadata.php` parses PHP files via `token_get_all` without require/include — it does not execute project code. Subprocess sandbox: `timeout=180s` (override via `FR_SECURITY_EXTRACTOR_TIMEOUT`), `memory_limit=512M`, path traversal protection via `Path.resolve() + is_relative_to(project_root)`. Any directory whose basename starts with `.` (`.cache/`, `.phpunit/`, …) is never walked, independently of `--exclude`.
 - **Worker tools.** Workers use Read, Grep, Glob; no Write to project files, no git commands except safe read-only ones, no code execution.
 
@@ -72,13 +69,13 @@ If you don't pass it and the project looks containerized, recon asks interactive
 
 ### Option 1 — `--no-console` flag
 
-Fully disables console smoke. Recon works only via static file parsing:
+Fully disables console smoke:
 
 ```
 /fr-security-review:security-project --no-console
 ```
 
-`recon_confidence.ceiling` is forcibly lowered to `medium` (some sections remain on static heuristics). This is intentional — so that workers do not draw conclusions from a full inventory that does not exist.
+`recon_confidence.ceiling` is forcibly lowered to `medium`. Recon interprets framework config only through the booted console, so without it the config sections (security firewalls / `access_control`, trusted proxies, messenger, twig) come back `partial` with a `config_uninterpreted: <alias>: no_console` reason. Their files are still routed to the workers (and to the WGAP wave), which read the config directly — but the route → firewall / `access_control` mapping is not precomputed.
 
 `--no-console` does not protect against a vulnerability in the PHP metadata extractor itself (even though it does not require the code), or against extended read-only utilities. If the repo is truly hostile, add a sandbox.
 
@@ -131,7 +128,6 @@ What `--project-root` affects:
 - **Recon** scans the project at `<PROJECT_ROOT>` (composer.json detection, framework detection, file globs).
 - **CLAUDE.md** is read from both `<cwd>/CLAUDE.md` and `<PROJECT_ROOT>/CLAUDE.md` (whichever exist). Paths in `## Code review exclusions` sections are interpreted as `PROJECT_ROOT`-relative — write `legacy/`, not `api/legacy/`, in either file.
 - **Workers** receive `project_root` and resolve `target_files` against it (without the flag, they would read relative to cwd and miss files in monorepos).
-- **`/security-changes`** runs `git -C "<PROJECT_ROOT>"` for all git operations.
 
 `--review-root=<out-dir>` is **independent** — it specifies where the review writes its output (`CONTEXT.md`, `waves/`, `REPORT.md`, `findings.json`). It does NOT specify what to scan. The orchestrator rejects `--review-root=src` (and other source-tree-looking names) with a clear error, since pointing it at your source tree would clobber `src/.gitignore`.
 
@@ -155,7 +151,7 @@ In addition to the built-in safe defaults (`vendor/`, `var/cache/`, `var/log/`, 
   /fr-security-review:security-project --exclude=legacy,src/ThirdParty
   ```
 
-Both sources are merged with the built-in `DEFAULT_EXCLUDE` (they do not replace it). Before running recon, the orchestrator prints the resulting list — the user sees what will not be analyzed. Applied project-level excludes are recorded in `frontmatter.warnings` of the final `<review_root>/CONTEXT.md` as `exclude_paths_user: <list>` for audit.
+Both sources are merged with the built-in `DEFAULT_EXCLUDE` (they do not replace it). Before running recon, the orchestrator prints the resulting list — the user sees what will not be analyzed. Applied project-level excludes are recorded in the final `<review_root>/CONTEXT.md` as the frontmatter list `exclude_paths_user` (used by the sanity check to keep excluded files out of `recon_gaps.json`) and as a `frontmatter.warnings` line for audit.
 
 **When to add an exclude:** auto-generated code, vendored mirrors, legacy code before removal, directories with test fixtures that knowingly contain "vulnerabilities" for testing. Do not add directories you want to analyze — this lowers the recall of the security review.
 
@@ -169,16 +165,16 @@ Without `--label`, commands perform self-introspection and pick a label from the
 
 ## Version and compatibility
 
-Current major version is 4.x. Full changelog — in [CHANGELOG.md](CHANGELOG.md).
+Current major version is 5.x. Full changelog — in [CHANGELOG.md](CHANGELOG.md).
 
-- `schema_version: 2` for `<review_root>/CONTEXT.md`. Old v1 artifacts (`<project_root>/SECURITY_CONTEXT.md`) are not read — slash commands detect them and emit a warning.
+- `schema_version: 2` for `<review_root>/CONTEXT.md`.
 - `schema_version: 1` for `<review_root>/findings.json`, the public inter-plugin contract. Wave files carry their own `<!-- wave_format: 2 -->` marker; older wave files without it still parse under the legacy rules.
 - Multi-stack monorepos — out of scope. One primary stack per project.
 
 ## Principles
 
 - **Never commit review artifacts.** The local `<review_root>/.gitignore` already ignores all content. You can commit explicitly via `git add -f`.
-- **The recon agent is the single writer to CONTEXT.md.** No workers, slash commands, or MCP should overwrite it.
+- **The recon utility (`recon_inventory.py`) is the single writer to CONTEXT.md.** The recon agent only enriches sections in place; no workers, slash commands, or MCP should overwrite it.
 - **Worker failure ≠ abort of the whole review.** Continue with the remaining waves.
 
 ## License
