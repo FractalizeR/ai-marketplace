@@ -157,8 +157,9 @@ def read_recon_gaps(review_root: Path, waves_plan: list[dict] | None) -> list[st
     """Surface recon-level gaps from `<review_root>/recon_gaps.json` (written by
     `validate_context.py --sanity --gaps-out`).
 
-    Each entry's `files` are split into "reviewed" (listed in some slice's
-    `target_files` of `waves_plan`) and "NOT reviewed" (cut by the gap-wave
+    Each entry's `files` are split into "routed to review" (listed in some
+    slice's `target_files` of `waves_plan`; says nothing about whether that
+    slice ran) and "NOT routed" (cut by the gap-wave
     cap, `--scope`, vendor/tests filtering, ...). Without a plan the split is
     undefined and only the file count is reported. Missing / corrupt file or
     empty `items` -> `[]`; an unknown `schema_version` -> warning + `[]`.
@@ -207,9 +208,12 @@ def read_recon_gaps(review_root: Path, waves_plan: list[dict] | None) -> list[st
         if planned is None:
             detail += f" {len(files)} file(s) involved; review status unknown (no plan given)."
         else:
-            reviewed = [f for f in files if f in planned]
+            routed = [f for f in files if f in planned]
             not_reviewed = [f for f in files if f not in planned]
-            detail += f" {len(reviewed)} file(s) reviewed, {len(not_reviewed)} NOT reviewed"
+            detail += (
+                f" {len(routed)} routed to review (WGAP / focused waves), "
+                f"{len(not_reviewed)} NOT routed"
+            )
             if not_reviewed:
                 shown = ", ".join(f"`{f}`" for f in not_reviewed[:_NOT_REVIEWED_PREVIEW])
                 more = len(not_reviewed) - _NOT_REVIEWED_PREVIEW
@@ -219,13 +223,27 @@ def read_recon_gaps(review_root: Path, waves_plan: list[dict] | None) -> list[st
     return lines
 
 
-def read_dispatch_gaps(path: Path | None) -> list[str]:
+def _parsed_wave_slice_ids(paths: list[Path]) -> set[str]:
+    """Slice ids of wave files that exist and parse."""
+    ok: set[str] = set()
+    for p in paths:
+        try:
+            parse_wave(p)
+        except Exception:
+            continue
+        ok.add(p.stem)
+    return ok
+
+
+def read_dispatch_gaps(path: Path | None, recovered: set[str] = frozenset()) -> list[str]:
     """Surface wave-dispatch execution gaps from a `dispatch_gaps.json` file.
 
     The file is written by `shared.dispatch.write_dispatch_gaps` (a file
     contract, no import): a JSON list of `{slice_id, reason, returncode}`. Each
     entry becomes one deterministic human line for the REPORT.md `## Coverage
     Gaps` section. None / missing / corrupt → `[]` so dedupe never breaks on it.
+    A gap whose slice id is in `recovered` (its wave file was written after the
+    dispatcher ran, e.g. by the orchestrator's safety net) is no longer a gap.
     """
     if path is None:
         return []
@@ -243,6 +261,8 @@ def read_dispatch_gaps(path: Path | None) -> list[str]:
         if not isinstance(entry, dict):
             continue
         slice_id = entry.get("slice_id", "?")
+        if slice_id in recovered:
+            continue
         reason = entry.get("reason", "unknown")
         lines.append(
             f"Wave {slice_id} produced no findings file (reason: {reason}). "
@@ -404,12 +424,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.dispatch_gaps is not None
         else review_root / "dispatch_gaps.json"
     )
-    dispatch_gap_lines = read_dispatch_gaps(dispatch_gaps_path)
+    paths = collect_input_paths(args.input, args.input_glob)
+    dispatch_gap_lines = read_dispatch_gaps(dispatch_gaps_path, _parsed_wave_slice_ids(paths))
     incomplete = bool(dispatch_gap_lines)
     waves_plan = load_waves_plan(args.waves_plan)
     recon_gap_lines = read_recon_gaps(review_root, waves_plan)
 
-    paths = collect_input_paths(args.input, args.input_glob)
     if not paths:
         # ZERO-INPUT PASS (Codex #9): all waves failed → no findings files, but
         # dispatch recorded gaps. Render a minimal INCOMPLETE report instead of

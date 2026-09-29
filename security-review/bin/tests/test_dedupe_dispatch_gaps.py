@@ -145,11 +145,11 @@ class ReadReconGapsUnitTests(unittest.TestCase):
         cov, failed, unint = lines
         self.assertIn("HTTP controllers", cov)
         self.assertIn("Declared 2, found 6 (66.7% missing)", cov)
-        self.assertIn("3 file(s) reviewed, 1 NOT reviewed (`src/D.php`)", cov)
+        self.assertIn("3 routed to review (WGAP / focused waves), 1 NOT routed (`src/D.php`)", cov)
         self.assertIn("extractor_failed: timeout", failed)
-        self.assertIn("1 file(s) reviewed, 0 NOT reviewed.", failed)
+        self.assertIn("1 routed to review (WGAP / focused waves), 0 NOT routed.", failed)
         self.assertIn("security config", unint)
-        self.assertIn("0 file(s) reviewed, 1 NOT reviewed (`config/packages/security.yaml`)", unint)
+        self.assertIn("0 routed to review (WGAP / focused waves), 1 NOT routed (`config/packages/security.yaml`)", unint)
 
     def test_not_reviewed_preview_is_capped(self):
         files = [f"src/F{i}.php" for i in range(8)]
@@ -159,7 +159,7 @@ class ReadReconGapsUnitTests(unittest.TestCase):
         }])
         with tempfile.TemporaryDirectory() as d:
             (line,) = dff.read_recon_gaps(self._root(d, payload), _plan(("W1_PART1", [])))
-        self.assertIn("0 file(s) reviewed, 8 NOT reviewed", line)
+        self.assertIn("0 routed to review (WGAP / focused waves), 8 NOT routed", line)
         self.assertIn("+3 more", line)
 
     def test_without_plan_reports_status_unknown(self):
@@ -168,7 +168,7 @@ class ReadReconGapsUnitTests(unittest.TestCase):
         self.assertEqual(len(lines), 3)
         for line in lines:
             self.assertIn("review status unknown (no plan given)", line)
-            self.assertNotIn("NOT reviewed", line)
+            self.assertNotIn("NOT routed", line)
         self.assertIn("4 file(s) involved", lines[0])
 
     def test_output_is_deterministic_for_shuffled_items(self):
@@ -198,7 +198,7 @@ class ReconGapsInReportTests(unittest.TestCase):
             plan.write_text(json.dumps(_plan(("WGAP_PART1", ["src/A.php", "src/B.php"]))), encoding="utf-8")
             text = self._run_report(review, "--waves-plan", str(plan))
         self.assertIn("## Coverage Gaps", text)
-        self.assertIn("2 file(s) reviewed, 2 NOT reviewed", text)
+        self.assertIn("2 routed to review (WGAP / focused waves), 2 NOT routed", text)
         self.assertNotIn("INCOMPLETE AUDIT", text)
 
     def test_without_plan_status_is_unknown(self):
@@ -280,6 +280,37 @@ class MainIntegrationTests(unittest.TestCase):
             self.assertEqual(rc, 0)
             text = out.read_text()
             self.assertNotIn("INCOMPLETE AUDIT", text)
+
+    def test_dispatch_gap_is_dropped_once_its_wave_file_exists(self):
+        with tempfile.TemporaryDirectory() as d:
+            review = Path(d)
+            waves = review / "waves"
+            waves.mkdir()
+            (waves / "W1_PART1.md").write_text(_mk_finding_md(), encoding="utf-8")
+            (waves / "W2_PART1.md").write_text(_mk_finding_md(), encoding="utf-8")
+            _write_gaps(review / "dispatch_gaps.json", [
+                {"slice_id": "W2_PART1", "reason": "missing_write", "returncode": 0},
+                {"slice_id": "W3_PART1", "reason": "crash", "returncode": 1},
+            ])
+            out = review / "REPORT.md"
+            self.assertEqual(self._run(["--input-glob", str(waves / "*.md"), "--output", str(out), "--no-state"]), 0)
+            text = out.read_text()
+            self.assertNotIn("Wave W2_PART1 produced no findings file", text)
+            self.assertIn("Wave W3_PART1 produced no findings file", text)
+            self.assertIn("INCOMPLETE AUDIT", text)
+
+    def test_all_gaps_recovered_means_no_incomplete_marker(self):
+        with tempfile.TemporaryDirectory() as d:
+            review = Path(d)
+            waves = review / "waves"
+            waves.mkdir()
+            (waves / "W2_PART1.md").write_text(_mk_finding_md(), encoding="utf-8")
+            _write_gaps(review / "dispatch_gaps.json", [
+                {"slice_id": "W2_PART1", "reason": "missing_write", "returncode": 0},
+            ])
+            out = review / "REPORT.md"
+            self.assertEqual(self._run(["--input-glob", str(waves / "*.md"), "--output", str(out), "--no-state"]), 0)
+            self.assertNotIn("INCOMPLETE AUDIT", out.read_text())
 
     def test_all_waves_failed_renders_incomplete_not_exit2(self):
         with tempfile.TemporaryDirectory() as d:
