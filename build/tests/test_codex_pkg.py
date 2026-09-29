@@ -108,6 +108,28 @@ class BundleTopologyTests(unittest.TestCase):
             with self.subTest(module=str(rel)):
                 self.assertTrue((self.core / "bin" / rel).is_file(), f"missing {rel}")
 
+    def test_build_info_stamp_carries_both_versions(self):
+        stamp = json.loads((self.core / "build_info.json").read_text(encoding="utf-8"))
+        engine = json.loads((PLUGIN_ROOT / "plugin.json").read_text(encoding="utf-8"))
+        bundle = json.loads((REPO_ROOT / "harness" / "codex" / "plugin.json").read_text(encoding="utf-8"))
+        self.assertEqual(stamp, {"harness": "codex", "plugin_version": engine["version"],
+                                 "bundle_version": bundle["version"]})
+
+    def test_bundled_run_snapshot_reads_the_stamp(self):
+        """The writer (build) and the reader (run_info.collect) must agree on the stamp."""
+        with tempfile.TemporaryDirectory() as review:
+            probe = (
+                "import sys, json; sys.path.insert(0, sys.argv[1] + '/bin'); import run_info as r; "
+                "i = r.collect(plugin_root=sys.argv[1], review_root=sys.argv[2], plan=[], "
+                "orchestrator_model=None, home=sys.argv[2]); "
+                "print(json.dumps([i.harness, i.plugin_version, i.bundle_version]))"
+            )
+            out = subprocess.run([sys.executable, "-c", probe, str(self.core), review],
+                                 capture_output=True, text=True, check=True)
+        engine = json.loads((PLUGIN_ROOT / "plugin.json").read_text(encoding="utf-8"))
+        bundle = json.loads((REPO_ROOT / "harness" / "codex" / "plugin.json").read_text(encoding="utf-8"))
+        self.assertEqual(json.loads(out.stdout), ["codex", engine["version"], bundle["version"]])
+
     def test_deterministic_across_builds(self):
         with tempfile.TemporaryDirectory() as d2:
             out2 = Path(d2) / "codex"

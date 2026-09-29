@@ -110,6 +110,26 @@ def copy_codex_static_configs(plugin_out: Path, *, harness_root: Path) -> list[P
     return sorted(written)
 
 
+BUILD_INFO_NAME = "build_info.json"
+
+
+def write_build_info(plugin_out: Path, *, engine_manifest: Path, bundle_manifest: Path) -> Path:
+    """Stamp ``core/build_info.json``: the run snapshot reads it to tell a Codex
+    run from a Claude one and to record the engine version, which the bundle's
+    own ``plugin.json`` (a separate semver) does not carry."""
+    versions = []
+    for manifest in (engine_manifest, bundle_manifest):
+        data = _load_json(manifest)
+        if not isinstance(data, dict) or not isinstance(data.get("version"), str):
+            raise ValueError(f"cannot stamp build info: no version in {manifest}")
+        versions.append(data["version"])
+    dest = plugin_out / "core" / BUILD_INFO_NAME
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"harness": "codex", "plugin_version": versions[0], "bundle_version": versions[1]}
+    dest.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return dest
+
+
 def place_codex_marketplace(bundle_root: Path, *, harness_root: Path) -> Path:
     """Copy the authored ``marketplace.json`` to
     ``<bundle_root>/.agents/plugins/marketplace.json`` (the marketplace ROOT the

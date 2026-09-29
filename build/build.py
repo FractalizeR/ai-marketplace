@@ -39,6 +39,7 @@ from bundle import (
     bundle_core,
     copy_codex_static_configs,
     place_codex_marketplace,
+    write_build_info,
     validate_codex_configs,
     safe_plugin_name,
     BUNDLE_MARKER,
@@ -241,6 +242,8 @@ def _write_codex_bundle(out: Path, rendered: dict[Path, str], *, plugin_root: Pa
             dest.parent.mkdir(parents=True, exist_ok=True)
             _atomic_write(dest, text.encode("utf-8"))
         copy_codex_static_configs(plugin_out, harness_root=_HARNESS_CODEX)
+        write_build_info(plugin_out, engine_manifest=plugin_root / "plugin.json",
+                         bundle_manifest=_HARNESS_CODEX / "plugin.json")
         place_codex_marketplace(staging, harness_root=_HARNESS_CODEX)
         # Fail closed if a dispatch template reads an agent file we did not emit.
         produced = {p.name for p in (plugin_out / "core" / "agents").glob("*.md")}
