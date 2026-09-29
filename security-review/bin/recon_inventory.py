@@ -569,9 +569,8 @@ def cmd_inventory(
     if no_console:
         warnings.append("console_disabled_by_flag")
     if exclude:
-        # Surface user-supplied excludes in frontmatter for auditability — so
-        # downstream consumers (worker, dedupe, REPORT) can see what was
-        # intentionally skipped beyond DEFAULT_EXCLUDE.
+        # Also kept as a human-readable warning; the machine-readable copy is
+        # the `exclude_paths_user` frontmatter key that sanity reads.
         warnings.append(
             "exclude_paths_user: " + ", ".join(exclude)
         )
@@ -619,6 +618,7 @@ def cmd_inventory(
         "sources_used": sources_used_dedup,
         "missing_sections": result.missing_sections,
         "recon_confidence": _confidence(result, no_console),
+        "exclude_paths_user": list(exclude or ()),
         "warnings": warnings_dedup,
         "errors": result.errors,
     }

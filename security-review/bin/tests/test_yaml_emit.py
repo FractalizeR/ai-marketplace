@@ -179,10 +179,14 @@ class FrontmatterShape(unittest.TestCase):
             "sources_used": ["extract_php_metadata.php", "config:routes.yaml"],
             "missing_sections": [],
             "recon_confidence": "medium",
+            "exclude_paths_user": ["legacy", "src/Third*Party"],
             "warnings": ["console_disabled_by_flag"],
         }
         out, text = _round_trip(fm)
         self.assertEqual(out, fm)
+        # No user excludes: the key stays, as an empty list.
+        empty = dict(fm, exclude_paths_user=[])
+        self.assertEqual(_round_trip(empty)[0], empty)
         # Frontmatter wrapper too.
         wrapped = dump_frontmatter(fm)
         self.assertTrue(wrapped.startswith("---\n"))

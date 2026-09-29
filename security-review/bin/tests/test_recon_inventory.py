@@ -146,6 +146,47 @@ class Inventory(unittest.TestCase):
             self.assertIn("legacy", user_excludes[0])
             self.assertIn("src/ThirdParty", user_excludes[0])
 
+    def test_exclude_flag_is_recorded_as_a_structured_list(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td) / "review"
+            _run_cli(
+                str(FIX_MIN), "--recipe", "symfony",
+                "--review-root", str(review_root), "--no-console",
+                "--exclude=legacy/, src/ThirdParty",
+            )
+            fm, _ = _read_context(review_root)
+            self.assertEqual(fm["exclude_paths_user"], ["legacy", "src/ThirdParty"])
+
+    def test_no_exclude_records_an_empty_list(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td) / "review"
+            _run_cli(
+                str(FIX_MIN), "--recipe", "symfony",
+                "--review-root", str(review_root), "--no-console",
+            )
+            fm, _ = _read_context(review_root)
+            self.assertEqual(fm["exclude_paths_user"], [])
+
+    def test_sanity_gap_files_honour_the_recorded_exclude(self):
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td) / "review"
+            out = Path(td) / "gaps.json"
+            _run_cli(
+                str(FIX_MIN), "--recipe", "symfony",
+                "--review-root", str(review_root), "--no-console",
+                "--exclude=src/Controller",
+            )
+            proc = subprocess.run(
+                [sys.executable, str(BIN_DIR / "validate_context.py"),
+                 "--review-root", str(review_root), "--sanity",
+                 "--project-root", str(FIX_MIN), "--gaps-out", str(out)],
+                capture_output=True, text=True, timeout=60,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            files = [f for item in json.loads(out.read_text())["items"] for f in item["files"]]
+            self.assertFalse([f for f in files if f.startswith("src/Controller/")], files)
+
     def test_exclude_absent_no_user_warning(self):
         with tempfile.TemporaryDirectory() as td:
             review_root = Path(td) / "review"
