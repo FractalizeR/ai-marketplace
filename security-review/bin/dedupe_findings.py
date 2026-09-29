@@ -327,7 +327,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-state",
         action="store_true",
-        help="Skip cross-run findings-state load/save (no .findings_state.json read or written).",
+        help="Skip the verdict journal: remembered resolutions are neither read "
+             "from nor written to .findings_state.json.",
     )
     parser.add_argument(
         "--project-root",

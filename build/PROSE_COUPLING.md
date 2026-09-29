@@ -19,11 +19,11 @@ needs a no-human path).
 contains ≥1 pin below. `task_block` and `labeled-block AskUserQuestion` tokens do
 NOT auto-couple — they are *completeness guards* that must fall inside a pinned
 section, else the build errors. A bare `AskUserQuestion` *prose-mention* (e.g.
-`security-project.md:38`, describing `--interactive`) is token-rendered to a
+the `--interactive` bullet in the command's `## ARGUMENTS`) is token-rendered to a
 neutral phrase, never coupling its section.
 
 All entries stay **ECHO** for Claude; nothing here is auto-parsed into
-`Segment.attrs`. Multi-pin sections (project `### 4`, `### 8`) still map to exactly
+`Segment.attrs`. A multi-pin section (project `### 8`) still maps to exactly
 ONE template, keyed by `(artifact_basename, section_anchor)`.
 
 ```yaml

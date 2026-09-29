@@ -50,7 +50,7 @@ class AttrValueTests(unittest.TestCase):
         self.assertEqual(dict(roles), {"path_prefix": 9, "flag_value": 1})
         self.assertEqual(dict(fences), {"triple_fence": 9, "inline_code": 1})
 
-    def test_task_blocks_both_syntaxes_and_attrs(self):
+    def test_task_blocks_are_paren_directives_with_attrs(self):
         rows = []
         for s in _by_cat(_segments("commands/security-project.md"), "task_block"):
             rows.append((s.attrs["syntax_variant"], s.attrs["subagent_type"],
