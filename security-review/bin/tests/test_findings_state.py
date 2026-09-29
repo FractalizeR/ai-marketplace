@@ -1,8 +1,10 @@
-"""Cross-run findings-state diff: save/load round-trip + compute_diff."""
+"""Remembered-verdict state (`.findings_state.json`) and `--verdicts-in`."""
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import sys
 import tempfile
@@ -13,226 +15,84 @@ THIS_DIR = Path(__file__).resolve().parent
 BIN_DIR = THIS_DIR.parent
 sys.path.insert(0, str(BIN_DIR))
 
-from dedupe.models import Finding, MergedFinding  # noqa: E402
 from dedupe.state import compute_evidence_hash  # noqa: E402
 from dedupe.state import (  # noqa: E402
-    FindingSnapshot,
     Resolution,
     STATE_FILENAME,
     STATE_SCHEMA_VERSION,
     VerdictsInError,
     active_rejections,
-    compute_diff,
     load_resolutions,
-    compute_run_id,
-    load_continuation_baseline,
-    load_state,
     load_verdicts_in,
     save_state,
-    snapshots_from,
 )
 
 
-def _f(sink_kind: str, file: str, line: int, snippet: str, severity="High",
-       title="Finding") -> Finding:
-    return Finding(
-        title_line=title,
-        sink_file=file,
-        sink_line=line,
-        severity=severity,
-        sink_kind=sink_kind,
-        sink_snippet=snippet,
-    )
-
-
-def _mf(*findings) -> MergedFinding:
-    return MergedFinding(primary=findings[0], merged_from=list(findings[1:]))
-
-
-class StateRoundtrip(unittest.TestCase):
-    def test_save_load_roundtrip(self):
-        snapshots = [
-            FindingSnapshot("abcd1234", "src/A.php", 10, "idor_lookup", "High", "Test A"),
-            FindingSnapshot("efgh5678", "src/B.php", 20, "dql_concat", "Critical", "Test B"),
-        ]
+class StateFileTests(unittest.TestCase):
+    def test_save_writes_only_schema_version_and_resolutions(self):
         with tempfile.TemporaryDirectory() as td:
             review_root = Path(td)
-            target = save_state(snapshots, review_root)
-            self.assertTrue(target.is_file())
+            target = save_state(review_root, resolutions={
+                "hash1": Resolution(verdict="rejected", source="audit-triage"),
+            })
             self.assertEqual(target.name, STATE_FILENAME)
-            loaded = load_state(review_root)
-            self.assertEqual(loaded, snapshots)
+            payload = json.loads(target.read_text())
+        self.assertEqual(set(payload), {"schema_version", "resolutions"})
+        self.assertEqual(payload["schema_version"], STATE_SCHEMA_VERSION)
+        self.assertEqual(STATE_SCHEMA_VERSION, 2)
 
-    def test_save_writes_schema_version(self):
+    def test_missing_file_gives_empty_journal(self):
         with tempfile.TemporaryDirectory() as td:
-            review_root = Path(td)
-            save_state([], review_root)
-            payload = json.loads((review_root / STATE_FILENAME).read_text())
-            self.assertEqual(payload["schema_version"], STATE_SCHEMA_VERSION)
+            self.assertEqual(load_resolutions(Path(td)), {})
 
-    def test_load_returns_none_when_file_missing(self):
-        with tempfile.TemporaryDirectory() as td:
-            self.assertIsNone(load_state(Path(td)))
-
-    def test_load_returns_none_on_corrupt_json(self):
+    def test_corrupt_json_gives_empty_journal(self):
         with tempfile.TemporaryDirectory() as td:
             review_root = Path(td)
             (review_root / STATE_FILENAME).write_text("{not json")
-            self.assertIsNone(load_state(review_root))
+            self.assertEqual(load_resolutions(review_root), {})
 
-    def test_load_returns_none_on_wrong_schema_version(self):
-        with tempfile.TemporaryDirectory() as td:
-            review_root = Path(td)
-            (review_root / STATE_FILENAME).write_text(
-                json.dumps({"schema_version": 99, "findings": []})
-            )
-            self.assertIsNone(load_state(review_root))
-
-    def test_load_skips_malformed_finding_entries(self):
+    def test_schema2_file_with_legacy_keys_is_read_and_extras_dropped_on_save(self):
         with tempfile.TemporaryDirectory() as td:
             review_root = Path(td)
             (review_root / STATE_FILENAME).write_text(json.dumps({
-                "schema_version": STATE_SCHEMA_VERSION,
-                "findings": [
-                    {"sink_hash": "ok123456", "sink_file": "a.php", "sink_line": 1,
-                     "sink_kind": "k", "severity": "High", "title": "ok"},
-                    "garbage_string",
-                    {"sink_hash": "bad12345", "sink_line": "not-an-int"},
-                ],
-            }))
-            loaded = load_state(review_root)
-            self.assertEqual(len(loaded), 1)
-            self.assertEqual(loaded[0].sink_hash, "ok123456")
-
-
-class SnapshotsFromMerged(unittest.TestCase):
-    def test_snapshots_pull_primary_fields_and_merged_severity(self):
-        a = _f("idor_lookup", "src/A.php", 10, "$repo->find($id)", severity="High",
-               title="# A finding")
-        b = _f("idor_lookup", "src/A.php", 10, "$repo->find($id)", severity="Critical")
-        mf = _mf(a, b)
-        snaps = snapshots_from([mf], [])
-        self.assertEqual(len(snaps), 1)
-        s = snaps[0]
-        self.assertEqual(s.sink_hash, a.sink_hash)
-        self.assertEqual(s.sink_file, "src/A.php")
-        self.assertEqual(s.severity, "Critical")  # max across merged_from
-        self.assertEqual(s.title, "# A finding")
-
-    def test_snapshots_include_manual_collection(self):
-        a = _f("custom:weird", "src/M.php", 5, "$x")
-        snaps = snapshots_from([], [_mf(a)])
-        self.assertEqual(len(snaps), 1)
-
-
-class DiffSemantics(unittest.TestCase):
-    def test_no_previous_returns_none(self):
-        self.assertIsNone(compute_diff(None, []))
-
-    def test_first_run_with_empty_state_marks_all_as_new(self):
-        # Edge case: someone passes `previous=[]` explicitly. That's not the
-        # same as None; everything in `current` should be classified as new.
-        current = [
-            FindingSnapshot("aaaaaaaa", "a.php", 1, "k", "High", "t"),
-            FindingSnapshot("bbbbbbbb", "b.php", 2, "k", "High", "t"),
-        ]
-        diff = compute_diff([], current)
-        self.assertEqual([s.sink_hash for s in diff.new], ["aaaaaaaa", "bbbbbbbb"])
-        self.assertEqual(diff.recurring, [])
-        self.assertEqual(diff.closed, [])
-
-    def test_recurring_classified_when_hash_present_in_both(self):
-        prev = [FindingSnapshot("h1", "a.php", 1, "k", "High", "t")]
-        curr = [FindingSnapshot("h1", "a.php", 1, "k", "High", "t")]
-        diff = compute_diff(prev, curr)
-        self.assertEqual(len(diff.recurring), 1)
-        self.assertEqual(diff.new, [])
-        self.assertEqual(diff.closed, [])
-
-    def test_closed_classified_when_hash_only_in_previous(self):
-        prev = [FindingSnapshot("h1", "a.php", 1, "k", "High", "t"),
-                FindingSnapshot("h2", "b.php", 2, "k", "High", "t")]
-        curr = [FindingSnapshot("h1", "a.php", 1, "k", "High", "t")]
-        diff = compute_diff(prev, curr)
-        self.assertEqual([s.sink_hash for s in diff.closed], ["h2"])
-
-    def test_nohash00_excluded_from_classification(self):
-        # The nohash00 sentinel is what `Finding.sink_hash` returns when there
-        # is no usable snippet. Letting those through pollutes diffs (every run
-        # produces a "new" nohash00 and a "closed" nohash00).
-        prev = [FindingSnapshot("nohash00", "a.php", 1, "k", "High", "t")]
-        curr = [FindingSnapshot("nohash00", "b.php", 2, "k", "High", "t")]
-        diff = compute_diff(prev, curr)
-        self.assertEqual(diff.new, [])
-        self.assertEqual(diff.recurring, [])
-        self.assertEqual(diff.closed, [])
-
-    def test_has_changes_property(self):
-        prev = [FindingSnapshot("h1", "a.php", 1, "k", "High", "t")]
-        curr = [FindingSnapshot("h2", "a.php", 1, "k", "High", "t")]
-        diff = compute_diff(prev, curr)
-        self.assertTrue(diff.has_changes)
-
-        recurring_only = compute_diff(prev, prev)
-        self.assertFalse(recurring_only.has_changes)
-
-
-class SchemaMigrationTests(unittest.TestCase):
-    """Stage 2 / P2.5: schema 1 -> 2 is a MIGRATION, not a reset — a state
-    file written by the pre-Stage-2 pipeline must still be read, with
-    `verdict`/`condition_keys` backfilled, not silently dropped (which would
-    make every finding look New on the first post-upgrade run)."""
-
-    def _write_schema1_state(self, review_root: Path, sink_hash: str) -> None:
-        review_root.mkdir(parents=True, exist_ok=True)
-        (review_root / STATE_FILENAME).write_text(json.dumps({
-            "schema_version": 1,
-            "findings": [
-                {
-                    "sink_hash": sink_hash, "sink_file": "src/A.php", "sink_line": 10,
-                    "sink_kind": "idor_lookup", "severity": "High", "title": "Test A",
+                "schema_version": 2,
+                "findings": [{"sink_hash": "aaaa1111"}],
+                "baseline": None,
+                "run_id": "abc",
+                "resolutions": {
+                    "hash1": {"verdict": "rejected", "source": "audit-triage", "run_seq": 3},
                 },
-            ],
-        }), encoding="utf-8")
+            }))
+            self.assertEqual(set(load_resolutions(review_root)), {"hash1"})
+            save_state(review_root, resolutions={
+                "hash2": Resolution(verdict="rejected", source="audit-triage"),
+            })
+            payload = json.loads((review_root / STATE_FILENAME).read_text())
+        self.assertEqual(set(payload), {"schema_version", "resolutions"})
+        self.assertEqual(set(payload["resolutions"]), {"hash1", "hash2"})
 
-    def test_schema1_state_loads_with_migrated_defaults(self):
+    def test_schema1_file_gives_empty_journal_and_warns(self):
         with tempfile.TemporaryDirectory() as td:
             review_root = Path(td)
-            self._write_schema1_state(review_root, "abcd1234")
-            loaded = load_state(review_root)
-        self.assertIsNotNone(loaded)
-        self.assertEqual(len(loaded), 1)
-        self.assertEqual(loaded[0].verdict, "confirmed")
-        self.assertEqual(loaded[0].condition_keys, ())
+            (review_root / STATE_FILENAME).write_text(json.dumps({
+                "schema_version": 1,
+                "findings": [{"sink_hash": "abcd1234"}],
+            }), encoding="utf-8")
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(load_resolutions(review_root), {})
+        self.assertIn("schema_version 1", err.getvalue())
 
-    def test_schema1_state_not_all_new_on_diff(self):
-        """The concrete regression this migration exists to prevent: a
-        schema-1 state file must not make every current finding look `new`."""
-        with tempfile.TemporaryDirectory() as td:
-            review_root = Path(td)
-            self._write_schema1_state(review_root, "abcd1234")
-            previous = load_state(review_root)
-            current = [FindingSnapshot("abcd1234", "src/A.php", 10, "idor_lookup", "High", "Test A")]
-            diff = compute_diff(previous, current)
-        self.assertEqual(diff.new, [])
-        self.assertEqual(len(diff.recurring), 1)
-
-    def test_schema1_state_has_no_resolutions(self):
-        with tempfile.TemporaryDirectory() as td:
-            review_root = Path(td)
-            self._write_schema1_state(review_root, "abcd1234")
-            self.assertEqual(load_resolutions(review_root), {})
-
-    def test_unreadable_future_schema_version_still_returns_none(self):
-        """Broadening acceptance to {1, 2} must not silently accept an
-        unknown future version too."""
+    def test_unknown_future_schema_version_gives_empty_journal_and_warns(self):
         with tempfile.TemporaryDirectory() as td:
             review_root = Path(td)
             (review_root / STATE_FILENAME).write_text(
-                json.dumps({"schema_version": 99, "findings": []})
+                json.dumps({"schema_version": 99, "resolutions": {}})
             )
-            self.assertIsNone(load_state(review_root))
-            self.assertEqual(load_resolutions(review_root), {})
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(load_resolutions(review_root), {})
+        self.assertIn("schema_version 99", err.getvalue())
 
 
 class ResolutionsAccumulateTests(unittest.TestCase):
@@ -242,10 +102,10 @@ class ResolutionsAccumulateTests(unittest.TestCase):
     def test_resolutions_persist_across_separate_save_calls(self):
         with tempfile.TemporaryDirectory() as td:
             review_root = Path(td)
-            save_state([], review_root, resolutions={
+            save_state(review_root, resolutions={
                 "hash1": Resolution(verdict="rejected", source="audit-triage"),
             })
-            save_state([], review_root, resolutions={
+            save_state(review_root, resolutions={
                 "hash2": Resolution(verdict="rejected", source="audit-triage"),
             })
             loaded = load_resolutions(review_root)
@@ -254,10 +114,10 @@ class ResolutionsAccumulateTests(unittest.TestCase):
     def test_same_hash_overwritten_by_latest_call(self):
         with tempfile.TemporaryDirectory() as td:
             review_root = Path(td)
-            save_state([], review_root, resolutions={
+            save_state(review_root, resolutions={
                 "hash1": Resolution(verdict="rejected", source="audit-triage"),
             })
-            save_state([], review_root, resolutions={
+            save_state(review_root, resolutions={
                 "hash1": Resolution(verdict="reaffirmed", source="triage"),
             })
             loaded = load_resolutions(review_root)
@@ -267,16 +127,16 @@ class ResolutionsAccumulateTests(unittest.TestCase):
     def test_run_seq_advances_only_on_calls_that_supply_resolutions(self):
         with tempfile.TemporaryDirectory() as td:
             review_root = Path(td)
-            save_state([], review_root, resolutions={
+            save_state(review_root, resolutions={
                 "hash1": Resolution(verdict="rejected", source="audit-triage"),
             })
             first_seq = load_resolutions(review_root)["hash1"].run_seq
             # A plain run with no fresh resolutions must not touch hash1's run_seq.
-            save_state([], review_root, resolutions={})
+            save_state(review_root, resolutions={})
             self.assertEqual(load_resolutions(review_root)["hash1"].run_seq, first_seq)
             # A run that DOES supply a (possibly unrelated) resolution bumps
             # the counter for what it touches.
-            save_state([], review_root, resolutions={
+            save_state(review_root, resolutions={
                 "hash2": Resolution(verdict="rejected", source="audit-triage"),
             })
             reloaded = load_resolutions(review_root)
@@ -746,185 +606,6 @@ class CrossRunResolutionMemoryTests(unittest.TestCase):
             )
         self.assertNotIn("Previously rejected", report_after)
         self.assertIn("`src/Auth/Controller.php:42`", report_after)
-
-
-class ContinuationBaselineTests(unittest.TestCase):
-    """A second dedupe pass over the same wave files re-states one run. Diffing
-    it against the snapshot that run's own first pass wrote made every finding
-    read as recurring and none as new, so the section contradicted the report it
-    sat in."""
-
-    CLI = str(BIN_DIR / "dedupe_findings.py")
-
-    def _wave(self, waves: Path, *, line: int, snippet: str) -> None:
-        from tests.test_dedupe_findings import _mk_finding_md  # type: ignore
-        waves.mkdir(parents=True, exist_ok=True)
-        (waves / "W1.md").write_text(
-            _mk_finding_md(
-                n=1,
-                sink_file="src/Api/Controller.php",
-                sink_line=line,
-                sink_kind="idor_lookup",
-                root_cause_family="authz",
-                enclosing_symbol="Controller::show",
-                sink_snippet=snippet,
-                severity="High",
-                confidence=9,
-            ),
-            encoding="utf-8",
-        )
-
-    def _dedupe(self, review_root: Path) -> str:
-        import subprocess
-        args = [
-            "python3", self.CLI,
-            "--input-glob", str(review_root / "waves" / "*.md"),
-            "--output", str(review_root / "REPORT.md"),
-            "--details-dir", str(review_root / "REPORT"),
-            "--project-root", str(review_root),
-        ]
-        proc = subprocess.run(args, capture_output=True, text=True)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        return (review_root / "REPORT.md").read_text(encoding="utf-8")
-
-    def test_plain_rerun_over_the_same_waves_is_a_continuation_too(self):
-        # No flag distinguishes this pass; only the wave files do. A flag-based
-        # signal left exactly this case self-diffing.
-        with tempfile.TemporaryDirectory() as td:
-            review_root = Path(td)
-            waves = review_root / "waves"
-            self._wave(waves, line=10, snippet="$id = $req->get('id');")
-            self._dedupe(review_root)
-            self._wave(waves, line=77, snippet="$other = $req->get('slug');")
-            first = self._dedupe(review_root)
-            second = self._dedupe(review_root)
-            self.assertIn("- New findings (not in previous state): 1", second)
-            self.assertIn("- Closed (in previous state, gone now): 1", second)
-            self.assertEqual(
-                first.split("## Diff vs previous run")[1],
-                second.split("## Diff vs previous run")[1],
-            )
-
-    def test_third_and_later_passes_keep_the_same_baseline(self):
-        with tempfile.TemporaryDirectory() as td:
-            review_root = Path(td)
-            waves = review_root / "waves"
-            self._wave(waves, line=10, snippet="$id = $req->get('id');")
-            self._dedupe(review_root)
-            self._wave(waves, line=77, snippet="$other = $req->get('slug');")
-            self._dedupe(review_root)
-            self._dedupe(review_root)
-            third = self._dedupe(review_root)
-            self.assertIn("- New findings (not in previous state): 1", third)
-            self.assertIn("- Closed (in previous state, gone now): 1", third)
-
-    def test_a_later_audit_diffs_against_the_latest_findings(self):
-        # New wave content is a new run, so the carried baseline must not leak
-        # past the run that owns it.
-        with tempfile.TemporaryDirectory() as td:
-            review_root = Path(td)
-            waves = review_root / "waves"
-            self._wave(waves, line=10, snippet="$id = $req->get('id');")
-            self._dedupe(review_root)
-            self._dedupe(review_root)
-            self._wave(waves, line=10, snippet="$id = $req->get('id'); // reworded")
-            report = self._dedupe(review_root)
-            self.assertIn("- New findings (not in previous state): 1", report)
-            self.assertIn("- Closed (in previous state, gone now): 1", report)
-
-
-class RunIdentityTests(unittest.TestCase):
-    """`run_id` is what tells a re-statement of one run from a fresh audit."""
-
-    def _waves(self, root: Path, bodies: dict[str, str]) -> list[Path]:
-        root.mkdir(parents=True, exist_ok=True)
-        out = []
-        for name, body in bodies.items():
-            path = root / name
-            path.write_text(body, encoding="utf-8")
-            out.append(path)
-        return out
-
-    def test_same_files_same_id_regardless_of_argument_order(self):
-        with tempfile.TemporaryDirectory() as td:
-            paths = self._waves(Path(td), {"W1.md": "a", "W2.md": "b"})
-            self.assertEqual(compute_run_id(paths), compute_run_id(list(reversed(paths))))
-
-    def test_changed_content_changes_the_id(self):
-        with tempfile.TemporaryDirectory() as td:
-            paths = self._waves(Path(td), {"W1.md": "a"})
-            before = compute_run_id(paths)
-            paths[0].write_text("a2", encoding="utf-8")
-            self.assertNotEqual(before, compute_run_id(paths))
-
-    def test_added_or_removed_wave_changes_the_id(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            one = compute_run_id(self._waves(root, {"W1.md": "a"}))
-            two = compute_run_id(self._waves(root, {"W1.md": "a", "W2.md": "b"}))
-            self.assertNotEqual(one, two)
-
-    def test_empty_input_never_matches_a_recorded_id(self):
-        with tempfile.TemporaryDirectory() as td:
-            review_root = Path(td)
-            save_state([], review_root, baseline=None, run_id="")
-            self.assertEqual(compute_run_id([]), "")
-            self.assertEqual(load_continuation_baseline(review_root, ""), (False, None))
-
-
-class ContinuationBaselineUnitTests(unittest.TestCase):
-    RUN = "0123456789abcdef"
-
-    def _snapshot(self):
-        return [FindingSnapshot("abcd1234", "src/A.php", 10, "idor_lookup", "High", "A")]
-
-    def test_state_without_the_new_keys_is_not_a_continuation(self):
-        # A file written by a build that predates `baseline`/`run_id`: falling
-        # back is right, claiming "no previous run" would erase real history.
-        with tempfile.TemporaryDirectory() as td:
-            review_root = Path(td)
-            save_state(self._snapshot(), review_root)
-            payload = json.loads((review_root / STATE_FILENAME).read_text(encoding="utf-8"))
-            del payload["baseline"]
-            del payload["run_id"]
-            (review_root / STATE_FILENAME).write_text(json.dumps(payload), encoding="utf-8")
-            self.assertEqual(load_continuation_baseline(review_root, self.RUN), (False, None))
-
-    def test_recorded_null_baseline_is_distinct_from_an_absent_one(self):
-        with tempfile.TemporaryDirectory() as td:
-            review_root = Path(td)
-            save_state([], review_root, baseline=None, run_id=self.RUN)
-            self.assertEqual(load_continuation_baseline(review_root, self.RUN), (True, None))
-
-    def test_a_different_run_id_is_not_a_continuation(self):
-        with tempfile.TemporaryDirectory() as td:
-            review_root = Path(td)
-            save_state([], review_root, baseline=self._snapshot(), run_id=self.RUN)
-            self.assertEqual(load_continuation_baseline(review_root, "ffff"), (False, None))
-
-    def test_malformed_baseline_falls_back_instead_of_reading_as_empty(self):
-        # `(True, [])` here would call every finding New on a half-written file.
-        for broken in (42, "x", {"a": 1}):
-            with tempfile.TemporaryDirectory() as td:
-                review_root = Path(td)
-                save_state([], review_root, baseline=self._snapshot(), run_id=self.RUN)
-                payload = json.loads((review_root / STATE_FILENAME).read_text(encoding="utf-8"))
-                payload["baseline"] = broken
-                (review_root / STATE_FILENAME).write_text(json.dumps(payload), encoding="utf-8")
-                self.assertEqual(
-                    load_continuation_baseline(review_root, self.RUN), (False, None),
-                    msg=f"baseline={broken!r}",
-                )
-
-    def test_schema_version_stays_readable_by_a_build_without_these_keys(self):
-        # Moving the version would make such a build reject the whole file and
-        # reset `resolutions`, the one accumulated part of this state.
-        with tempfile.TemporaryDirectory() as td:
-            review_root = Path(td)
-            save_state(self._snapshot(), review_root, baseline=None, run_id=self.RUN)
-            payload = json.loads((review_root / STATE_FILENAME).read_text(encoding="utf-8"))
-            self.assertIn(payload["schema_version"], (1, 2))
-
 
 
 if __name__ == "__main__":

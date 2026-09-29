@@ -10,9 +10,7 @@ enforces three rules the prose-only REPORT.md never had to:
   2. **No field varies run-to-run for unchanged inputs.** No run id, no
      timestamp, nothing derived from wall-clock time. `findings.json` must be
      byte-identical across repeated `dedupe_findings.py` runs over the same
-     wave files. REPORT.md holds across such repeats too: a re-render over the
-     same wave files is the same run, so its `## Diff vs previous run` keeps
-     the first pass's baseline instead of diffing against what that pass wrote.
+     wave files, and so is REPORT.md given the same remembered verdicts.
   3. **Every constituent `Finding` is exported, including ones absorbed
      into a `MergedFinding.merged_from` list** — not just the winning
      `primary`. `dedupe()` passes 2/3 can pick a different primary run to

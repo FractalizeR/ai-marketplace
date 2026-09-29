@@ -341,22 +341,25 @@ class CliWiringTests(unittest.TestCase):
 
     def test_findings_json_idempotent_across_repeated_runs(self):
         """DoD #6: findings.json must be byte-identical on runs 1, 2 and 3 in
-        the same review_root -- unlike REPORT.md, whose `## Diff vs previous
-        run` section differs starting on run 2 (state file now exists)."""
+        the same review_root, and so must REPORT.md (no cross-run diff)."""
         with tempfile.TemporaryDirectory() as td:
             tmpdir = Path(td)
             self._mk_waves(tmpdir)
             fj_path = tmpdir / FINDINGS_JSON_NAME
 
+            report_path = tmpdir / "REPORT.md"
+
             self._run_cli(tmpdir)
-            bytes_1 = fj_path.read_bytes()
+            bytes_1, report_1 = fj_path.read_bytes(), report_path.read_bytes()
             self._run_cli(tmpdir)
-            bytes_2 = fj_path.read_bytes()
+            bytes_2, report_2 = fj_path.read_bytes(), report_path.read_bytes()
             self._run_cli(tmpdir)
-            bytes_3 = fj_path.read_bytes()
+            bytes_3, report_3 = fj_path.read_bytes(), report_path.read_bytes()
 
             self.assertEqual(bytes_1, bytes_2)
             self.assertEqual(bytes_2, bytes_3)
+            self.assertEqual(report_1, report_2)
+            self.assertEqual(report_2, report_3)
 
     def test_findings_json_written_in_single_file_mode(self):
         """`--single-file` (legacy monolithic report) must still get the

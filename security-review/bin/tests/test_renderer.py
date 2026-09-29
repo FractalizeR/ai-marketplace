@@ -136,55 +136,6 @@ class DedupQualityStatTests(unittest.TestCase):
         )
 
 
-class DiffBlockTests(unittest.TestCase):
-    """`## Diff vs previous run` block in the executive summary."""
-
-    def _diff(self, new=(), recurring=(), closed=()):
-        from dedupe.state import FindingsDiff
-        return FindingsDiff(new=list(new), recurring=list(recurring), closed=list(closed))
-
-    def _snap(self, sink_hash="h1", sink_kind="idor_lookup", severity="High",
-              file="src/A.php", line=10, title="t"):
-        from dedupe.state import FindingSnapshot
-        return FindingSnapshot(sink_hash, file, line, sink_kind, severity, title)
-
-    def test_no_diff_means_no_block(self):
-        """diff=None (first run) → block absent."""
-        summary = render_summary([], [], diff=None)
-        self.assertNotIn("Diff vs previous run", summary)
-
-    def test_block_renders_counts_when_diff_provided(self):
-        diff = self._diff(
-            new=[self._snap("h1"), self._snap("h2")],
-            recurring=[self._snap("h3")],
-            closed=[self._snap("h4")],
-        )
-        summary = render_summary([], [], diff=diff)
-        self.assertIn("## Diff vs previous run", summary)
-        self.assertIn("New findings (not in previous state): 2", summary)
-        self.assertIn("Recurring (also in previous state): 1", summary)
-        self.assertIn("Closed (in previous state, gone now): 1", summary)
-
-    def test_closed_findings_listed_with_location(self):
-        """`### Closed since previous run` lists each closed snapshot
-        with its sink_hash + file:line for triage."""
-        diff = self._diff(closed=[
-            self._snap("hclosed1", file="src/X.php", line=42,
-                       sink_kind="dql_concat", severity="Critical"),
-        ])
-        summary = render_summary([], [], diff=diff)
-        self.assertIn("### Closed since previous run", summary)
-        self.assertIn("`hclosed1`", summary)
-        self.assertIn("src/X.php:42", summary)
-        self.assertIn("`dql_concat`", summary)
-
-    def test_no_closed_section_when_closed_empty(self):
-        diff = self._diff(new=[self._snap("h1")])
-        summary = render_summary([], [], diff=diff)
-        self.assertIn("Diff vs previous run", summary)
-        self.assertNotIn("Closed since previous run", summary)
-
-
 class ChecklistTailNormalizationTests(unittest.TestCase):
     """`models.checklist_tail` / `models.normalize_discovered_via` --
     table-driven cases. A foreign install's absolute prefix is built as a

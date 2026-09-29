@@ -45,14 +45,9 @@ import validate_context as _vc  # noqa: E402
 from dedupe.state import (  # noqa: E402
     VerdictsInError,
     active_rejections,
-    compute_diff,
-    compute_run_id,
-    load_continuation_baseline,
     load_resolutions,
-    load_state,
     load_verdicts_in,
     save_state,
-    snapshots_from,
 )
 
 
@@ -342,26 +337,9 @@ def main(argv: list[str] | None = None) -> int:
     # docstring and `AttachSideRecordsSpyTests` in test_dedupe_findings.py).
     side_records = attach_side_records(merged + manual, all_needs_validation, all_hardening)
 
-    # Cross-run diff: load previous state from <review_root> = output.parent.
-    # When --no-state is passed (or output happens to lack a parent on weird
-    # invocations) we skip the load/save round-trip entirely.
-    #
-    # A second pass over the SAME wave files — an imported-verdicts pass, a
-    # plain re-render — re-states one run rather than taking a
-    # fresh look at the code. Diffing it against the state its own first pass
-    # just wrote would report every finding as recurring and none as new, so it
-    # inherits that pass's baseline and persists it unchanged. Sameness is
-    # decided by the wave files themselves, not by which flags were passed.
-    snapshots = snapshots_from(merged, manual)
-    diff = None
-    baseline = None
-    run_id = compute_run_id(paths)
+    # `--no-state` (or an output without a parent directory) skips the
+    # load/save round-trip of remembered verdicts entirely.
     state_usable = not args.no_state and str(review_root) not in ("", ".")
-    if state_usable:
-        continuation, baseline = load_continuation_baseline(review_root, run_id)
-        if not continuation:
-            baseline = load_state(review_root)
-        diff = compute_diff(baseline, snapshots)
 
     # Cross-run resolution memory (Stage 2 / P2.5): REMEMBERED rejections from
     # prior runs (--verdicts-in) that still hold —
@@ -412,7 +390,6 @@ def main(argv: list[str] | None = None) -> int:
             args.output,
             render_report(
                 merged, manual,
-                diff=diff,
                 cost=cost,
                 waves_plan=waves_plan,
                 coverage_gaps=coverage_gaps,
@@ -428,7 +405,7 @@ def main(argv: list[str] | None = None) -> int:
             side_records.unmatched_hardening,
         )
         if state_usable:
-            save_state(snapshots, review_root, resolutions=new_resolutions, baseline=baseline, run_id=run_id)
+            save_state(review_root, resolutions=new_resolutions)
         print(
             f"Wrote {args.output} "
             f"({len(merged)} merged, {len(manual)} manual, "
@@ -442,7 +419,6 @@ def main(argv: list[str] | None = None) -> int:
         manual,
         args.output,
         details_dir,
-        diff=diff,
         cost=cost,
         waves_plan=waves_plan,
         coverage_gaps=coverage_gaps,
@@ -457,7 +433,7 @@ def main(argv: list[str] | None = None) -> int:
         side_records.unmatched_hardening,
     )
     if state_usable:
-        save_state(snapshots, review_root, resolutions=new_resolutions, baseline=baseline, run_id=run_id)
+        save_state(review_root, resolutions=new_resolutions)
     print(
         f"Wrote {args.output} + {len(written) - 1} detail file(s) in {details_dir} "
         f"({len(merged)} merged, {len(manual)} manual, "

@@ -116,7 +116,7 @@ def _resolution_note_text(resolution) -> str:
     for the blockquote form; `_attached_resolution_note` embeds this text
     as-is in a `* **field**: value` line instead. Duck-typed on
     `state.Resolution` (`.refute_file`/`.refute_line`/`.source`), the same
-    pattern already used for `diff`/`cost`, to avoid a renderer -> state
+    pattern already used for `cost`, to avoid a renderer -> state
     import. `run_seq` is intentionally never read here -- it must not reach
     REPORT.md (see `dedupe.state` module docstring)."""
     refute_file = getattr(resolution, "refute_file", "")
@@ -646,44 +646,11 @@ def _render_coverage_gaps(coverage_gaps: list[str] | None) -> list[str]:
     return lines
 
 
-def _render_diff_block(diff) -> list[str]:
-    """Render a `## Diff vs previous run` section for the executive summary.
-
-    `diff` is a `dedupe.state.FindingsDiff`. Returns [] when no diff is provided
-    (first run) or when there were truly no closed/new findings (cosmetic noise).
-    Recurring count is always reported alongside as a sanity check.
-    """
-    if diff is None:
-        return []
-    new_count = len(diff.new)
-    recurring_count = len(diff.recurring)
-    closed_count = len(diff.closed)
-    lines = [
-        "## Diff vs previous run",
-        "",
-        f"- New findings (not in previous state): {new_count}",
-        f"- Recurring (also in previous state): {recurring_count}",
-        f"- Closed (in previous state, gone now): {closed_count}",
-        "",
-    ]
-    if diff.closed:
-        lines.append("### Closed since previous run")
-        lines.append("")
-        for s in sorted(diff.closed, key=lambda x: (x.sink_file, x.sink_line)):
-            location = f"{s.sink_file}:{s.sink_line}" if s.sink_file else s.sink_kind
-            severity = s.severity or "?"
-            kind = s.sink_kind or "?"
-            lines.append(f"- `{s.sink_hash}` {severity} `{kind}` — {location}")
-        lines.append("")
-    return lines
-
-
 def render_summary(
     merged: list[MergedFinding],
     manual: list[MergedFinding],
     *,
     details_dirname: str | None = None,
-    diff=None,
     cost=None,
     waves_plan: list[dict] | None = None,
     plugin_root: Path | None = None,
@@ -787,7 +754,6 @@ def render_summary(
         waves_plan, merged, plugin_root or _default_plugin_root()
     )
     lines.extend(coverage_lines)
-    lines.extend(_render_diff_block(diff))
     from .cost import render_cost_block
     lines.extend(render_cost_block(cost))
     return "\n".join(lines)
@@ -802,7 +768,6 @@ def render_report(
     merged: list[MergedFinding],
     manual: list[MergedFinding],
     *,
-    diff=None,
     cost=None,
     waves_plan: list[dict] | None = None,
     plugin_root: Path | None = None,
@@ -821,7 +786,6 @@ def render_report(
     """
     out = [render_summary(
         merged, manual,
-        diff=diff,
         cost=cost,
         waves_plan=waves_plan,
         plugin_root=plugin_root,
@@ -878,7 +842,6 @@ def render_index_report(
     manual: list[MergedFinding],
     details_dirname: str,
     *,
-    diff=None,
     cost=None,
     waves_plan: list[dict] | None = None,
     plugin_root: Path | None = None,
@@ -909,7 +872,6 @@ def render_index_report(
             merged,
             manual,
             details_dirname=details_dirname,
-            diff=diff,
             cost=cost,
             waves_plan=waves_plan,
             plugin_root=plugin_root,
@@ -1017,7 +979,6 @@ def write_split_report(
     output_path: Path,
     details_dir: Path,
     *,
-    diff=None,
     cost=None,
     waves_plan: list[dict] | None = None,
     plugin_root: Path | None = None,
@@ -1036,7 +997,6 @@ def write_split_report(
         output_path,
         render_index_report(
             merged, manual, relname,
-            diff=diff,
             cost=cost,
             waves_plan=waves_plan,
             plugin_root=plugin_root,

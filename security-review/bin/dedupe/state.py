@@ -1,20 +1,12 @@
-"""Cross-run findings state: `<review_root>/.findings_state.json`.
+"""Remembered triage verdicts: `<review_root>/.findings_state.json`.
 
-After every dedupe pipeline writes its REPORT.md, the same set of findings is
-persisted as a json snapshot. The next run loads that snapshot and computes a
-diff:
+The file holds `resolutions` — a `sink_hash -> Resolution` map recording
+external triage-tool verdicts (`--verdicts-in`) so a rejected false positive
+is not re-discovered and re-argued on every run. Nothing else is persisted;
+older builds also stored a per-run findings snapshot, a diff baseline and a
+run id, which are ignored on read and dropped on the next write.
 
-    new       — sink_hash present in current run, absent in previous run
-    recurring — sink_hash present in both
-    closed    — sink_hash present in previous run, absent in current run
-
-The diff lands as a `## Diff vs previous run` block in the executive summary.
-No machinery beyond a simple `set` comparison — it is a UX hint, not auth.
-
-Stage 2 / P2.5 adds a second, independent piece of cross-run memory:
-`resolutions` — a `sink_hash -> Resolution` map recording external triage-tool
-verdicts (`--verdicts-in`) so a rejected false positive is not re-discovered
-and re-argued on every run. Design rules:
+Design rules:
 
   - A resolution ANNOTATES a finding, it never removes it from the report
     (recall-first). `active_rejections` + the renderer only ever ADD a note.
@@ -37,32 +29,24 @@ and re-argued on every run. Design rules:
 
 from __future__ import annotations
 
-import hashlib
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from .models import CONDITION_KEYS, MergedFinding, _sink_hash_from_snippet
+from .models import CONDITION_KEYS, _sink_hash_from_snippet
 
 
 STATE_FILENAME = ".findings_state.json"
 STATE_SCHEMA_VERSION = 2
 
-# Schema versions this build can still READ. Schema 1 (pre-Stage-2) has no
-# `verdict`/`condition_keys` on findings and no `resolutions` key at all —
-# both are backfilled with defaults by the parsing helpers below, so a
-# schema-1 file migrates in place instead of being discarded (CLAUDE.md:
-# "миграция, не сброс" is the P2.5 plan's explicit correction of the old
-# exact-version-match behaviour, which silently dropped the whole file and
-# showed every finding as New on the first post-upgrade run).
-#
-# `baseline` / `run_id` were added WITHOUT moving the version: they are purely
-# additive, and the reader that needs them detects their absence by key, not by
-# version. Moving it would make a build that predates them reject the whole
-# file — and `resolutions`, the one accumulated, non-idempotent part of this
-# state, would be silently reset on the first run after any rollback.
-_READABLE_SCHEMA_VERSIONS = (1, 2)
+# Only schema 2 is read. A schema-1 file (pre-resolutions) carries nothing
+# worth keeping, so it is treated as an empty journal with a warning. The
+# version stays at 2 although the payload lost `findings`/`baseline`/`run_id`:
+# a build that predates this change reads the new file as "no previous run"
+# and keeps `resolutions`, whereas a bump would make it discard them.
+_READABLE_SCHEMA_VERSIONS = (2,)
 
 _RESOLUTION_VERDICTS = ("rejected", "reaffirmed")
 
@@ -97,58 +81,6 @@ def compute_evidence_hash(refute_file: str, refute_line: int, project_root: Path
         return _sink_hash_from_snippet("")
     return _sink_hash_from_snippet(lines[idx])
 
-
-
-@dataclass(frozen=True)
-class FindingSnapshot:
-    sink_hash: str
-    sink_file: str
-    sink_line: int
-    sink_kind: str
-    severity: str
-    title: str
-    # Stage 2 / P2.5 additions — defaulted so existing positional
-    # construction (6 args, see test_findings_state.py / test_renderer.py)
-    # keeps working unchanged. `verdict` is always "confirmed" today:
-    # `snapshots_from` only ever sees `merged`/`manual` (the confirmed
-    # bucket); the field exists so a schema-1 snapshot round-trips through
-    # the same shape rather than needing a second type.
-    verdict: str = "confirmed"
-    condition_keys: tuple[str, ...] = ()
-
-    def to_dict(self) -> dict:
-        return {
-            "sink_hash": self.sink_hash,
-            "sink_file": self.sink_file,
-            "sink_line": self.sink_line,
-            "sink_kind": self.sink_kind,
-            "severity": self.severity,
-            "title": self.title,
-            "verdict": self.verdict,
-            "condition_keys": list(self.condition_keys),
-        }
-
-
-def snapshots_from(merged: list[MergedFinding], manual: list[MergedFinding]) -> list[FindingSnapshot]:
-    """Flatten merged + manual into a stable, hashable per-finding snapshot list.
-
-    A `MergedFinding`'s identity is its `primary.sink_hash`. We pull the rest of
-    the visible-to-user fields from `primary`, keep severity from the merged
-    accessor (max across merged_from)."""
-    out: list[FindingSnapshot] = []
-    for collection in (merged, manual):
-        for mf in collection:
-            p = mf.primary
-            out.append(FindingSnapshot(
-                sink_hash=p.sink_hash,
-                sink_file=p.sink_file,
-                sink_line=p.sink_line,
-                sink_kind=p.sink_kind,
-                severity=mf.severity,
-                title=p.title_line,
-                condition_keys=tuple(p.condition_keys),
-            ))
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -260,37 +192,41 @@ def _read_payload(review_root: Path) -> Optional[dict]:
         return None
     if not isinstance(payload, dict):
         return None
-    if payload.get("schema_version") not in _READABLE_SCHEMA_VERSIONS:
+    version = payload.get("schema_version")
+    if version not in _READABLE_SCHEMA_VERSIONS:
+        _warn_unreadable_once(target, version)
         return None
     return payload
 
 
+_warned_state_files: set[tuple[str, object]] = set()
+
+
+def _warn_unreadable_once(target: Path, version: object) -> None:
+    key = (str(target), repr(version))
+    if key in _warned_state_files:
+        return
+    _warned_state_files.add(key)
+    print(
+        f"Warning: {target} has schema_version {version!r} (readable: "
+        f"{list(_READABLE_SCHEMA_VERSIONS)}); remembered verdicts in it are ignored",
+        file=sys.stderr,
+    )
+
+
 def save_state(
-    snapshots: list[FindingSnapshot],
     review_root: Path,
     resolutions: dict[str, Resolution] | None = None,
-    baseline: Optional[list[FindingSnapshot]] = None,
-    run_id: str = "",
 ) -> Path:
     """Atomically write `.findings_state.json` under `review_root`. Returns the path.
 
-    `findings` is a full overwrite each run (same idempotency convention as
-    the rest of the pipeline — CLAUDE.md "Idempotency in recon and dedup").
-    `resolutions` is the deliberate exception: a **read-modify-write merge**,
-    keyed by sink_hash, `resolutions=None`/`{}` leaves the persisted history
-    untouched. A hash present in `resolutions` overwrites whatever this file
-    already had for it (latest verdict per hash wins) and is stamped with a
-    fresh `run_seq` = 1 + the highest `run_seq` already on disk; hashes not
-    mentioned in this call keep their existing `run_seq` unchanged, so
-    `run_seq` only advances on runs that actually add/update a verdict.
-
-    `baseline` is what THIS write compared against, and `run_id` identifies the
-    inputs it was computed from — persisted so a later pass over the same
-    inputs (imported verdicts, a plain re-render) diffs against the
-    real previous run instead of against the snapshot its own first pass just
-    wrote. `None` baseline is recorded as `null`, meaning "there was no
-    previous run", which is distinct from the key being absent (a file written
-    before these two keys existed).
+    `resolutions` is a **read-modify-write merge**, keyed by sink_hash:
+    `resolutions=None`/`{}` leaves the persisted history untouched. A hash
+    present in `resolutions` overwrites whatever this file already had for it
+    (latest verdict per hash wins) and is stamped with a fresh `run_seq` =
+    1 + the highest `run_seq` already on disk; hashes not mentioned in this
+    call keep their existing `run_seq` unchanged, so `run_seq` only advances
+    on runs that actually add/update a verdict.
     """
     review_root.mkdir(parents=True, exist_ok=True)
     target = review_root / STATE_FILENAME
@@ -313,9 +249,6 @@ def save_state(
 
     payload = {
         "schema_version": STATE_SCHEMA_VERSION,
-        "findings": [s.to_dict() for s in snapshots],
-        "baseline": None if baseline is None else [s.to_dict() for s in baseline],
-        "run_id": run_id,
         "resolutions": {h: r.to_dict() for h, r in sorted(merged_resolutions.items())},
     }
     tmp = target.with_suffix(target.suffix + ".tmp")
@@ -324,98 +257,9 @@ def save_state(
     return target
 
 
-def _snapshots_from_payload(raw) -> Optional[list[FindingSnapshot]]:
-    if not isinstance(raw, list):
-        return None
-    out: list[FindingSnapshot] = []
-    for f in raw:
-        if not isinstance(f, dict):
-            continue
-        try:
-            out.append(FindingSnapshot(
-                sink_hash=str(f.get("sink_hash", "")),
-                sink_file=str(f.get("sink_file", "")),
-                sink_line=int(f.get("sink_line", 0)),
-                sink_kind=str(f.get("sink_kind", "")),
-                severity=str(f.get("severity", "")),
-                title=str(f.get("title", "")),
-                verdict=str(f.get("verdict", "confirmed")),
-                condition_keys=tuple(
-                    str(k) for k in (f.get("condition_keys") or []) if isinstance(k, str)
-                ),
-            ))
-        except (TypeError, ValueError):
-            continue
-    return out
-
-
-def load_state(review_root: Path) -> Optional[list[FindingSnapshot]]:
-    """Return previous-run snapshots, or None if absent / unreadable / on an
-    unrecognized schema. Accepts schema 1 (migrated: `verdict="confirmed"`,
-    `condition_keys=()`), schema 2 and schema 3."""
-    payload = _read_payload(review_root)
-    if payload is None:
-        return None
-    return _snapshots_from_payload(payload.get("findings"))
-
-
-def compute_run_id(input_paths: list[Path]) -> str:
-    """Identify a dedupe run by the wave files it reads — names plus content.
-
-    Two invocations over the same wave files are the same run: an imported-verdicts
-    pass, a plain re-render. A later audit writes different
-    wave content and so gets a different id. Unreadable files are folded in by
-    name alone rather than skipped, so a file that disappears still changes the
-    id. Empty input → "", which never matches a recorded id.
-    """
-    if not input_paths:
-        return ""
-    h = hashlib.sha256()
-    for path in sorted(input_paths, key=lambda p: p.as_posix()):
-        h.update(path.name.encode("utf-8", "replace"))
-        h.update(b"\0")
-        try:
-            h.update(hashlib.sha256(path.read_bytes()).hexdigest().encode("ascii"))
-        except OSError:
-            h.update(b"unreadable")
-        h.update(b"\0")
-    return h.hexdigest()[:16]
-
-
-def load_continuation_baseline(
-    review_root: Path, run_id: str
-) -> tuple[bool, Optional[list[FindingSnapshot]]]:
-    """Return `(is_continuation, baseline)` for a dedupe pass over `run_id`.
-
-    A pass continues the run that wrote the state file when the two ids match;
-    it then reuses that pass's baseline rather than diffing against the
-    snapshot that pass just wrote. Anything else — no state file, a file
-    written before `run_id` existed, a different id, a baseline that is present
-    but not a list — is not a continuation, and the caller falls back to the
-    stored findings. A recorded baseline of `None` is a real answer: the run
-    being continued was itself the first one.
-    """
-    payload = _read_payload(review_root)
-    if payload is None or not run_id:
-        return False, None
-    if payload.get("run_id") != run_id:
-        return False, None
-    if "baseline" not in payload:
-        return False, None
-    raw = payload.get("baseline")
-    if raw is None:
-        return True, None
-    snapshots = _snapshots_from_payload(raw)
-    if snapshots is None:
-        # Present but malformed. Treating it as "no findings last run" would
-        # silently call every finding New; fall back to the stored snapshot.
-        return False, None
-    return True, snapshots
-
-
 def load_resolutions(review_root: Path) -> dict[str, Resolution]:
     """Return the persisted `resolutions` map (`{}` if absent / no previous
-    state / schema-1 file, which predates resolutions entirely)."""
+    state / unreadable schema)."""
     payload = _read_payload(review_root)
     if payload is None:
         return {}
@@ -589,34 +433,3 @@ def load_verdicts_in(
         )
 
     return dict(parsed)
-
-
-@dataclass(frozen=True)
-class FindingsDiff:
-    new: list[FindingSnapshot]        # in current, not in previous
-    recurring: list[FindingSnapshot]  # in both
-    closed: list[FindingSnapshot]     # in previous, not in current
-
-    @property
-    def has_changes(self) -> bool:
-        return bool(self.new or self.closed)
-
-
-def compute_diff(
-    previous: Optional[list[FindingSnapshot]],
-    current: list[FindingSnapshot],
-) -> Optional[FindingsDiff]:
-    """Compare two snapshot collections by `sink_hash`. None if no previous run.
-
-    `nohash00` (the sentinel for findings without a usable snippet) is excluded
-    from diff classification — without a stable hash, every such finding looks
-    `new` on every run, which produces noise rather than signal.
-    """
-    if previous is None:
-        return None
-    prev_index = {s.sink_hash: s for s in previous if s.sink_hash and s.sink_hash != "nohash00"}
-    curr_index = {s.sink_hash: s for s in current if s.sink_hash and s.sink_hash != "nohash00"}
-    new = [curr_index[h] for h in curr_index if h not in prev_index]
-    recurring = [curr_index[h] for h in curr_index if h in prev_index]
-    closed = [prev_index[h] for h in prev_index if h not in curr_index]
-    return FindingsDiff(new=new, recurring=recurring, closed=closed)
