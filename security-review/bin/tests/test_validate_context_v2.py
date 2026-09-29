@@ -5,7 +5,7 @@ Covers:
   - Core sections v2 (shape, status, required-presence).
   - recon_bags bag validation against recipe RECON_BAGS_SCHEMA.
   - Recipe-driven sanity probes (coverage diff ladder, hallucination check).
-  - Ceiling enforcement (level cannot exceed ceiling).
+  - recon_confidence is display-only (level above ceiling is not an error).
   - CLI: --review-root contract.
 """
 
@@ -46,9 +46,6 @@ VALID_FRONTMATTER_V2 = """
 schema_version: 2
 generated_at: "2026-05-05T12:00:00Z"
 git_rev: "abc123"
-project_fingerprint: "p1"
-code_fingerprint: "c1"
-scope: "project"
 stack:
   language: php
   framework: symfony
@@ -134,7 +131,7 @@ class FrontmatterV2(unittest.TestCase):
             res = vc.validate_context_file(p)
             self.assertFalse(res.ok())
 
-    def test_ceiling_clamps_level(self):
+    def test_level_above_ceiling_is_display_only(self):
         fm = VALID_FRONTMATTER_V2.replace(
             "recon_confidence:\n  level: medium\n  ceiling: medium",
             "recon_confidence:\n  level: high\n  ceiling: medium",
@@ -142,8 +139,17 @@ class FrontmatterV2(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             p = write_context(Path(td), fm, all_core_sections_pending())
             res = vc.validate_context_file(p)
-            self.assertFalse(res.ok())
-            self.assertTrue(any("ceiling" in e for e in res.errors))
+            self.assertTrue(res.ok(), msg=f"errors: {res.errors}")
+
+    def test_legacy_fingerprint_and_scope_keys_still_valid(self):
+        fm = VALID_FRONTMATTER_V2.replace(
+            "stack:\n",
+            'project_fingerprint: "p1"\ncode_fingerprint: "c1"\nscope: "project"\nstack:\n', 1,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            p = write_context(Path(td), fm, all_core_sections_pending())
+            res = vc.validate_context_file(p)
+            self.assertTrue(res.ok(), msg=f"errors: {res.errors}")
 
     def test_stack_block_requires_language_and_framework(self):
         fm = VALID_FRONTMATTER_V2.replace(

@@ -180,11 +180,12 @@ class Inventory(unittest.TestCase):
             fm, _ = _read_context(review_root)
             for key in (
                 "schema_version", "generated_at", "git_rev",
-                "project_fingerprint", "code_fingerprint",
-                "scope", "stack", "recipe_used", "tool_versions",
+                "stack", "recipe_used", "tool_versions",
                 "sources_used", "missing_sections", "recon_confidence",
             ):
                 self.assertIn(key, fm, f"missing frontmatter key: {key}")
+            for gone in ("project_fingerprint", "code_fingerprint", "scope"):
+                self.assertNotIn(gone, fm)
             self.assertEqual(fm["schema_version"], 2)
             self.assertEqual(fm["recipe_used"], "symfony")
             self.assertEqual(fm["stack"]["framework"], "symfony")

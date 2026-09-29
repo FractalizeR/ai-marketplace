@@ -281,7 +281,6 @@ CORE_SECTIONS_V2: dict[str, tuple[str, bool]] = {
 # Frontmatter keys required for schema v2.
 V2_FRONTMATTER_REQUIRED = {
     "schema_version", "generated_at", "git_rev",
-    "project_fingerprint", "code_fingerprint", "scope",
     "stack", "recipe_used", "tool_versions",
     "sources_used", "missing_sections", "recon_confidence",
 }
@@ -297,7 +296,7 @@ V2_CEILING_LEVELS = {"high", "medium", "low"}
 
 # Allowed `environment.console_mode` values (frontmatter.environment, optional;
 # 4.x). Mirrors recon.sandbox.ConsoleRunner.mode. The block is optional so
-# pre-4.x CONTEXT.md files (and --skip-recon against them) still validate.
+# pre-4.x CONTEXT.md files still validate.
 V2_CONSOLE_MODES = {"host", "container", "custom", "disabled"}
 
 # Allowed capability_flag values (frontmatter.capabilities). Free-form keys,
@@ -319,36 +318,6 @@ V2_SCHEMA_REVISION_MAX = 99
 # their RECON_BAGS_SCHEMA. Kept as an empty set so callers may add
 # future transitional keys without re-introducing the constant.
 FUTURE_FRAMEWORK_KEYS_3_4: frozenset[str] = frozenset()
-
-
-# ---------------------------------------------------------------------------
-# LEGACY v1 schema — retained for plan_waves.py until S5 rewrite.
-# Do NOT use for new code; uses CORE_SECTIONS_V2 directly.
-# ---------------------------------------------------------------------------
-
-LEGACY_SECTIONS_V1: dict[str, tuple[str, bool]] = {
-    "stack": (SECTION_TYPE_SCALAR, True),
-    "http_entry_points": (SECTION_TYPE_LIST, True),
-    "console_commands": (SECTION_TYPE_LIST, True),
-    "messenger_handlers": (SECTION_TYPE_LIST, True),
-    "event_listeners": (SECTION_TYPE_LIST, True),
-    "doctrine_kernel_listeners": (SECTION_TYPE_LIST, True),
-    "auth_layer": (SECTION_TYPE_SCALAR, True),
-    "voters": (SECTION_TYPE_LIST, True),
-    "authz_usage": (SECTION_TYPE_LIST, True),
-    "repositories": (SECTION_TYPE_LIST, True),
-    "forms": (SECTION_TYPE_LIST, True),
-    "serializer": (SECTION_TYPE_LIST, True),
-    "file_operations": (SECTION_TYPE_LIST, True),
-    "http_client": (SECTION_TYPE_LIST, True),
-    "twig_overrides": (SECTION_TYPE_SCALAR, True),
-    "twig_templates": (SECTION_TYPE_LIST, True),
-    "frontend_assets": (SECTION_TYPE_LIST, True),
-    "security_parameters": (SECTION_TYPE_SCALAR, True),
-    "fintech_markers": (SECTION_TYPE_LIST, True),
-    "user_overrides": (SECTION_TYPE_SCALAR, False),
-}
-SECTIONS = LEGACY_SECTIONS_V1  # back-compat alias
 
 
 # ---------------------------------------------------------------------------
@@ -521,10 +490,6 @@ def _validate_frontmatter_v2(text: str, res: ValidationResult) -> Optional[dict]
             res.errors.append(f"recon_confidence.level invalid: {level!r}")
         if ceiling is not None and ceiling not in V2_CEILING_LEVELS:
             res.errors.append(f"recon_confidence.ceiling invalid: {ceiling!r}")
-        if ceiling == "medium" and level == "high":
-            res.errors.append("recon_confidence.level=high but ceiling=medium — invalid (ceiling clamps level)")
-        if ceiling == "low" and level in ("high", "medium"):
-            res.errors.append("recon_confidence.level above ceiling=low — invalid")
     elif "recon_confidence" in fm:
         res.errors.append(f"recon_confidence must be string or mapping, got: {type(rc).__name__}")
 
@@ -936,16 +901,6 @@ def _exclude_abstract_class_files(project_root: Path, files: set[str]) -> set[st
     return out
 
 
-def _enforce_ceiling(fm: dict, res: ValidationResult) -> None:
-    rc = fm.get("recon_confidence")
-    if not isinstance(rc, dict):
-        return
-    ceiling = rc.get("ceiling")
-    level = rc.get("level")
-    if ceiling == "medium" and level == "high":
-        res.errors.append("ceiling=medium clamps level — frontmatter has level=high which is invalid")
-
-
 EXTRACTOR_FAILED_PREFIX = "extractor_failed:"
 
 
@@ -1107,7 +1062,6 @@ def validate_context_file(path: Path, recipe_loader=None) -> ValidationResult:
     fm = _validate_frontmatter_v2(text, res)
     if fm is None:
         return res
-    _enforce_ceiling(fm, res)
     _validate_core_sections(text, res)
     _validate_recon_bags(text, fm, res, recipe_loader=recipe_loader)
     return res

@@ -43,7 +43,6 @@ from typing import Optional
 _BIN = Path(__file__).resolve().parent
 sys.path.insert(0, str(_BIN))
 
-import compute_fingerprint as fp  # noqa: E402
 from recon import recipes as recipes_pkg  # noqa: E402
 from recon import sandbox as _sandbox  # noqa: E402
 from recon import environment as _environment  # noqa: E402
@@ -566,9 +565,6 @@ def cmd_inventory(
             exclude=exclude,
         )
 
-    pf = fp.compute_project_fingerprint(project_root)
-    cf = fp.compute_code_fingerprint(project_root)
-
     warnings = list(result.warnings)
     if no_console:
         warnings.append("console_disabled_by_flag")
@@ -606,9 +602,6 @@ def cmd_inventory(
         "schema_version": 2,
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         "git_rev": git_rev,
-        "project_fingerprint": pf,
-        "code_fingerprint": cf,
-        "scope": "project",
         "stack": _stack_block(
             recipe, project_root,
             detected_addons=result.detected_addons,

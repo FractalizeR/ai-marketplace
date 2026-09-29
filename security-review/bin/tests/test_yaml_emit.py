@@ -168,9 +168,6 @@ class FrontmatterShape(unittest.TestCase):
             "schema_version": 2,
             "generated_at": "2026-05-05T12:00:00Z",
             "git_rev": "abc123",
-            "project_fingerprint": "p1",
-            "code_fingerprint": "c1",
-            "scope": "project",
             "stack": {
                 "language": "php",
                 "framework": "symfony",
