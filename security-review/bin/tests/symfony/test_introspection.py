@@ -116,21 +116,63 @@ class ConsoleSessionExtensionConfig(unittest.TestCase):
         session.extension_config("security")
         self.assertEqual(calls, ["security"])
 
-    def test_option_rejected_pre_6_3_returns_none_and_warns(self):
+    # run_console_command keeps only the LAST stderr line, and Symfony prints the
+    # command synopsis after an input error, so the warning never ends in the
+    # "option does not exist" sentence on a real console.
+    _SYNOPSIS_WARN = (
+        "console_command_failed: debug:config security --format=json: "
+        "debug:config [--resolve-env] [--] [<name> [<path>]]"
+    )
+
+    def test_pre_6_3_detected_by_version_when_only_synopsis_line_survives(self):
+        def fake_run(runner, args):
+            if args == ["--version"]:
+                return "Symfony 5.4.12 (env: dev, debug: true)\n", None
+            return None, self._SYNOPSIS_WARN
+
+        session, _, warnings = self._session(fake_run)
+        self.assertIsNone(session.extension_config("security"))
+        self.assertIsNone(session.extension_config("framework"))
+        self.assertTrue(session.json_unsupported)
+        unsupported = [w for w in warnings if w.startswith("console_unsupported:")]
+        self.assertEqual(len(unsupported), 1)
+        self.assertIn("5.4.12", unsupported[0])
+        self.assertIn(">= 6.3", unsupported[0])
+
+    def test_version_is_read_once_per_session(self):
+        calls: list[list[str]] = []
+
+        def fake_run(runner, args):
+            calls.append(args)
+            if args == ["--version"]:
+                return "Symfony 6.2.0 (env: dev, debug: true)\n", None
+            return None, self._SYNOPSIS_WARN
+
+        session, _, _ = self._session(fake_run)
+        session.extension_config("security")
+        session.extension_config("framework")
+        self.assertEqual(calls.count(["--version"]), 1)
+
+    def test_modern_console_failing_for_another_reason_is_not_unsupported(self):
+        def fake_run(runner, args):
+            if args == ["--version"]:
+                return "Symfony 7.1.3 (env: dev, debug: true)\n", None
+            return None, self._SYNOPSIS_WARN
+
+        session, _, warnings = self._session(fake_run)
+        self.assertIsNone(session.extension_config("security"))
+        self.assertFalse(session.json_unsupported)
+        self.assertFalse([w for w in warnings if w.startswith("console_unsupported:")])
+
+    def test_option_sentence_alone_still_marks_unsupported(self):
         def fake_run(runner, args):
             if args == ["--version"]:
                 return "Symfony 5.4.12 (env: dev, debug: true)\n", None
             return None, 'console_command_failed: debug:config security --format=json: The "--format" option does not exist.'
 
         session, _, warnings = self._session(fake_run)
-        self.assertIsNone(session.extension_config("security"))
-        self.assertIsNone(session.extension_config("framework"))
+        session.extension_config("security")
         self.assertTrue(session.json_unsupported)
-        self.assertIn("option does not exist", warnings[0])
-        unsupported = [w for w in warnings if w.startswith("console_unsupported:")]
-        self.assertEqual(len(unsupported), 1)
-        self.assertIn("5.4.12", unsupported[0])
-        self.assertIn(">= 6.3", unsupported[0])
 
     def test_other_failures_do_not_mark_json_unsupported(self):
         def fake_run(runner, args):

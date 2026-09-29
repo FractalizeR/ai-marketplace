@@ -160,6 +160,9 @@ class ConsoleSession:
         self._config_cache: dict[str, Optional[dict]] = {}
         self._debug_config_recorded = False
         self.json_unsupported = False
+        self._version_read = False
+        self._version: Optional[str] = None
+        self._version_too_old = False
         self._env_done = False
         self._env: Optional[str] = None
 
@@ -207,8 +210,7 @@ class ConsoleSession:
         )
         if warn:
             self._warn(quiet, redact_stderr_secrets(warn))
-            if "option does not exist" in warn.lower():
-                self._note_json_unsupported()
+            self._check_json_unsupported(warn)
             self._config_cache[alias] = None
             return None
         if out is None:
@@ -238,20 +240,34 @@ class ConsoleSession:
         self._config_cache[alias] = tree
         return tree
 
-    def _note_json_unsupported(self) -> None:
-        """Symfony < 6.3 rejects `--format` on `debug:config`; say so once,
-        naming the version, instead of leaving a generic console failure."""
+    def _check_json_unsupported(self, warn: str) -> None:
+        """After a failed `debug:config --format=json`, decide whether the console
+        is simply too old (Symfony < 6.3) and say so once, naming the version.
+
+        The version, not the failure text, is the signal: Symfony prints the
+        command synopsis after an input error and `run_console_command` keeps only
+        the last stderr line, so the "option does not exist" sentence is usually
+        gone. The sentence still counts when it does survive.
+        """
         if self.json_unsupported:
             return
-        self.json_unsupported = True
-        from recon import sandbox
+        if not self._version_read:
+            self._version_read = True
+            from recon import sandbox
 
-        out, _ = sandbox.run_console_command(self._runner, ["--version"])
-        match = re.search(r"\d+\.\d+(?:\.\d+)?", out or "")
-        version = match.group(0) if match else "unknown version"
+            out, _ = sandbox.run_console_command(self._runner, ["--version"])
+            match = re.search(r"Symfony\s+(\d+)\.(\d+)(?:\.\d+)?", out or "")
+            if match:
+                self._version = match.group(0).split(None, 1)[1]
+                self._version_too_old = (int(match.group(1)), int(match.group(2))) < (6, 3)
+        sentence = "option does not exist" in warn.lower()
+        if not (self._version_too_old or sentence):
+            return
+        self.json_unsupported = True
         self._warnings.append(
             f"console_unsupported: debug:config --format=json needs Symfony >= 6.3 "
-            f"(console reports {version}); config is left uninterpreted"
+            f"(console reports {self._version or 'unknown version'}); "
+            f"config is left uninterpreted"
         )
 
     def kernel_environment(self) -> Optional[str]:
