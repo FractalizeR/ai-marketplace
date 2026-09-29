@@ -34,12 +34,12 @@ Parse flags from `$ARGUMENTS`:
 - `--label=<x>` — orchestrator label, forms `<review_root> = security-review-{label}` relative to cwd. If the flag is not passed — do **self-introspection** (see step 0).
 - `--review-root=<out-dir>` — override of the **review-root output directory** (artifacts: `CONTEXT.md`, `waves/`, `REPORT.md`). For Docker/CI/firejail isolation. Accepts a relative path (resolved from cwd) or absolute. If set — `--label` is ignored. **This flag does NOT specify what to scan** — use `--scope=<glob>` to restrict the audit area, and `--project-root=<path>` to point at a non-cwd project.
 - `--project-root=<path>` — corner of the audited project (where `composer.json` / framework configs live). Defaults to `cwd`. Use in composite repos where CLAUDE.md / cwd is one directory above the actual project root (for example monorepo with `api/` PHP subproject + shared top-level CLAUDE.md). Recon, exclude paths, and sanity coverage all resolve against this value. Accepts a relative (from cwd) or absolute path.
-- `--interactive` — checkpoint with the user after recon (via AskUserQuestion)
+- `--interactive` — checkpoint with the user after recon (via AskUserQuestion; a harness that cannot prompt skips it, see step 6)
 - `--quick` — **disable** the exploratory wave W∞ (ON by default). For fast runs / CI. The WGAP recon-gap wave (step 7) stays on.
 - `--all-opus` — force opus on W4, W5 and W∞ (legacy). By default W3, W4, W5 and W∞ run on sonnet (mechanical data flow); W3 stays on sonnet even with this flag.
 - `--scope=<glob>` — restrict target_files by a glob pattern (for example `src/Api/**`)
-- `--no-console` — static-only recon: the utility does NOT run the project's console. Use when auditing hostile/untrusted repos (no guarantee that bootstrap will not execute malicious code), when runtime credentials are absent, or in CI scenarios where project execution is forbidden. Ceiling=medium (intentionally). Framework config (security firewalls / `access_control`, trusted proxies, messenger, twig) is then **not interpreted**: recon does not parse config files itself, so those sections come back `partial` (or `pending_enrichment` for `auth_layer`) with a `config_uninterpreted: <alias>: no_console` reason and their files in `source_files`, which routes them to the workers and the WGAP wave. Alternative — isolation via firejail/Docker without the flag.
-- `--console-cmd=<template>` — explicit command for running the project console, e.g. `--console-cmd="docker compose exec -T php php bin/console"`. Use when the project runs **inside a container** (docker compose / Makefile / ddev / Sail) — running `bin/console` on the host would distort the environment (wrong PHP version, missing services). May contain a `{args}` placeholder for Makefile-style passthrough (`--console-cmd="make console CMD={args}"`); otherwise the subcommand is appended. When neither this flag nor `--no-console` is passed and the project looks containerized, **step 3b asks you interactively** (see below) instead of silently degrading. `--no-console` wins over this flag. **On the derived Codex harness** a space-containing value here is truncated by the whitespace-split argument contract — there, set the console command via the `FR_SECURITY_CONSOLE_CMD` environment variable instead (e.g. `frsr --console-cmd "…"`), which step 3b honors; see step 3b.
+- `--no-console` — static-only recon: the utility does NOT run the project's console. Use when auditing hostile/untrusted repos (no guarantee that bootstrap will not execute malicious code), when runtime credentials are absent, or in CI scenarios where project execution is forbidden. Ceiling=medium (intentionally). Framework config (security firewalls / `access_control`, trusted proxies, messenger, twig) is then **not interpreted**: recon does not parse config files itself, so those sections come back `partial` (or `pending_enrichment` for `auth_layer`) with a `config_uninterpreted: <alias>: no_console` reason and their files in `source_files`, which routes them to the focused waves (the security config to W1); the WGAP wave gets only gap files no other slice already carries. Alternative — isolation via firejail/Docker without the flag.
+- `--console-cmd=<template>` — explicit command for running the project console, e.g. `--console-cmd="docker compose exec -T php php bin/console"`. Use when the project runs **inside a container** (docker compose / Makefile / ddev / Sail) — running `bin/console` on the host would distort the environment (wrong PHP version, missing services). May contain a `{args}` placeholder for Makefile-style passthrough (`--console-cmd="make console CMD={args}"`); otherwise the subcommand is appended. When neither this flag nor `--no-console` is passed and the project looks containerized, **step 3b asks you** (on a harness that cannot prompt, it stops with the fix-it flags; see below) instead of silently degrading. `--no-console` wins over this flag. **On the derived Codex harness** a space-containing value here is truncated by the whitespace-split argument contract — there, set the console command via the `FR_SECURITY_CONSOLE_CMD` environment variable instead (e.g. `frsr --console-cmd "…"`), which step 3b honors; see step 3b.
 - `--exclude=<csv>` — additional path prefixes (relative to `<project_root>`) that will NOT be parsed by the PHP extractor. For example, `--exclude=legacy,src/ThirdParty,generated`. These paths are added to the built-in `DEFAULT_EXCLUDE` (`vendor/`, `var/cache/`, `var/log/`, `node_modules/`, `storage/framework/cache/`, `storage/logs/`, `bootstrap/cache/`, `public/build/`, `.git/`, `.claude/`) — they do NOT replace it. If the flag is not passed explicitly — only built-in defaults + items found in CLAUDE.md apply (see step 3a).
 - `--no-adversarial`, `--skip-recon`, `--force-skip-recon` — removed in 5.0.0 (there is no refute pass any more, and every run does a fresh recon). If one is passed, print `WARNING: <flag> was removed in 5.0.0 and is ignored` once and continue.
 
@@ -290,7 +290,7 @@ Whichever branch resolved `CONSOLE_CMD` (including `none`, which still boot-test
 
    Pass the same flag you'd forward to recon in step 4; nothing extra for `env` or `none`. Read the JSON result:
    - `applicable=false` or `ok=true` → forward `CONSOLE_CMD` to the recon agent in step 4.
-   - `ok=false` (exit 3) → the console is required but not booting. Show `reason` and `suggestions` to the user via `AskUserQuestion`, then offer: (a) pick a suggested or type a custom `--console-cmd` and repeat this boot-test, (b) `--no-console` as a conscious static-only opt-out (state the cost: ceiling=medium; config is not interpreted — its sections stay `partial` with the config files handed to the workers and the WGAP wave), (c) stop the review. Loop on (a) until it passes or the user picks (b) or (c).
+   - `ok=false` (exit 3) → the console is required but not booting. Show `reason` and `suggestions` to the user via `AskUserQuestion`, then offer: (a) pick a suggested or type a custom `--console-cmd` and repeat this boot-test, (b) `--no-console` as a conscious static-only opt-out (state the cost: ceiling=medium; config is not interpreted — its sections stay `partial` with the config files handed to the focused waves), (c) stop the review. Loop on (a) until it passes or the user picks (b) or (c).
 
 > Non-interactive / CI (no human to prompt): if the boot-test fails (`ok=false`), **stop** the review — do not proceed degraded. Report `reason` and the exact flags that unblock it (`--console-cmd=<tpl>` or `--no-console`, or export `FR_SECURITY_CONSOLE_CMD`). CI must pass one of these explicitly to make the choice deterministic; `applicable=false` / `ok=true` proceeds with no prompt needed.
 
@@ -328,7 +328,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROO
 - config the recipe found but could not interpret (`config_uninterpreted: …`), and list sections left in `pending_enrichment`;
 - declared files that are not on disk (the recon agent already had one attempt to fix these).
 
-The gap records feed the WGAP wave in step 7: workers review those files directly, so a gap costs a follow-up pass instead of the run. `--gaps-out` rewrites the file on every call, with an empty `items` list when there are no gaps.
+The gap records feed step 7: a gap file that a focused slice already carries stays there (uninterpreted config usually does — its section's `source_files` route it), and the rest become the WGAP wave, so a gap costs a follow-up pass instead of the run. `--gaps-out` rewrites the file on every call, with an empty `items` list when there are no gaps.
 
 - exit 0 → print the `WARNING:` lines to the user as they are and continue.
 - exit 1 → CONTEXT.md is structurally invalid (the recon agent should have returned `RECON_SANITY_FAILED` instead) — stop and show the `ERROR:` lines.
@@ -340,7 +340,7 @@ Read `<REVIEW_ROOT>/CONTEXT.md`, show a brief summary (section names — those t
 
 ```
 Recon complete (recon_confidence: <level>, ceiling: <level>).
-Recon gaps: <N items in recon_gaps.json, or "none"> — reviewed by the WGAP wave
+Recon gaps: <N items in recon_gaps.json, or "none"> — routed to the focused waves or the WGAP wave
 Stack: <framework name from frontmatter.stack.framework>
 Console: <frontmatter.environment.console_mode> <if environment.console_gap: "⚠️ coverage gap — " + environment.console_gap_reason>
 Found (top-level core sections):
@@ -525,7 +525,7 @@ Dedup produces a **split report** (by default):
 
 For legacy mode (everything in one file) — flag `--single-file`.
 
-Dedupe also reads `<REVIEW_ROOT>/recon_gaps.json` on its own. With `--waves-plan` it splits each gap's files in `## Coverage Gaps` into those a slice reviewed and those it did not (cut by the WGAP cap, `--scope` or the vendor/tests filter), so always pass `--waves-plan`.
+Dedupe also reads `<REVIEW_ROOT>/recon_gaps.json` on its own. With `--waves-plan` it splits each gap's files in `## Coverage Gaps` into those routed to a slice (WGAP or a focused wave — whether that slice ran is not checked) and those NOT routed (cut by the WGAP cap, `--scope` or the vendor/tests filter), so always pass `--waves-plan`.
 
 ### 12. Output to user
 

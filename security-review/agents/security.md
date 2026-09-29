@@ -40,10 +40,10 @@ You are allowed to read any project file via Read/Grep/Glob/MCP. The slice defin
 
 ### Recon-gap slices (`slice_id` starts with `WGAP_`)
 
-A `WGAP_PART<n>` slice is the follow-up pass on what static recon could not cover. **Before anything else, read `<review_root>/recon_gaps.json`** (`{schema_version: 1, items: [...]}`; each item has `kind` — `coverage` | `extractor_failed` | `uninterpreted` — plus `section_path`, `reason` and `files`). If the file is missing or its `schema_version` is not 1, work from `target_files` alone.
+A `WGAP_PART<n>` slice is the follow-up pass on what static recon could not cover. **Before anything else, read `<review_root>/recon_gaps.json`** (`{schema_version: 1, items: [...]}`; each item has `kind` — `coverage` | `extractor_failed` | `uninterpreted` — plus `section_path`, `reason` and `files`; a `coverage` item also has `declared` (filesystem matches the inventory lists), `found` (filesystem matches) and `missing_pct` (missing / found)). If the file is missing or its `schema_version` is not 1, work from `target_files` alone.
 
-- Your `target_files` are files recon could not enumerate or interpret, so `CONTEXT.md` says little or nothing about them. Discover their entry points yourself (routes, controller actions, console commands, message handlers, listeners declared in those files) and trace each one as usual. `entry_points_in_scope` for this slice lists the files themselves.
-- Use each item's `section_path` and `reason` to see what recon missed — e.g. an uninterpreted `security` config means firewalls and `access_control` rules were never parsed, so read the config yourself before judging authorization.
+- Your `target_files` are the gap files no other slice already carries — mostly code recon could not enumerate — so `CONTEXT.md` says little or nothing about them. Uninterpreted config files usually sit in a focused slice instead (see the `config_uninterpreted:` rule under READING CONTEXT.md). Discover their entry points yourself (routes, controller actions, console commands, message handlers, listeners declared in those files) and trace each one as usual. `entry_points_in_scope` for this slice lists the files themselves.
+- Use each item's `section_path` and `reason` to see what recon missed — e.g. `extractor_failed` means the PHP extractor never parsed those files, so none of their routes, queries or voters are in `CONTEXT.md`.
 - Report in the normal output format below; nothing about the verdicts or quality gates changes.
 
 ## READING CONTEXT.md (schema v2)
@@ -72,6 +72,8 @@ Framework-specific sections live under `recon_bags.{kind}.{name}.*`, where `{kin
 - `recon_bags.stack.symfony.voters` → section `recon_bags.stack.symfony` → key `voters` inside payload.
 
 If a section passed to you is missing from CONTEXT.md (for example, recon_bags.{kind}.{name}.* for pure-PHP projects) — skip it without error, continue working with the rest.
+
+If a section's `reason` starts with `config_uninterpreted:` (any slice, not only WGAP), recon found that config but did not interpret it: read the files in its `source_files` yourself before judging what the config controls; the section's values are unknown, not absent.
 
 ## KEY INSTRUCTION ON OPEN-ENDED CATEGORY LIST
 

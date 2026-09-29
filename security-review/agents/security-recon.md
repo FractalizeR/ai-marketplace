@@ -128,7 +128,7 @@ Do not grep across the whole project, do not read a file in full — **except** 
 
 **5.5. If data is insufficient.** For a section built from `data.candidates` (snippets ambiguous, file unavailable, regex match clearly false) — write `status: unknown` + `reason: "<short explanation>"`. Better unknown than hallucination. Still flip the marker to `done`.
 
-For a section built from `data.evidence_files` — typically `auth_layer`, left pending with a `config_uninterpreted: security: <no_console|console_failed|tree_mismatch|env_mismatch>` reason because the console did not run, failed, or gave a tree that misses what the files declare — Read the evidence files (5.2 allows it) and fill `data:` with the schema keys when the files state them (`status: ok`). If you cannot interpret them — do NOT write `status: unknown`. Write `status: partial`, `reason: "<why>"`, `data:` with every schema key present (unknown values as the string `unknown`, `mfa: false`), and keep `source_files` — they route the config files to the workers. Reserve `status: unknown` for this section only when the evidence files, once read, turn out to hold no such config at all — that is "no evidence found", not "found but not understood".
+For a section built from `data.evidence_files` — typically `auth_layer`, left pending (with only `enrichment_hint`, `data.evidence_files` and `source_files`, no `reason`) because the console did not run, failed, cannot print config as JSON (Symfony < 6.3) or gave a tree that misses what the files declare; the cause is the `config_uninterpreted: security: <no_console|console_failed|console_unsupported|tree_mismatch|env_mismatch>` reason on the `firewalls` bag (`recon_bags.stack.symfony`) — Read the evidence files (5.2 allows it) and fill `data:` with the schema keys when the files state them (`status: ok`). If you cannot interpret them — do NOT write `status: unknown`. Write `status: partial`, `reason: "<why>"`, `data:` with every schema key present (unknown values as the string `unknown`, `mfa: false`), and keep `source_files` — they route the config files to the workers. Reserve `status: unknown` for this section only when the evidence files, once read, turn out to hold no such config at all — that is "no evidence found", not "found but not understood".
 
 ### Step 6. Validate
 
@@ -155,7 +155,7 @@ And the one Edit-fixable warning:
 
 - `sanity[<probe>]: N declared file(s) not on disk: <preview>` — a hallucinated file path in some item. This is a recipe bug (or yours, if you added something). Edit the needed section, remove the non-existent paths. One attempt: if the warning is still there after the re-run, leave it and go to step 8.
 
-Every other sanity warning is **not yours to fix** and never a reason to fail: coverage gaps (`declared X of Y filesystem matches`), `sanity[extractor]: … extractor_failed: …`, `sanity[config]: … not interpreted — config_uninterpreted: …`, a list section left in `pending_enrichment`. No Edit creates the missing files or re-runs the extractor. The orchestrator records these gaps in `recon_gaps.json`, and a follow-up worker wave reviews exactly those files.
+Every other sanity warning is **not yours to fix** and never a reason to fail: coverage gaps (`declared X of Y filesystem matches`), `sanity[extractor]: … extractor_failed: …`, `sanity[config]: … not interpreted — config_uninterpreted: …`, a list section left in `pending_enrichment`. No Edit creates the missing files or re-runs the extractor. The orchestrator records these gaps in `recon_gaps.json` and routes their files to a worker: the focused wave that already carries a file, else the WGAP follow-up wave.
 
 After each Edit — re-run step 6. **Maximum 3 fix loop attempts** for `ERROR:` lines.
 
@@ -234,7 +234,7 @@ Marker flipped to `done`. `enrichment_hint` removed. `candidates` removed. Final
 
 ## WHAT IF THE UTILITY EMITTED `recon_confidence: low` OR AN ALMOST EMPTY INVENTORY
 
-`recipe.status=partial` → the utility returns exit 0, but the frontmatter may contain `recon_confidence.level: low/medium`. This is **not grounds for exiting** — continue the standard flow (steps 3–8): a valid schema-conformant file with some `unknown` sections — normal outcome. Do not try to "improve" manually. `recon_confidence` is only displayed to the user; what recon missed is recorded by the orchestrator's sanity run and reviewed by a follow-up wave.
+`recipe.status=partial` → the utility returns exit 0, but the frontmatter may contain `recon_confidence.level: low/medium`. This is **not grounds for exiting** — continue the standard flow (steps 3–8): a valid schema-conformant file with some `unknown` sections — normal outcome. Do not try to "improve" manually. `recon_confidence` is only displayed to the user; what recon missed is recorded by the orchestrator's sanity run and routed to a worker.
 
 Only `recipe.status=failed` (exit 1) — grounds for exit at step 2 with `RECON_UTILITY_FAILED`.
 

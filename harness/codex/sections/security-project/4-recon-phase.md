@@ -1,4 +1,4 @@
-<!-- source-sha256: 21e52c8503ec60b6bdfdc5e65edad4afe46fb0a247dbb67308335c7df1a950cb -->
+<!-- source-sha256: e6d432e3465d98c51f85479243682f33ce4cd1b042ffb7bbfb8b7a966287bc63 -->
 ### 4. Recon phase
 
 Launch **one** recon process. Codex has no named agents and no in-process subagent — recon runs as a single external `codex exec` invocation that **reads and follows** the bundled recon agent file, driven through the shared role dispatcher (`shared/dispatch.py`, `dispatch_role`) so freshness, stdout capture, and gap classification match every other stage. The recon process picks the recipe itself (detect) and calls `recon_inventory.py`, which writes `<REVIEW_ROOT>/CONTEXT.md`. Forward the same inputs the in-process path forwarded — both paths **absolute** (Step 0.4 invariant), the console decision from step 3b (`CONSOLE_MODE`), and, if step 3a collected a non-empty exclude list, `EXCLUDE_CSV`:
@@ -40,7 +40,7 @@ python3 ${FR_SECURITY_CORE_ROOT}/bin/validate_context.py --review-root "<REVIEW_
 - config the recipe found but could not interpret (`config_uninterpreted: …`), and list sections left in `pending_enrichment`;
 - declared files that are not on disk (the recon process already had one attempt to fix these).
 
-The gap records feed the WGAP wave in step 7: workers review those files directly, so a gap costs a follow-up pass instead of the run. `--gaps-out` rewrites the file on every call, with an empty `items` list when there are no gaps.
+The gap records feed step 7: a gap file that a focused slice already carries stays there (uninterpreted config usually does — its section's `source_files` route it), and the rest become the WGAP wave, so a gap costs a follow-up pass instead of the run. `--gaps-out` rewrites the file on every call, with an empty `items` list when there are no gaps.
 
 - exit 0 → print the `WARNING:` lines as they are and continue; do not re-run recon.
 - exit 1 → CONTEXT.md is structurally invalid — stop and print the `ERROR:` lines.
