@@ -148,6 +148,15 @@ class FrsrTests(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("model tiers are not set", err)
 
+    def test_saved_map_with_guessed_provenance_counts_as_missing(self):
+        review = self.project / "security-review-codex"
+        review.mkdir()
+        (review / ".model_map.json").write_text(
+            '{"high": "x", "fast": "x", "provenance": "collapsed"}')
+        rc, _, err = self.run_frsr("project")
+        self.assertEqual(rc, 2)
+        self.assertIn("model tiers are not set", err)
+
     def test_go_saves_map_with_real_resolver_then_execs_codex(self):
         engine = SCRIPT.parent.parent / "security-review/bin/shared"
         shared = self.repo / "dist/codex/plugins/fr-security-review/core/bin/shared"

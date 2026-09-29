@@ -125,13 +125,15 @@ PY
 )"
 [ -z "$guard_msg" ] || die "--review-root=$REVIEW_ROOT refused: $guard_msg. It is the output directory, not what to scan; use --scope to narrow the audit, or a name like security-review-codex."
 
-# Reads .high from a tier map that has both tiers, else prints nothing.
+# Reads .high from a tier map that has both tiers and no guessed (pre-5.0)
+# provenance, else prints nothing.
 map_high() {
   python3 - "$1" <<'PY' 2>/dev/null || true
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
-    if all(isinstance(d.get(t), str) and d[t] for t in ("high", "fast")):
+    if all(isinstance(d.get(t), str) and d[t] for t in ("high", "fast")) \
+            and d.get("provenance", "cli") == "cli":
         print(d["high"])
 except (OSError, ValueError, AttributeError):
     pass

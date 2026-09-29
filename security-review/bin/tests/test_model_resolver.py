@@ -45,11 +45,22 @@ class PersistTests(unittest.TestCase):
             (Path(d) / ".model_map.json").write_text('{"high": "a", "fast": ""}')
             self.assertIsNone(mr.load_persisted(Path(d)))
 
-    def test_legacy_provenance_key_is_ignored(self):
+    def test_legacy_operator_provenance_is_trusted(self):
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / ".model_map.json").write_text(
-                '{"high": "a", "fast": "b", "provenance": "proposed"}')
+                '{"high": "a", "fast": "b", "provenance": "cli"}')
             self.assertEqual(mr.load_persisted(Path(d)), mr.TierMap("a", "b"))
+
+    def test_legacy_guessed_provenance_is_treated_as_absent_with_a_message(self):
+        for prov in ("proposed", "collapsed", "persisted"):
+            with self.subTest(provenance=prov), tempfile.TemporaryDirectory() as d:
+                (Path(d) / ".model_map.json").write_text(
+                    json.dumps({"high": "a", "fast": "b", "provenance": prov}))
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertIsNone(mr.load_persisted(Path(d)))
+                self.assertIn("--models", err.getvalue())
+                self.assertIn(prov, err.getvalue())
 
 
 class ParseCliModelsTests(unittest.TestCase):

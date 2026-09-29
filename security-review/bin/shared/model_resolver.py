@@ -84,7 +84,11 @@ def persist(tier_map: TierMap, review_root: Path) -> Path:
 
 
 def load_persisted(review_root: Path) -> TierMap | None:
-    """Load <review_root>/.model_map.json. Missing/corrupt/incomplete → None."""
+    """Load <review_root>/.model_map.json. Missing/corrupt/incomplete → None.
+
+    A pre-5.0 map carries `provenance`; only "cli" (an explicit operator
+    choice) is trusted, the guessed kinds ("proposed", "collapsed", ...) are not.
+    """
     path = _model_map_path(Path(review_root))
     if not path.is_file():
         return None
@@ -93,6 +97,15 @@ def load_persisted(review_root: Path) -> TierMap | None:
         if not isinstance(data, dict):
             return None
         if not all(isinstance(data.get(t), str) and data[t] for t in TIERS):
+            return None
+        provenance = data.get("provenance", "cli")
+        if provenance != "cli":
+            print(
+                f"model_resolver: ignoring {path}: written by a pre-5.0 build with "
+                f"provenance {provenance!r}, not by an explicit operator choice; "
+                f"pass --models high=<id>,fast=<id> to replace it",
+                file=sys.stderr,
+            )
             return None
         return TierMap.from_dict(data)
     except (OSError, ValueError):
