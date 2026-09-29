@@ -137,19 +137,25 @@ PY
 RESOLVER="$CORE/bin/shared/model_resolver.py"
 [ -f "$RESOLVER" ] || die "bundle is incomplete: $RESOLVER is missing — run 'make install-codex' in $REPO"
 
-# json_get <key> reads a top-level string from JSON on stdin ("" when absent).
-json_get() { python3 -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$1"; }
+RUN_INFO="$CORE/bin/run_info.py"
+[ -f "$RUN_INFO" ] || die "bundle is incomplete: $RUN_INFO is missing — run 'make install-codex' in $REPO"
 
-HIGH=""
+# json_get <key> reads a top-level string from JSON on stdin ("" when absent or null).
+json_get() { python3 -c 'import json,sys; v = json.load(sys.stdin).get(sys.argv[1]); print("" if v is None else v)' "$1"; }
+
+HIGH="" ; FAST=""
 if [ -n "$MODELS" ]; then
   checked="$(python3 "$RESOLVER" --check --models "$MODELS" 2>&1)" \
     || die "invalid --models: ${checked#Error: }"
   HIGH="$(printf '%s' "$checked" | json_get high)"
+  FAST="$(printf '%s' "$checked" | json_get fast)"
 else
   described="$(python3 "$RESOLVER" --describe --review-root "$REVIEW_ROOT")" \
     || die "could not read the saved model map in $REVIEW_ROOT"
   case "$(printf '%s' "$described" | json_get status)" in
-    usable) HIGH="$(printf '%s' "$described" | json_get high)" ;;
+    usable)
+      HIGH="$(printf '%s' "$described" | json_get high)"
+      FAST="$(printf '%s' "$described" | json_get fast)" ;;
     ignored-pre-5.0) die "the saved map at $REVIEW_ROOT/.model_map.json was written by a pre-5.0 build and is ignored: pass --models high=<id>,fast=<id> (list ids with 'codex debug models')" ;;
     invalid) die "the saved map at $REVIEW_ROOT/.model_map.json is incomplete or unreadable: pass --models high=<id>,fast=<id>" ;;
     *) die "model tiers are not set: pass --models high=<id>,fast=<id> (list ids with 'codex debug models'); no saved map at $REVIEW_ROOT/.model_map.json" ;;
@@ -181,6 +187,20 @@ case "$REVIEW_ROOT" in *[[:space:]]*) WS=1 ;; esac
 echo "frsr: harness=$HARNESS  project_root=$PROJECT_ROOT  review_root=$REVIEW_ROOT"
 echo "frsr: FR_SECURITY_CORE_ROOT=$FR_SECURITY_CORE_ROOT"
 echo "frsr: orchestrator model=$HIGH"
+echo "frsr: models high=$HIGH fast=$FAST"
+
+# Workers inherit model_reasoning_effort from the Codex config (the dispatcher
+# passes only -m), and the Codex GUI app is known to reset it — show what is in
+# effect, and flag a high tier that differs from the configured model (a stale
+# id is easy to carry over between runs). Warn-only: the operator's pick wins.
+codex_cfg="$(python3 "$RUN_INFO" --codex-config 2>/dev/null || echo '{}')"
+CFG_MODEL="$(printf '%s' "$codex_cfg" | json_get model)"
+CFG_EFFORT="$(printf '%s' "$codex_cfg" | json_get model_reasoning_effort)"
+CFG_PATH="$(printf '%s' "$codex_cfg" | json_get path)"
+echo "frsr: reasoning effort=${CFG_EFFORT:-unknown} (from ${CFG_PATH:-the Codex config})"
+if [ -n "$CFG_MODEL" ] && [ "$CFG_MODEL" != "$HIGH" ]; then
+  echo "frsr: WARNING: high tier '$HIGH' differs from model = \"$CFG_MODEL\" in $CFG_PATH; check it is the model you mean (list ids: codex debug models)" >&2
+fi
 
 # The orchestrator parses dash-flags from its arguments (see the command's
 # argument-hint: --review-root=, --project-root=, --no-console, --quick, …).
@@ -208,4 +228,6 @@ if [ -n "$MODELS" ]; then
   python3 "$RESOLVER" --review-root "$REVIEW_ROOT" --models "$MODELS" >/dev/null \
     || die "could not save the model tier map to $REVIEW_ROOT/.model_map.json"
 fi
+# The run snapshot (plan_waves --save-run-info) records this as the orchestrator.
+export FR_SECURITY_ORCHESTRATOR_MODEL="$HIGH"
 exec "${RUN[@]}"

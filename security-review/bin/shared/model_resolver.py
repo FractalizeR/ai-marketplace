@@ -18,7 +18,7 @@ CLI:
 
 Side-effect-free modes (for launchers): `--check --models SPEC` validates the spec
 exactly as a real run would; `--describe --review-root P` prints
-`{"status": ..., "high": ...}` for the saved map.
+`{"status": ..., "high": ..., "fast": ...}` for the saved map.
 
 stdlib only.
 """
@@ -182,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
                       help="only validate --models exactly as a real run would; writes nothing")
     mode.add_argument("--describe", action="store_true",
                       help="only report the saved map's status for --review-root "
-                           "(usable | absent | invalid | ignored-pre-5.0) and its high id")
+                           "(usable | absent | invalid | ignored-pre-5.0) and its tier ids")
     args = parser.parse_args(argv)
 
     if args.check:
@@ -202,6 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         report = {"status": status}
         if tier_map is not None:
             report["high"] = tier_map.high
+            report["fast"] = tier_map.fast
         print(json.dumps(report, sort_keys=True))
         return 0
 

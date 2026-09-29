@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,6 +27,14 @@ class FrsrTests(unittest.TestCase):
         engine = SCRIPT.parent.parent / "security-review/bin/shared"
         for name in ("model_resolver.py", "contracts.py"):
             shutil.copy(engine / name, core / "bin/shared" / name)
+        shutil.copy(engine.parent / "run_info.py", core / "bin" / "run_info.py")
+        # Never read the machine's real Codex config (its model would trip the warning).
+        self.codex_home = self.tmp / "codex_home"
+        self.codex_home.mkdir()
+        # A python3 with tomllib ahead of /usr/bin (macOS ships 3.9 there).
+        self.pybin = self.tmp / "pybin"
+        self.pybin.mkdir()
+        (self.pybin / "python3").symlink_to(sys.executable)
         self.launcher = self.tmp / "frsr"
         self.launcher.write_text(SCRIPT.read_text().replace("@@REPO@@", str(self.repo)))
         self.launcher.chmod(0o755)
@@ -36,7 +45,7 @@ class FrsrTests(unittest.TestCase):
         proc = subprocess.run(
             ["bash", str(self.launcher), *args], cwd=self.project,
             capture_output=True, text=True, stdin=subprocess.DEVNULL,
-            env={**os.environ, "PATH": "/usr/bin:/bin"},
+            env={**os.environ, "PATH": f"{self.pybin}:/usr/bin:/bin", "CODEX_HOME": str(self.codex_home)},
         )
         return proc.returncode, proc.stdout, proc.stderr
 
@@ -158,6 +167,45 @@ class FrsrTests(unittest.TestCase):
         rc, out, _ = self.run_frsr("project")
         self.assertEqual(rc, 0)
         self.assertIn("orchestrator model=saved-big", out)
+        self.assertIn("models high=saved-big fast=saved-small", out)
+
+    def test_preview_prints_both_tiers_and_effort(self):
+        (self.codex_home / "config.toml").write_text('model = "big"\nmodel_reasoning_effort = "high"\n')
+        rc, out, err = self.run_frsr("--models", "high=big,fast=small")
+        self.assertEqual(rc, 0)
+        self.assertIn("models high=big fast=small", out)
+        self.assertIn("reasoning effort=high", out)
+        self.assertNotIn("WARNING", err)
+
+    def test_high_tier_differing_from_config_model_warns_but_runs(self):
+        (self.codex_home / "config.toml").write_text(
+            'model = "cfg-model"\nprofile = "p"\n[profiles.p]\nmodel_reasoning_effort = "low"\n')
+        rc, out, err = self.run_frsr("--models", "high=big,fast=small")
+        self.assertEqual(rc, 0)
+        self.assertIn("WARNING: high tier 'big' differs from model = \"cfg-model\"", err)
+        self.assertIn("reasoning effort=low", out)
+        self.assertIn("Prepared Codex command", out)
+
+    def test_python_without_tomllib_reports_unknown_and_never_warns(self):
+        system = Path("/usr/bin/python3")
+        if not system.exists() or subprocess.run([str(system), "-c", "import tomllib"],
+                                                 capture_output=True).returncode == 0:
+            self.skipTest("needs a system python3 without tomllib")
+        (self.codex_home / "config.toml").write_text('model = "cfg-model"\n')
+        proc = subprocess.run(
+            ["bash", str(self.launcher), "--models", "high=big,fast=small"], cwd=self.project,
+            capture_output=True, text=True, stdin=subprocess.DEVNULL,
+            env={**os.environ, "PATH": "/usr/bin:/bin", "CODEX_HOME": str(self.codex_home)},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("reasoning effort=unknown", proc.stdout)
+        self.assertNotIn("WARNING", proc.stderr)
+
+    def test_no_codex_config_is_silent(self):
+        rc, out, err = self.run_frsr("--models", "high=big,fast=small")
+        self.assertEqual(rc, 0)
+        self.assertIn("reasoning effort=unknown", out)
+        self.assertNotIn("WARNING", err)
 
     def test_incomplete_saved_map_counts_as_missing(self):
         review = self.project / "security-review-codex"
@@ -188,7 +236,7 @@ class FrsrTests(unittest.TestCase):
         proc = subprocess.run(
             ["bash", str(self.launcher), "--go", "--models", "high=big,fast=small"],
             cwd=self.project, capture_output=True, text=True, stdin=subprocess.DEVNULL,
-            env={**os.environ, "PATH": f"{fakebin}:/usr/bin:/bin"},
+            env={**os.environ, "PATH": f"{fakebin}:{self.pybin}:/usr/bin:/bin", "CODEX_HOME": str(self.codex_home)},
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         saved = (self.project / "security-review-codex/.model_map.json").read_text()
@@ -196,6 +244,21 @@ class FrsrTests(unittest.TestCase):
         self.assertNotIn("provenance", saved)
         argv = record.read_text().splitlines()
         self.assertEqual(argv[:3], ["exec", "-m", "big"])
+
+    def test_go_exports_the_orchestrator_model_for_the_run_snapshot(self):
+        fakebin = self.tmp / "fakebin"
+        fakebin.mkdir()
+        record = self.tmp / "codex_env"
+        codex = fakebin / "codex"
+        codex.write_text(f'#!/bin/sh\nprintf \'%s\' "$FR_SECURITY_ORCHESTRATOR_MODEL" > {record}\n')
+        codex.chmod(0o755)
+        proc = subprocess.run(
+            ["bash", str(self.launcher), "--go", "--models", "high=big,fast=small"],
+            cwd=self.project, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+            env={**os.environ, "PATH": f"{fakebin}:{self.pybin}:/usr/bin:/bin", "CODEX_HOME": str(self.codex_home)},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(record.read_text(), "big")
 
     def test_review_root_source_dir_refused_before_any_write(self):
         (self.project / "src").mkdir()
@@ -217,7 +280,7 @@ class FrsrTests(unittest.TestCase):
                 ["bash", str(self.launcher), "--go", "--models", "high=a,fast=b",
                  "--review-root", review],
                 cwd=self.project, capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                env={**os.environ, "PATH": f"{fakebin}:/usr/bin:/bin"},
+                env={**os.environ, "PATH": f"{fakebin}:{self.pybin}:/usr/bin:/bin", "CODEX_HOME": str(self.codex_home)},
             )
             self.assertEqual(proc.returncode, 2, review)
             self.assertIn("refused", proc.stderr)
@@ -233,7 +296,7 @@ class FrsrTests(unittest.TestCase):
                 ["bash", str(self.launcher), "--models", "high=a,fast=b",
                  "--project-root", "api", "--review-root", review],
                 cwd=mono, capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                env={**os.environ, "PATH": "/usr/bin:/bin"},
+                env={**os.environ, "PATH": f"{self.pybin}:/usr/bin:/bin", "CODEX_HOME": str(self.codex_home)},
             )
             self.assertEqual(proc.returncode, 2, review)
             self.assertIn("refused", proc.stderr)

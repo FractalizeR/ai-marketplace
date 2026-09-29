@@ -188,13 +188,13 @@ class CliTests(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertFalse(root.exists())
 
-    def test_describe_reports_status_and_high(self):
+    def test_describe_reports_status_and_tiers(self):
         with tempfile.TemporaryDirectory() as d:
             rc, out, _ = self._run(["--describe", "--review-root", d])
             self.assertEqual((rc, json.loads(out)), (0, {"status": "absent"}))
             (Path(d) / ".model_map.json").write_text('{"high": "a", "fast": "b"}')
             rc, out, err = self._run(["--describe", "--review-root", d])
-            self.assertEqual((rc, json.loads(out)), (0, {"status": "usable", "high": "a"}))
+            self.assertEqual((rc, json.loads(out)), (0, {"status": "usable", "high": "a", "fast": "b"}))
             (Path(d) / ".model_map.json").write_text(
                 '{"high": "a", "fast": "b", "provenance": "cli"}')
             rc, out, err = self._run(["--describe", "--review-root", d])
