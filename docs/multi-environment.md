@@ -27,8 +27,8 @@ One engine, two harnesses:
 The Claude command/agent prose under `security-review/{commands,agents}/` is the
 **single source of truth**. The Codex artifacts are *derived* from it
 by an in-repo build (`build/`), so there is no parallel implementation to drift.
-A byte-identity gate proves the Claude artifacts are unchanged by the build; the
-derived harness gets structural gates instead (see [How it is built](#how-it-is-built)).
+The build only reads the Claude artifacts; the derived harness is checked by
+structural gates (see [How it is built](#how-it-is-built)).
 
 The portable engine — the recon/plan/dedupe Python under `security-review/bin/`,
 the PHP metadata sandbox, and the `checklists/` — is **identical everywhere**. On
@@ -159,37 +159,51 @@ For contributors. The build derives the Codex artifacts from the
 Claude-authoritative prose and gates them; it is dev-only tooling under `build/`
 and is **not shipped inside the plugin**.
 
-- **Two IR layers over the same text.** `build/extract.py` partitions an artifact
-  into typed token `Segment`s (the Claude token fold, byte-identical);
-  `build/sections.py` splits the same text into `### N` sections for the
-  section-fold the Codex build walks. Both stay byte-faithful.
-- **Coupling is pin-driven.** A section is *coupled* (needs harness-specific
-  rewriting, not just re-tokenizing) iff it carries a
-  [`build/PROSE_COUPLING.md`](../build/PROSE_COUPLING.md) pin. Coupled sections are
-  replaced by authored templates under `harness/<h>/sections/<artifact>/<anchor>.md`;
-  neutral sections are token-rendered by the harness adapter (`build/adapters.py`).
-- **Anti-drift gate.** `build/build.py --harness=claude --mode=check` rebuilds the
-  Claude artifacts in memory and diffs against on-disk — it **must** be
-  byte-identical (exit 0). The derived harnesses have no byte oracle, so they get
-  structural gates instead (`build/gates.py`: no Claude-token leaks, correct
-  frontmatter shape, dispatch-template invariants, determinism). Both run in
-  `make check` and in the `.githooks/pre-commit` hook.
+- **Sections, not tokens.** `build/sections.py` splits each Claude artifact at
+  headings outside the frontmatter, fenced blocks and `Task` directives (the
+  pieces must concatenate back to the source). `build/derive.py` renders each
+  section.
+- **A section is replaced iff a template exists** at
+  `harness/codex/sections/<artifact>/<anchor>.md` (`<anchor>` is the heading
+  slug, e.g. `8-parallel-worker-launch`). Every other section keeps its prose:
+  the command's frontmatter becomes a Codex skill block (`name` + `description`),
+  an agent's is stripped, and `${CLAUDE_PLUGIN_ROOT}` → `${FR_SECURITY_CORE_ROOT}`,
+  `$ARGUMENTS` / prose `AskUserQuestion` / `mcp__…` → neutral phrases, the
+  `security-project.md` file ref loses its `.md`.
+- **Gates.** `build/build.py --mode=check` renders in memory and runs
+  `build/gates.py`: no Claude-token leaks (a `Task` directive or a labeled
+  `AskUserQuestion:` block outside a templated section leaks on purpose, so a
+  missing template fails here), frontmatter shape, dispatch-template invariants,
+  authored-config validation, determinism. It runs in `make check` and in the
+  `.githooks/pre-commit` hook.
+- **Stale templates.** A template's first line is
+  `<!-- source-sha256: <hex> -->`, the hash of the Claude section it was written
+  against (never emitted). Editing that Claude section fails the check with
+  `… is stale`. Update the template to match the new Claude prose, then record
+  the new hash:
+
+  ```bash
+  python3 build/build.py --mode=refresh-hashes
+  ```
+
+  A template whose anchor matches no section (a renamed heading) also fails the
+  check; rename the template file to the new anchor, review it, and refresh the
+  hash.
 - **Bundling.** `build/build.py --harness=codex --mode=write --out=dist/codex` copies
   the engine into `core/`, renders the derived skills/agents, drops the authored
   static configs (`adapter.json`, `.codex-plugin/plugin.json` + marketplace), and
   swaps the bundle in atomically.
 
 See [`build/ADR-0001-artifacts-are-prompts.md`](../build/ADR-0001-artifacts-are-prompts.md)
-for why *prose*, not only tokens, is the rewrite surface,
-[`build/TOKENS.md`](../build/TOKENS.md) for the token inventory, and the
-`CLAUDE.md` "Multi-environment build" sections for the phase-by-phase design.
+for why *prose*, not only tokens, is the rewrite surface and why each templated
+section is rewritten.
 
 ### One naming subtlety
 
 There are two things spelled `CORE_ROOT`, and they are different:
 
-- the **token category** `CORE_ROOT` (internal to the build; renders to Claude's
-  `${CLAUDE_PLUGIN_ROOT}`) — unchanged, internal;
+- the **leak-gate label** `CORE_ROOT` (internal to `build/gates.py`; names
+  Claude's `${CLAUDE_PLUGIN_ROOT}` surviving into Codex output);
 - the **exported shell variable** `FR_SECURITY_CORE_ROOT` — what an operator
   exports on Codex to point at the bundled engine.
 
