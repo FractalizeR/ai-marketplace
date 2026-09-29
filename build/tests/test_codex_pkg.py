@@ -182,6 +182,13 @@ class CodexConfigTests(unittest.TestCase):
             self.assertNotIn(key, adapter)
         self.assertNotIn("model", adapter["interactive_gates"])
 
+    def test_adapter_declares_no_interactive_gates(self):
+        # Codex runs headless: step 3b stops instead of asking, step 6 has no
+        # checkpoint, so the manifest must not advertise prompts.
+        adapter = json.loads((HARNESS_ROOT / "adapter.json").read_text(encoding="utf-8"))
+        self.assertEqual(adapter["interactive_gates"], [])
+        self.assertIsNone(adapter["checkpoint_binding"])
+
 
 class InstallDocTests(unittest.TestCase):
     def setUp(self):
