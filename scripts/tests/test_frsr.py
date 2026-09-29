@@ -23,7 +23,9 @@ class FrsrTests(unittest.TestCase):
         self.repo = self.tmp / "repo"
         core = self.repo / "dist/codex/plugins/fr-security-review/core"
         (core / "bin/shared").mkdir(parents=True)
-        (core / "bin/shared/model_resolver.py").write_text("# stub\n")
+        engine = SCRIPT.parent.parent / "security-review/bin/shared"
+        for name in ("model_resolver.py", "contracts.py"):
+            shutil.copy(engine / name, core / "bin/shared" / name)
         self.launcher = self.tmp / "frsr"
         self.launcher.write_text(SCRIPT.read_text().replace("@@REPO@@", str(self.repo)))
         self.launcher.chmod(0o755)
@@ -104,10 +106,21 @@ class FrsrTests(unittest.TestCase):
         self.assert_project_empty()
 
     def test_partial_models_rejected(self):
-        for spec, missing in (("high=a", "fast"), ("fast=b", "high"), ("high=,fast=b", "high")):
+        for spec, needle in (("high=a", "missing: ['fast']"), ("fast=b", "missing: ['high']"),
+                             ("high=,fast=b", "empty value")):
             rc, _, err = self.run_frsr("project", "--models", spec)
             self.assertEqual(rc, 2, spec)
-            self.assertIn(f"missing {missing}", err)
+            self.assertIn(needle, err)
+        self.assert_project_empty()
+
+    def test_models_the_resolver_rejects_are_rejected_in_the_preview(self):
+        for spec, needle in (("high=a,fast=b,mid=c", "unknown --models key 'mid'"),
+                             ("high=a,high=z,fast=b", "duplicate --models key 'high'"),
+                             ("high=a,fast", "malformed")):
+            rc, out, err = self.run_frsr("project", "--models", spec)
+            self.assertEqual(rc, 2, spec)
+            self.assertIn(needle, err)
+            self.assertNotIn("Prepared Codex command", out)
         self.assert_project_empty()
 
     def test_models_with_spaces_accepted_like_the_resolver(self):
@@ -152,22 +165,20 @@ class FrsrTests(unittest.TestCase):
         (review / ".model_map.json").write_text('{"high": "only-high"}')
         rc, _, err = self.run_frsr("project")
         self.assertEqual(rc, 2)
-        self.assertIn("model tiers are not set", err)
+        self.assertIn("incomplete or unreadable", err)
 
-    def test_saved_map_with_guessed_provenance_counts_as_missing(self):
-        review = self.project / "security-review-codex"
-        review.mkdir()
-        (review / ".model_map.json").write_text(
-            '{"high": "x", "fast": "x", "provenance": "collapsed"}')
-        rc, _, err = self.run_frsr("project")
-        self.assertEqual(rc, 2)
-        self.assertIn("model tiers are not set", err)
+    def test_saved_map_with_any_provenance_is_ignored_with_a_pre_5_0_message(self):
+        for prov in ("collapsed", "cli"):
+            review = self.project / "security-review-codex"
+            review.mkdir(exist_ok=True)
+            (review / ".model_map.json").write_text(
+                '{"high": "x", "fast": "x", "provenance": "%s"}' % prov)
+            rc, _, err = self.run_frsr("project")
+            self.assertEqual(rc, 2, prov)
+            self.assertIn("pre-5.0", err)
+            self.assertNotIn("no saved map", err)
 
     def test_go_saves_map_with_real_resolver_then_execs_codex(self):
-        engine = SCRIPT.parent.parent / "security-review/bin/shared"
-        shared = self.repo / "dist/codex/plugins/fr-security-review/core/bin/shared"
-        for name in ("model_resolver.py", "contracts.py"):
-            shutil.copy(engine / name, shared / name)
         fakebin = self.tmp / "fakebin"
         fakebin.mkdir()
         record = self.tmp / "codex_argv"
@@ -193,6 +204,41 @@ class FrsrTests(unittest.TestCase):
         self.assertIn("refused", err)
         self.assertEqual(list((self.project / "src").iterdir()), [])
 
+    def test_refused_go_writes_no_map_and_creates_no_review_dir(self):
+        # A fake codex on PATH and the real resolver: if the guard ran after the
+        # save, .model_map.json (or the directory) would exist.
+        fakebin = self.tmp / "fakebin"
+        fakebin.mkdir()
+        codex = fakebin / "codex"
+        codex.write_text("#!/bin/sh\nexit 0\n")
+        codex.chmod(0o755)
+        for review in ("src", "..", "."):
+            proc = subprocess.run(
+                ["bash", str(self.launcher), "--go", "--models", "high=a,fast=b",
+                 "--review-root", review],
+                cwd=self.project, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                env={**os.environ, "PATH": f"{fakebin}:/usr/bin:/bin"},
+            )
+            self.assertEqual(proc.returncode, 2, review)
+            self.assertIn("refused", proc.stderr)
+        self.assertFalse((self.project / "src").exists())
+        self.assertFalse((self.tmp / ".model_map.json").exists())
+        self.assert_project_empty()
+
+    def test_review_root_that_is_an_ancestor_of_the_project_refused(self):
+        mono = self.tmp / "mono"
+        (mono / "api").mkdir(parents=True)
+        for review in (".", "..", str(mono)):
+            proc = subprocess.run(
+                ["bash", str(self.launcher), "--models", "high=a,fast=b",
+                 "--project-root", "api", "--review-root", review],
+                cwd=mono, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                env={**os.environ, "PATH": "/usr/bin:/bin"},
+            )
+            self.assertEqual(proc.returncode, 2, review)
+            self.assertIn("refused", proc.stderr)
+            self.assertIn("project root", proc.stderr)
+
     def test_review_root_equal_to_project_root_refused(self):
         rc, _, err = self.run_frsr("--models", "high=a,fast=b", "--review-root", str(self.project))
         self.assertEqual(rc, 2)
@@ -214,6 +260,16 @@ class FrsrTests(unittest.TestCase):
         out = self.tmp / "elsewhere" / "security-review-ok"
         rc, _, err = self.run_frsr("--models", "high=a,fast=b", "--review-root", str(out))
         self.assertEqual(rc, 0, err)
+
+    def test_blocklist_equals_the_orchestrators_step_0_3(self):
+        import re
+        script = SCRIPT.read_text()
+        block = re.search(r"blocked = \{(.*?)\}", script, re.S).group(1)
+        in_script = set(re.findall(r'"([^"]+)"', block))
+        prose = (SCRIPT.parent.parent / "security-review/commands/security-project.md").read_text()
+        line = next(l for l in prose.splitlines() if "known source-tree / framework directory names" in l)
+        in_prose = set(re.findall(r"`([^`]+)`", line.split(":", 1)[1]))
+        self.assertEqual(in_script, in_prose)
 
 
 if __name__ == "__main__":

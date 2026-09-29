@@ -21,7 +21,7 @@ Options:
   --harness codex              the only supported harness (default)
   --review-root <dir>          output dir (default: security-review-codex in cwd).
                                Refused before anything is written if it is the
-                               project root, exists as a non-directory, lies
+                               project root or contains it, exists as a non-directory, lies
                                inside the project without a name starting with
                                security-review, or is named like a source dir
                                (src, app, lib, tests, vendor, public, config, ...)
@@ -107,9 +107,9 @@ CORE="$PLUGIN/core"
 
 : "${REVIEW_ROOT:=security-review-codex}"
 
-# Mirrors step 0.3 of the orchestrator's review-root guard. It has to run here
-# too: this launcher writes .model_map.json into the review root before the
-# orchestrator ever starts.
+# Mirrors step 0.3 of the orchestrator's review-root guard (the test suite keeps
+# the two blocklists equal). It has to run here too: this launcher writes
+# .model_map.json into the review root before the orchestrator ever starts.
 guard_msg="$(python3 - "$PROJECT_ROOT" "$REVIEW_ROOT" <<'PY'
 import os, sys
 project, review = (os.path.realpath(p) for p in sys.argv[1:3])
@@ -123,8 +123,8 @@ blocked = {
 inside = review.startswith(project.rstrip(os.sep) + os.sep)
 if os.path.exists(review) and not os.path.isdir(review):
     print("it exists and is not a directory")
-elif review == project:
-    print("it is the project root")
+elif review == project or project.startswith(review.rstrip(os.sep) + os.sep):
+    print("it is the project root or an ancestor of it")
 elif inside and not name.startswith("security-review"):
     print("it is inside the project and its name does not start with 'security-review'")
 elif name in blocked:
@@ -133,33 +133,27 @@ PY
 )"
 [ -z "$guard_msg" ] || die "--review-root=$REVIEW_ROOT refused: $guard_msg. It is the output directory, not what to scan; use --scope to narrow the audit, or a name like security-review-codex."
 
-# Reads .high from a tier map that has both tiers and no guessed (pre-5.0)
-# provenance, else prints nothing.
-map_high() {
-  python3 - "$1" <<'PY' 2>/dev/null || true
-import json, sys
-try:
-    d = json.load(open(sys.argv[1]))
-    if all(isinstance(d.get(t), str) and d[t] for t in ("high", "fast")) \
-            and d.get("provenance", "cli") == "cli":
-        print(d["high"])
-except (OSError, ValueError, AttributeError):
-    pass
-PY
-}
+# Model-tier rules live in the bundle's resolver; nothing here re-implements them.
+RESOLVER="$CORE/bin/shared/model_resolver.py"
+[ -f "$RESOLVER" ] || die "bundle is incomplete: $RESOLVER is missing — run 'make install-codex' in $REPO"
+
+# json_get <key> reads a top-level string from JSON on stdin ("" when absent).
+json_get() { python3 -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$1"; }
 
 HIGH=""
 if [ -n "$MODELS" ]; then
-  # Same leniency as model_resolver.parse_cli_models: whitespace around ',' and '='.
-  MODELS="$(printf '%s' "$MODELS" | sed -E 's/[[:space:]]*([,=])[[:space:]]*/\1/g; s/^[[:space:]]+//; s/[[:space:]]+$//')"
-  for tier in high fast; do
-    [[ "$MODELS" =~ (^|,)$tier=[^,]+(,|$) ]] \
-      || die "--models needs both tiers, e.g. --models high=<id>,fast=<id> (missing $tier)"
-  done
-  HIGH="$(printf '%s' "$MODELS" | tr ',' '\n' | sed -n 's/^ *high=//p' | head -n1)"
+  checked="$(python3 "$RESOLVER" --check --models "$MODELS" 2>&1)" \
+    || die "invalid --models: ${checked#Error: }"
+  HIGH="$(printf '%s' "$checked" | json_get high)"
 else
-  HIGH="$(map_high "$REVIEW_ROOT/.model_map.json")"
-  [ -n "$HIGH" ] || die "model tiers are not set: pass --models high=<id>,fast=<id> (list ids with 'codex debug models'); no saved map at $REVIEW_ROOT/.model_map.json"
+  described="$(python3 "$RESOLVER" --describe --review-root "$REVIEW_ROOT")" \
+    || die "could not read the saved model map in $REVIEW_ROOT"
+  case "$(printf '%s' "$described" | json_get status)" in
+    usable) HIGH="$(printf '%s' "$described" | json_get high)" ;;
+    ignored-pre-5.0) die "the saved map at $REVIEW_ROOT/.model_map.json was written by a pre-5.0 build and is ignored: pass --models high=<id>,fast=<id> (list ids with 'codex debug models')" ;;
+    invalid) die "the saved map at $REVIEW_ROOT/.model_map.json is incomplete or unreadable: pass --models high=<id>,fast=<id>" ;;
+    *) die "model tiers are not set: pass --models high=<id>,fast=<id> (list ids with 'codex debug models'); no saved map at $REVIEW_ROOT/.model_map.json" ;;
+  esac
 fi
 
 CMD="security-project"
@@ -211,7 +205,7 @@ fi
 
 command -v codex >/dev/null 2>&1 || die "'codex' not found on PATH"
 if [ -n "$MODELS" ]; then
-  python3 "$CORE/bin/shared/model_resolver.py" --review-root "$REVIEW_ROOT" --models "$MODELS" >/dev/null \
+  python3 "$RESOLVER" --review-root "$REVIEW_ROOT" --models "$MODELS" >/dev/null \
     || die "could not save the model tier map to $REVIEW_ROOT/.model_map.json"
 fi
 exec "${RUN[@]}"

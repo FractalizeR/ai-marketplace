@@ -94,7 +94,7 @@ Level — **harness/CLI**, not the exact model. `claude-opus-4-7` vs `claude-son
 `--review-root` is for **output artifacts**, not for narrowing the audit. Abort with the error message below if any of these hold:
 
 - the resolved `REVIEW_ROOT` already exists as a non-directory (regular file, symlink to file, special file) — `mkdir -p` in Step 1 would fail downstream, **or**
-- the resolved `REVIEW_ROOT` equals `PROJECT_ROOT` exactly, **or**
+- the resolved `REVIEW_ROOT` equals `PROJECT_ROOT` or is an ancestor of it (`PROJECT_ROOT` lies inside `REVIEW_ROOT`, e.g. `--project-root=api --review-root=.` in a monorepo) — every artifact would be written over the parent tree, **or**
 - the resolved `REVIEW_ROOT` is a subpath of `PROJECT_ROOT` AND its **basename** does **not** start with `security-review` (`security-review`, `security-review-claude`, `security-review-foo`, etc.), **or**
 - the resolved `REVIEW_ROOT` basename is one of the known source-tree / framework directory names (case-insensitive): `src`, `app`, `lib`, `source`, `tests`, `test`, `spec`, `vendor`, `node_modules`, `public`, `web`, `bin`, `config`, `assets`, `resources`, `var`, `storage`, `templates`, `views`, `database`, `migrations`, `seeders`, `scripts`, `routes`, `build`, `dist`, `target`, `out`, `coverage`, `.next`, `.nuxt`, `__pycache__`.
 

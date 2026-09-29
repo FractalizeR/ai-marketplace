@@ -188,6 +188,12 @@ class CommonContract(unittest.TestCase):
                               f"{name}: missing pre-check that REVIEW_ROOT "
                               "is not an existing non-directory")
 
+    def test_review_root_guard_rejects_project_root_and_its_ancestors(self) -> None:
+        for name, text in self._cmds():
+            with self.subTest(cmd=name):
+                self.assertIn("is an ancestor of it", text,
+                              f"{name}: Step 0.3 must reject a REVIEW_ROOT that contains PROJECT_ROOT")
+
     def test_absolute_path_invariant(self) -> None:
         # Step 0 must require absolute paths for REVIEW_ROOT and PROJECT_ROOT
         # for all subsequent steps. Past incident: validate_context.py was
