@@ -14,6 +14,8 @@ Usage:
                   [--exploratory]
                   [--recon-gaps=<recon_gaps.json>]
                   [--include-vendor] [--include-tests]
+                  [--save-plan=<path>]
+                  [--save-run-info=<path>] [--orchestrator-model=<id>]
 
 Default model assignment is the balanced profile: opus for W1/W2/W6,
 sonnet for W3/W4/W5/W∞; the WGAP follow-up wave (recon gaps) is always
@@ -171,6 +173,7 @@ def resolve_concept_paths(stack: str, concept: str) -> list[str]:
 
 # Reuse the YAML subset parser & section extraction from validate_context.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import run_info  # noqa: E402
 import validate_context as vc  # noqa: E402
 
 
@@ -1136,6 +1139,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         "temp+rename). Stdout still prints the plan. Renderer reads the saved "
         "file via --waves-plan to emit `## Checklist coverage` block.",
     )
+    parser.add_argument(
+        "--save-run-info", type=Path, default=None,
+        help="Write the run snapshot (plugin version, harness, models per tier) "
+        "to this path; dedupe reads it for the report's `## Run` block.",
+    )
+    parser.add_argument(
+        "--orchestrator-model", default=None,
+        help="Exact model id the orchestrator runs on, recorded in the run "
+        "snapshot (ignored when the launcher already recorded it).",
+    )
     args = parser.parse_args(argv)
 
     plugin_root = args.plugin_root or _default_plugin_root()
@@ -1172,6 +1185,19 @@ def main(argv: Optional[list[str]] = None) -> int:
             tmp.replace(target)
         except OSError as exc:
             print(f"Error writing --save-plan {target}: {exc}", file=sys.stderr)
+            return 2
+
+    if args.save_run_info is not None:
+        info = run_info.collect(
+            plugin_root=plugin_root,
+            review_root=args.context.parent,
+            plan=plan,
+            orchestrator_model=args.orchestrator_model,
+        )
+        try:
+            run_info.save(info, args.save_run_info)
+        except OSError as exc:
+            print(f"Error writing --save-run-info {args.save_run_info}: {exc}", file=sys.stderr)
             return 2
 
     print(json.dumps(plan, indent=2))

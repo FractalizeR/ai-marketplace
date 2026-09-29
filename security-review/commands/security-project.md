@@ -205,6 +205,8 @@ rm -f "<REVIEW_ROOT>/waves/"*.md
 rm -f "<REVIEW_ROOT>/waves/"*.pre-retry.md
 # Recon gaps of a previous run (step 4 writes a fresh one; a stale file would feed WGAP and the report)
 rm -f "<REVIEW_ROOT>/recon_gaps.json"
+# Run snapshot of a previous run (step 7 writes a fresh one; a stale file would mis-attribute the report)
+rm -f "<REVIEW_ROOT>/run_info.json"
 ```
 
 `<REVIEW_ROOT>/REPORT.md` and `<REVIEW_ROOT>/REPORT/` (split detail) are **not cleaned** — dedupe rewrites them at the dedup step.
@@ -378,13 +380,17 @@ Call:
 python3 ${CLAUDE_PLUGIN_ROOT}/bin/plan_waves.py "<REVIEW_ROOT>/CONTEXT.md" \
   --plugin-root="${CLAUDE_PLUGIN_ROOT}" \
   --save-plan="<REVIEW_ROOT>/waves_plan.json" \
+  --save-run-info="<REVIEW_ROOT>/run_info.json" \
   --recon-gaps="<REVIEW_ROOT>/recon_gaps.json" \
+  [--orchestrator-model=<MODEL_ID>]   # if your system prompt states your exact model id \
   [--all-opus]            # if ALL_OPUS \
   [--exploratory]         # if EXPLORATORY \
   [--scope-glob=<SCOPE_GLOB>]   # if set
 ```
 
 `--save-plan` saves the plan to JSON for the subsequent coverage block in REPORT.md (step 11).
+
+`--save-run-info` records which build, harness and models produced this run (`## Run` in REPORT.md and `run` in `findings.json`, step 11). Pass `--orchestrator-model` only with the exact id your system prompt gives you — never a guess; without it the orchestrator is recorded as `unknown` (a launcher that started you on a known model records it itself).
 
 **`--plugin-root` is required** — otherwise `plan_waves` will not find `checklists/` (the relative path resolves to the project's cwd, not the plugin's). The script prefixes checklists with an absolute path.
 
@@ -412,6 +418,14 @@ Launching <N> waves (mode: <balanced|all-opus>):
   W∞ (sonnet, exploratory): union themes
   WGAP (opus, <M> files): follow-up on recon gaps (if any)
 ```
+
+Then one line from `<REVIEW_ROOT>/run_info.json` (`models.high`, `models.fast`, `models.orchestrator`, `harness`):
+
+```
+Models (<harness>): high=<id or label> fast=<id or label> orchestrator=<id or unknown>
+```
+
+On a harness whose tiers are labels (`opus`/`sonnet`), say so — the harness resolves them to concrete models.
 
 This gives visibility — the user sees what will be launched before going off into parallel processing for ~5-15 minutes.
 

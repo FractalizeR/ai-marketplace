@@ -2034,6 +2034,44 @@ class SavePlanCliTests(unittest.TestCase):
             ctx_path.unlink()
 
 
+class SaveRunInfoCliTests(unittest.TestCase):
+    """`--save-run-info` writes the run snapshot; without it nothing extra is written."""
+
+    def test_writes_snapshot_with_tier_waves_and_orchestrator(self):
+        ctx_path = _build_context()
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                target = Path(td) / "run_info.json"
+                rc = _main_quiet([
+                    str(ctx_path),
+                    "--plugin-root", str(PLUGIN_ROOT),
+                    "--save-run-info", str(target),
+                    "--orchestrator-model", "model-x",
+                ])
+                self.assertEqual(rc, 0)
+                payload = json.loads(target.read_text(encoding="utf-8"))
+                self.assertEqual(payload["harness"], "claude")
+                self.assertEqual(payload["models"]["orchestrator"], "model-x")
+                self.assertIn("W1", payload["tier_waves"]["high"])
+        finally:
+            ctx_path.unlink()
+
+    def test_without_flag_writes_no_snapshot(self):
+        ctx_path = _build_context()
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                target = Path(td) / "waves_plan.json"
+                rc = _main_quiet([
+                    str(ctx_path),
+                    "--plugin-root", str(PLUGIN_ROOT),
+                    "--save-plan", str(target),
+                ])
+                self.assertEqual(rc, 0)
+                self.assertEqual([p.name for p in Path(td).iterdir()], ["waves_plan.json"])
+        finally:
+            ctx_path.unlink()
+
+
 class PartialSectionRouting(unittest.TestCase):
     """`partial` sections must route into waves exactly like `ok` ones.
 
