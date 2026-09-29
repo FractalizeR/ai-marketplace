@@ -25,7 +25,6 @@ _EXPECTED_COUPLED = {
         "6-optional-interactive-checkpoint",
         "8-parallel-worker-launch",
         "9-safety-net-progress-per-worker",
-        "11-5-1-launching-the-refute-wave",
     },
 }
 
@@ -161,8 +160,8 @@ class EdgeCaseTests(unittest.TestCase):
 class SlugifyTests(unittest.TestCase):
     def test_cases(self):
         self.assertEqual(slugify("4. Recon phase"), "4-recon-phase")
-        self.assertEqual(slugify("11.5.1. Launching the refute wave"),
-                         "11-5-1-launching-the-refute-wave")
+        self.assertEqual(slugify("0.5.3. Deferred git check (optional)"),
+                         "0-5-3-deferred-git-check-optional")
         self.assertEqual(slugify("3b. Resolve console runner (environment-aware)"),
                          "3b-resolve-console-runner-environment-aware")
 

@@ -315,8 +315,6 @@ The "repository-only exploitable" gate does not reduce to "admin-controlled sour
 
 These are reasons NOT to silently drop a finding — they are not reasons to force it into `confirmed`. If, after this reconsideration, you still cannot assign a severity because the deciding fact is outside the repo (e.g. the actual proxy/IdP/prod config value) — report it as `needs_validation`, with the blocker named concretely (not "admin surface", the actual missing fact and where to check it). If impact assessment genuinely finds no principal or resource affected — report it as `hardening`. Do not use silent omission as the third option.
 
-The same prohibition list applies to the refute agent (`agents/security-refute.md`): reachability / admin-source / validator-presence / defense-in-depth-gap — **not valid grounds for refute**. The refute agent rebuts a finding only when there is concrete blocker code, quoted via `refute_file:refute_line`.
-
 ## HARD EXCLUSIONS / NOISE POLICY
 
 **These are hard filters, not buckets.** Nothing on this list goes into `hardening` or `needs_validation` either — it is not reported at all. Routing hard-excluded noise into a bucket would recreate exactly the noise these exclusions exist to remove.

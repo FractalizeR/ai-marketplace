@@ -83,14 +83,6 @@ ONE template, keyed by `(artifact_basename, section_anchor)`.
   harness_semantic: "Orchestrator recovers a worker's findings from its response message if waves/<slice_id>.md is missing."
   codex_action: "Recover from the dispatcher's captured stdout when the wave file is missing (partial safety net)."
   non_interactive_fallback: "If unrecoverable, record a coverage gap for that wave; do not block the report."
-
-- id: refute-no-parallelism
-  file: commands/security-project.md
-  section_anchor: "11-5-1-launching-the-refute-wave"
-  pinned: "parallelism is **forbidden**"
-  harness_semantic: "Refute pass is sequential (single refute.md writer)."
-  codex_action: "Sequential `codex exec` per <=20-finding batch; never parallel."
-  non_interactive_fallback: "Same: sequential, single writer."
 ```
 
 ## ADR pointer

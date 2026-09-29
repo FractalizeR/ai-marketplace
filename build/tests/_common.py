@@ -21,7 +21,6 @@ ARTIFACTS = {
     PLUGIN_ROOT / "commands" / "security-project.md": ArtifactKind.COMMAND,
     PLUGIN_ROOT / "agents" / "security.md": ArtifactKind.AGENT,
     PLUGIN_ROOT / "agents" / "security-recon.md": ArtifactKind.AGENT,
-    PLUGIN_ROOT / "agents" / "security-refute.md": ArtifactKind.AGENT,
 }
 
 

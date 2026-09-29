@@ -132,8 +132,7 @@ class XrefStripTests(unittest.TestCase):
 
     def test_preserves_agent_read_follow_refs(self):
         for ref in ("agents/security.md", "agents/security-recon.md",
-                    "agents/security-refute.md", "security-recon.md",
-                    "security-refute.md"):
+                    "security-recon.md"):
             with self.subTest(ref=ref):
                 self.assertIn(ref, _strip_codex_xrefs(f"read and follow {ref}"))
 

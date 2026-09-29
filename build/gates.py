@@ -31,7 +31,7 @@ CODEX_FORBIDDEN_CATS = (CAT_CORE_ROOT, CAT_TASK, CAT_AUQ, CAT_MCP, CAT_ARGS)
 _FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 _FM_FORBIDDEN_KEY = re.compile(r"(?m)^(allowed-tools|argument-hint):")
 # Codex worker prose is a bundled read-follow file, so agent-role refs
-# (agents/*.md, security-recon.md, security-refute.md) MUST survive; only the
+# (agents/*.md, security-recon.md) MUST survive; only the
 # ORCHESTRATOR ref is unresolvable in a skill body (C1/E-C9).
 _CODEX_ORCH_XREF_RE = re.compile(r"(?<![\w-])security-project\.md\b")
 # [^\S\n] = inline whitespace only, so an empty `name:\n` value does not let \s*
@@ -43,7 +43,6 @@ _SKILL_DESC_RE = re.compile(r"(?m)^description:[^\S\n]*(.*)$")
 DISPATCH_ANCHORS = frozenset({
     "4-recon-phase",
     "8-parallel-worker-launch",
-    "11-5-1-launching-the-refute-wave",
 })
 
 
@@ -107,11 +106,11 @@ def check_codex_output(text: str, *, is_skill: bool) -> list[str]:
 # `agents/<role>.md` file and following it. The dispatch template must wire the
 # full `codex exec` invocation with tiering, the composite-repo write dir, and a
 # read-follow reference to that file.
-_CODEX_AGENT_READFOLLOW_RE = re.compile(r"agents/security(?:-recon|-refute)?\.md")
+_CODEX_AGENT_READFOLLOW_RE = re.compile(r"agents/security(?:-recon)?\.md")
 
 
 def check_codex_dispatch_template(text: str) -> list[str]:
-    """Structural template↔dispatcher assertion for a Codex worker/recon/refute
+    """Structural template↔dispatcher assertion for a Codex worker/recon
     template (no ``--agent``; workers read+follow a bundled agent file)."""
     out: list[str] = []
     if "codex exec" not in text:

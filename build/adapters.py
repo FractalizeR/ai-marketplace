@@ -126,7 +126,7 @@ MCP_PHRASE = "a semantic IDE tool"
 AUQ_PHRASE = "an interactive prompt"
 # Codex strips only the ORCHESTRATOR file ref (security-project.md): a standalone
 # skill body cannot resolve a sibling orchestrator. Agent-role refs
-# (agents/*.md, security-recon.md, security-refute.md) are REAL bundled read-follow
+# (agents/*.md, security-recon.md) are REAL bundled read-follow
 # files a codex worker opens under ${FR_SECURITY_CORE_ROOT}/agents/ — they MUST survive (C1/CX1).
 # `security-project` is an orchestrator-only name (no agent shares it), so strip it
 # wherever it appears; the left guard `(?<![\w-])` only blocks a match inside a

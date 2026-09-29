@@ -51,7 +51,6 @@ class BundleTopologyTests(unittest.TestCase):
             f"plugins/{PLUGIN_NAME}/core/checklists",
             f"plugins/{PLUGIN_NAME}/core/agents/security.md",
             f"plugins/{PLUGIN_NAME}/core/agents/security-recon.md",
-            f"plugins/{PLUGIN_NAME}/core/agents/security-refute.md",
             f"plugins/{PLUGIN_NAME}/adapter.json",
             f"plugins/{PLUGIN_NAME}/INSTALL.md",
         ):
@@ -83,7 +82,9 @@ class BundleTopologyTests(unittest.TestCase):
                          ["security-project"])
 
     def test_agents_have_no_leading_frontmatter(self):
-        for name in ("security", "security-recon", "security-refute"):
+        self.assertEqual(sorted(p.name for p in (self.core / "agents").glob("*.md")),
+                         ["security-recon.md", "security.md"])
+        for name in ("security", "security-recon"):
             text = (self.core / "agents" / f"{name}.md").read_text(encoding="utf-8")
             self.assertFalse(text.startswith("---\n"), f"{name}.md carries frontmatter")
 
@@ -139,7 +140,7 @@ class BundleWalkFilterTests(unittest.TestCase):
 
 def _iter_refs(text):
     import re
-    for m in re.finditer(r"agents/(security(?:-recon|-refute)?\.md)", text):
+    for m in re.finditer(r"agents/(security(?:-recon)?\.md)", text):
         yield m.group(1)
 
 

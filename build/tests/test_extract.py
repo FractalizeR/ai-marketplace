@@ -47,28 +47,27 @@ class AttrValueTests(unittest.TestCase):
             for s in _by_cat(extract(read(path), kind), "CORE_ROOT"):
                 roles[s.attrs["role"]] += 1
                 fences[s.attrs["fence_context"]] += 1
-        self.assertEqual(dict(roles), {"path_prefix": 10, "flag_value": 1})
-        self.assertEqual(dict(fences), {"triple_fence": 10, "inline_code": 1})
+        self.assertEqual(dict(roles), {"path_prefix": 9, "flag_value": 1})
+        self.assertEqual(dict(fences), {"triple_fence": 9, "inline_code": 1})
 
     def test_task_blocks_both_syntaxes_and_attrs(self):
         rows = []
         for s in _by_cat(_segments("commands/security-project.md"), "task_block"):
             rows.append((s.attrs["syntax_variant"], s.attrs["subagent_type"],
                          s.attrs["is_template"], s.attrs["is_directive"]))
-        # 3 directive blocks: recon (paren), worker (paren, templated model), refute (bare)
-        self.assertEqual(len(rows), 3)
+        # 2 directive blocks: recon (paren), worker (paren, templated model)
+        self.assertEqual(len(rows), 2)
         self.assertEqual(sum(v == "paren" for v, *_ in rows), 2)
-        self.assertEqual(sum(v == "bare" for v, *_ in rows), 1)
         worker = [r for r in rows if r[1] == "security"]
         self.assertTrue(all(r[2] for r in worker))           # model is_template
         self.assertTrue(all(is_dir for *_, is_dir in rows))  # all directives
         self.assertEqual({r[1] for r in rows},
-                         {"security-recon", "security", "security-refute"})
+                         {"security-recon", "security"})
 
     def test_prose_task_mentions_not_tagged(self):
-        # The command has exactly 3 Task *directives*; the prose `Task(...)`
+        # The command has exactly 2 Task *directives*; the prose `Task(...)`
         # mention in step 0.4 must not be tagged.
-        self.assertEqual(len(_by_cat(_segments("commands/security-project.md"), "task_block")), 3)
+        self.assertEqual(len(_by_cat(_segments("commands/security-project.md"), "task_block")), 2)
 
     def test_task_prompt_body_heredoc_captured(self):
         worker = next(s for s in _segments("commands/security-project.md")
@@ -80,12 +79,11 @@ class AttrValueTests(unittest.TestCase):
 
     def test_agent_frontmatter_models(self):
         models = {}
-        for rel in ("agents/security.md", "agents/security-recon.md", "agents/security-refute.md"):
+        for rel in ("agents/security.md", "agents/security-recon.md"):
             fm = _by_cat(_segments(rel), "agent_frontmatter")[0]
             models[rel.split("/")[-1]] = fm.attrs["model"]
         self.assertEqual(models["security.md"], "opus")
         self.assertEqual(models["security-recon.md"], "sonnet")
-        self.assertEqual(models["security-refute.md"], "sonnet")
 
     def test_command_frontmatter_allowed_tools(self):
         fm = _by_cat(_segments("commands/security-project.md"), "cmd_frontmatter")[0]

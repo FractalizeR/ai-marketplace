@@ -288,12 +288,24 @@ class ProjectOnly(unittest.TestCase):
         # Flags removed in 5.0.0 must not abort an old invocation: one warning,
         # then the run continues. They must not come back into argument-hint.
         hint = re.search(r'^argument-hint:\s*"(.+)"\s*$', self.text, re.MULTILINE).group(1)
-        for flag in ("--skip-recon", "--force-skip-recon"):
+        for flag in ("--no-adversarial", "--skip-recon", "--force-skip-recon"):
             with self.subTest(flag=flag):
                 self.assertNotIn(flag, hint)
         self.assertIn("was removed in 5.0.0 and is ignored", self.text)
         self.assertNotIn("compute_fingerprint", self.text)
         self.assertNotIn("SECURITY_CONTEXT.md", self.text)
+        self.assertNotIn("security-refute", self.text)
+        self.assertNotIn("--refute", self.text)
+        self.assertNotIn("REPORT.prev.md", self.text)
+
+    def test_final_output_points_to_triage(self) -> None:
+        # False-positive filtering lives in fr-audit-triage; the same phrase
+        # reaches the derived Codex skill (step 12 is not a coupled section).
+        self.assertIn(
+            "run the `fr-audit-triage` Claude Code plugin "
+            "(`/fr-audit-triage:triage-findings`) on `<REVIEW_ROOT>/findings.json`",
+            self.text,
+        )
 
     def test_exploratory_default_on(self) -> None:
         self.assertIn("Exploratory wave W∞ is enabled by default", self.text)

@@ -31,7 +31,7 @@ class OutputGateUnitTests(unittest.TestCase):
     def test_task_leak(self):
         self.assertTrue(check_codex_output('Task(subagent_type="x", prompt="""y""")',
                                            is_skill=False))
-        self.assertTrue(check_codex_output('Task subagent_type=security-refute prompt="z"',
+        self.assertTrue(check_codex_output('Task subagent_type=security prompt="z"',
                                            is_skill=False))
 
     def test_auq_leak(self):
@@ -72,8 +72,7 @@ class OutputGateUnitTests(unittest.TestCase):
     def test_agent_read_follow_ref_allowed(self):
         # agents/*.md and bare role refs are REAL bundled files → not a violation.
         for ref in ("read and follow agents/security.md",
-                    "follow agents/security-recon.md",
-                    "follow agents/security-refute.md"):
+                    "follow agents/security-recon.md"):
             with self.subTest(ref=ref):
                 self.assertEqual(check_codex_output(f"body {ref}\n", is_skill=False), [])
 
@@ -173,7 +172,6 @@ class FullBuildIntegrationTests(unittest.TestCase):
         dispatch_anchors = {
             "4-recon-phase",
             "8-parallel-worker-launch",
-            "11-5-1-launching-the-refute-wave",
         }
         for path in ARTIFACTS:
             for sec in self._coupled_sections(path):

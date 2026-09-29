@@ -44,8 +44,7 @@ Parse flags from `$ARGUMENTS`:
 - `--no-console` — static-only recon: the utility does NOT run the project's console. Use when auditing hostile/untrusted repos (no guarantee that bootstrap will not execute malicious code), when runtime credentials are absent, or in CI scenarios where project execution is forbidden. Ceiling=medium (intentionally). Alternative — isolation via firejail/Docker without the flag.
 - `--console-cmd=<template>` — explicit command for running the project console, e.g. `--console-cmd="docker compose exec -T php php bin/console"`. Use when the project runs **inside a container** (docker compose / Makefile / ddev / Sail) — running `bin/console` on the host would distort the environment (wrong PHP version, missing services). May contain a `{args}` placeholder for Makefile-style passthrough (`--console-cmd="make console CMD={args}"`); otherwise the subcommand is appended. When neither this flag nor `--no-console` is passed and the project looks containerized, **step 3b asks you interactively** (see below) instead of silently degrading. `--no-console` wins over this flag. **On the derived Codex harness** a space-containing value here is truncated by the whitespace-split argument contract — there, set the console command via the `FR_SECURITY_CONSOLE_CMD` environment variable instead (e.g. `frsr --console-cmd "…"`), which step 3b honors; see step 3b.
 - `--exclude=<csv>` — additional path prefixes (relative to `<project_root>`) that will NOT be parsed by the PHP extractor. For example, `--exclude=legacy,src/ThirdParty,generated`. These paths are added to the built-in `DEFAULT_EXCLUDE` (`vendor/`, `var/cache/`, `var/log/`, `node_modules/`, `storage/framework/cache/`, `storage/logs/`, `bootstrap/cache/`, `public/build/`, `.git/`, `.claude/`) — they do NOT replace it. If the flag is not passed explicitly — only built-in defaults + items found in CLAUDE.md apply (see step 3a).
-- `--skip-recon`, `--force-skip-recon` — removed in 5.0.0 (every run does a fresh recon). If one is passed, print `WARNING: <flag> was removed in 5.0.0 and is ignored` once and continue.
-- `--no-adversarial` — **disable** the adversarial refute pass (ON by default). The refute wave reduces the false-positive rate via a second pass through Sonnet. Disable if you need the fastest possible run without the second pass.
+- `--no-adversarial`, `--skip-recon`, `--force-skip-recon` — removed in 5.0.0 (there is no refute pass any more, and every run does a fresh recon). If one is passed, print `WARNING: <flag> was removed in 5.0.0 and is ignored` once and continue.
 
 **Important about defaults:**
 - **Exploratory wave W∞ is enabled by default.** Without it, cross-layer vulnerabilities (OAuth state, tenancy chains, authenticator integrity) are missed. Quick scanner — `--quick`.
@@ -205,17 +204,13 @@ themselves.
 ```bash
 # Remove intermediate wave reports from previous runs
 rm -f "<REVIEW_ROOT>/waves/"*.md
-# Save the previous summary as .prev.md (if any)
-if [ -f "<REVIEW_ROOT>/REPORT.md" ]; then
-    mv "<REVIEW_ROOT>/REPORT.md" "<REVIEW_ROOT>/REPORT.prev.md"
-fi
 # Previous pre-retry snapshots (if the orchestrator did a retry in a past run)
 rm -f "<REVIEW_ROOT>/waves/"*.pre-retry.md
 ```
 
-`<REVIEW_ROOT>/REPORT/` (split detail) is **not cleaned** — dedupe will rewrite it at the dedup step.
+`<REVIEW_ROOT>/REPORT.md` and `<REVIEW_ROOT>/REPORT/` (split detail) are **not cleaned** — dedupe rewrites them at the dedup step.
 
-`<REVIEW_ROOT>/.findings_state.json` (snapshot of the previous run for cross-run diff) is **not cleaned** — dedupe will read it before writing REPORT.md and overwrite it at the end. On the next run "New / Recurring / Closed" will appear in the Executive Summary automatically.
+`<REVIEW_ROOT>/.findings_state.json` is **not cleaned** — it holds the verdicts `fr-audit-triage` folded in earlier (`dedupe_findings.py --verdicts-in`); dedupe keeps showing a rejected finding's earlier verdict next to it on later runs.
 
 ### 3a. Collecting the exclude list (CLAUDE.md + flag)
 
@@ -399,7 +394,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/plan_waves.py "<REVIEW_ROOT>/CONTEXT.md" \
   [--scope-glob=<SCOPE_GLOB>]   # if set
 ```
 
-`--save-plan` saves the plan to JSON for the subsequent coverage block in REPORT.md (step 11 / 11.5.2).
+`--save-plan` saves the plan to JSON for the subsequent coverage block in REPORT.md (step 11).
 
 **`--plugin-root` is required** — otherwise `plan_waves` will not find `checklists/` (the relative path resolves to the project's cwd, not the plugin's). The script prefixes checklists with an absolute path.
 
@@ -528,47 +523,11 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/dedupe_findings.py \
 
 Dedup produces a **split report** (by default):
 - `<REVIEW_ROOT>/REPORT.md` — executive summary + index table of all findings with links to details
+- `<REVIEW_ROOT>/findings.json` — every finding in machine-readable form (the input for false-positive filtering, see step 12)
 - `<REVIEW_ROOT>/REPORT/<root_cause_family>.md` — finding details by category (authz.md, injection.md, disclosure.md, crypto.md, ssrf.md, webhook.md, business_logic.md, xss.md, deserialization.md)
 - `<REVIEW_ROOT>/REPORT/manual_review.md` — findings requiring manual check: those that did not pass auto-promote (custom sink_kind + non-critical) **and** parse-failed (worker did not emit `sink_file`, flag `[PARSE_FAILED]`). The index outputs a callout "⚠️ Action required: N" on non-zero count.
 
 For legacy mode (everything in one file) — flag `--single-file`.
-
-### 11.5. Adversarial refute pass (optional, on by default)
-
-If the orchestrator was launched with `--no-adversarial` — **skip this step** (then directly to step 12).
-
-#### 11.5.1. Launching the refute wave
-
-Read the `<REVIEW_ROOT>/REPORT.md` index table (`## Findings by category` — `confirmed` findings only). Split rows into batches of ≤20 findings (first 20 → batch_index=0, next 20 → batch_index=1, etc.). Never draw rows from the `## Needs validation` / `## Hardening notes` sections at the end of the file — those two verdicts are not refuted: refute looks for blocking code in the repo, and `needs_validation` is by definition blocked on a fact outside it, so there is nothing in-repo left to refute.
-
-For each batch — sequential Task call (parallelism is **forbidden** — the refute agent writes to a single file `<REVIEW_ROOT>/refute.md` in Append mode):
-
-```
-Task subagent_type=security-refute prompt="
-review_root: <REVIEW_ROOT>
-batch_index: <0..N-1>
-findings_slice: <markdown slice of REPORT.md index ≤ 20 finding rows>
-"
-```
-
-Soft timeout 10 minutes per call. If the Task did not return within timeout — the orchestrator prints a warning "adversarial pass partial — N from M findings reviewed" and continues with partial refute. Refute does not block the main report.
-
-#### 11.5.2. Apply refute results
-
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/bin/dedupe_findings.py \
-  --input-glob "<REVIEW_ROOT>/waves/*.md" \
-  --output "<REVIEW_ROOT>/REPORT.md" \
-  --details-dir "<REVIEW_ROOT>/REPORT" \
-  --waves-plan "<REVIEW_ROOT>/waves_plan.json" \
-  --refute "<REVIEW_ROOT>/refute.md" \
-  --project-root "<PROJECT_ROOT>"
-```
-
-This re-runs dedup (fast) and applies refute tags. On output:
-- In `REPORT.md` — each refute-marked finding receives a `[REFUTE_CLAIMED]` marker with a `refute_file:refute_line` tail.
-- A new file `<REVIEW_ROOT>/REPORT/refute_invalid.md` — refute records that did not pass auto-validation (for audit).
-- Executive summary shows counters `confirmed / refute_claimed / refute_invalid / manual_review / parse_failed`.
 
 ### 12. Output to user
 
@@ -578,7 +537,10 @@ Security review complete.
   Details by category: <REVIEW_ROOT>/REPORT/<family>.md
   Intermediate reports (for audit): <REVIEW_ROOT>/waves/*.md
   Uncovered slices: [<list> or none]
+  False-positive filtering: run the `fr-audit-triage` Claude Code plugin (`/fr-audit-triage:triage-findings`) on <REVIEW_ROOT>/findings.json
 ```
+
+This audit has no false-positive pass of its own: findings are reported recall-first. To filter false positives, run the `fr-audit-triage` Claude Code plugin (`/fr-audit-triage:triage-findings`) on `<REVIEW_ROOT>/findings.json` — it re-verifies each finding against the code and can fold its verdicts back into this report.
 
 ## PRINCIPLES
 

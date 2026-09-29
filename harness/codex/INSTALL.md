@@ -40,7 +40,7 @@ dist/codex/                                   # = the dir you register with code
     skills/security-project/SKILL.md          # orchestrator skill
     core/                                     # = $FR_SECURITY_CORE_ROOT
       bin/  checklists/
-      agents/security.md  agents/security-recon.md  agents/security-refute.md
+      agents/security.md  agents/security-recon.md
     adapter.json                              # build metadata (not read by Codex at runtime)
     INSTALL.md                                # this file
 ```
@@ -77,7 +77,7 @@ export FR_SECURITY_CORE_ROOT=/abs/path/to/dist/codex/plugins/fr-security-review/
 echo "$FR_SECURITY_CORE_ROOT"   # verify — if empty, every ${FR_SECURITY_CORE_ROOT}/bin/... path breaks
 ```
 
-The worker read-follow files live at `$FR_SECURITY_CORE_ROOT/agents/{security,security-recon,security-refute}.md`.
+The worker read-follow files live at `$FR_SECURITY_CORE_ROOT/agents/{security,security-recon}.md`.
 
 ## 4. Resolve models
 
