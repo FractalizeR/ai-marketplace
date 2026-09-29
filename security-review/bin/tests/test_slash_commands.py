@@ -245,6 +245,11 @@ class CommonContract(unittest.TestCase):
                     text,
                     f"{name}: dedupe --details-dir wrong",
                 )
+                self.assertIn(
+                    '--waves-plan "<REVIEW_ROOT>/waves_plan.json" \\\n  --project-root "<PROJECT_ROOT>"',
+                    text,
+                    f"{name}: dedupe must get --project-root (remembered rejections in composite repos)",
+                )
 
     def test_worker_task_carries_review_root(self) -> None:
         # Each Task(security, ...) call must pass review_root + project_root +

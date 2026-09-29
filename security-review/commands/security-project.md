@@ -511,8 +511,11 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/dedupe_findings.py \
   --input-glob "<REVIEW_ROOT>/waves/*.md" \
   --output "<REVIEW_ROOT>/REPORT.md" \
   --details-dir "<REVIEW_ROOT>/REPORT" \
-  --waves-plan "<REVIEW_ROOT>/waves_plan.json"
+  --waves-plan "<REVIEW_ROOT>/waves_plan.json" \
+  --project-root "<PROJECT_ROOT>"
 ```
+
+Always pass `--project-root`: dedupe re-checks each remembered `fr-audit-triage` rejection against its evidence line under that root, and with the cwd default a composite repo (project root ≠ cwd) silently stops showing them.
 
 Dedup produces a **split report** (by default):
 - `<REVIEW_ROOT>/REPORT.md` — executive summary + index table of all findings with links to details
