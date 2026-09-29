@@ -248,7 +248,7 @@ class ExportSchemaTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-class CliWiringTests(unittest.TestCase):
+class _CliFixture:
     def _run_cli(self, tmpdir: Path, extra_args: list[str] | None = None) -> subprocess.CompletedProcess:
         args = [
             sys.executable, _CLI_SCRIPT,
@@ -299,6 +299,9 @@ class CliWiringTests(unittest.TestCase):
             ),
         )
 
+
+
+class CliWiringTests(_CliFixture, unittest.TestCase):
     def test_findings_json_written_and_shaped(self):
         with tempfile.TemporaryDirectory() as td:
             tmpdir = Path(td)
@@ -401,6 +404,120 @@ class CliWiringTests(unittest.TestCase):
             self.assertEqual(payload["confirmed"], [])
             self.assertEqual(payload["needs_validation"], [])
             self.assertEqual(payload["hardening"], [])
+
+
+# ---------------------------------------------------------------------------
+# Run snapshot (`run_info.json` from wave planning) → `## Run` + findings.json `run`.
+# ---------------------------------------------------------------------------
+
+_CODEX_SNAPSHOT = {
+    "plugin_version": "9.1.0", "harness": "codex", "bundle_version": "0.9.0",
+    "models": {"orchestrator": "big", "orchestrator_source": "frsr", "high": "big", "fast": "small"},
+    "reasoning_effort": "high", "config_model": "big",
+    "tier_waves": {"high": ["W1"], "fast": ["W3"]},
+}
+
+
+class RunSnapshotCliTests(_CliFixture, unittest.TestCase):
+    def _snapshot(self, tmpdir: Path, data: dict) -> None:
+        (tmpdir / "run_info.json").write_text(json.dumps(data), encoding="utf-8")
+
+    def _mk_sliced_waves(self, tmpdir: Path) -> None:
+        """Slice-id names (`W1_PART1.md`), which the cost estimate needs."""
+        self._mk_waves(tmpdir)
+        for name in ("W1", "W2", "W3"):
+            (tmpdir / f"{name}.md").rename(tmpdir / f"{name}_PART1.md")
+
+    def _outputs(self, tmpdir: Path) -> tuple[str, dict]:
+        report = (tmpdir / "REPORT.md").read_text(encoding="utf-8")
+        payload = json.loads((tmpdir / FINDINGS_JSON_NAME).read_text(encoding="utf-8"))
+        return report, payload
+
+    def test_split_report_and_findings_json_carry_the_snapshot(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmpdir = Path(td)
+            self._mk_sliced_waves(tmpdir)
+            self._snapshot(tmpdir, _CODEX_SNAPSHOT)
+            self._run_cli(tmpdir)
+            report, payload = self._outputs(tmpdir)
+            self.assertIn("- Plugin: fr-security-review 9.1.0 (harness: codex, bundle 0.9.0)", report)
+            self.assertIn("- High tier: big — W1", report)
+            self.assertIn("- Fast tier: small — W3", report)
+            self.assertLess(report.index("## Run"), report.index("## Executive Summary"))
+            self.assertNotIn("## Estimated cost", report, "Anthropic-priced estimate is wrong for Codex")
+            self.assertEqual(payload["run"]["models"]["high"], "big")
+            self.assertEqual(payload["run"]["harness"], "codex")
+
+    def test_single_file_report_carries_the_snapshot(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmpdir = Path(td)
+            self._mk_waves(tmpdir)
+            self._snapshot(tmpdir, _CODEX_SNAPSHOT)
+            self._run_cli(tmpdir, ["--single-file"])
+            report, payload = self._outputs(tmpdir)
+            self.assertIn("- Orchestrator: big (via frsr)", report)
+            self.assertEqual(payload["run"]["plugin_version"], "9.1.0")
+
+    def test_zero_input_incomplete_report_carries_the_snapshot(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmpdir = Path(td)
+            self._snapshot(tmpdir, _CODEX_SNAPSHOT)
+            (tmpdir / "dispatch_gaps.json").write_text(
+                json.dumps([{"slice_id": "W1_PART1", "reason": "crash", "returncode": 1}]),
+                encoding="utf-8",
+            )
+            self._run_cli(tmpdir)
+            report, payload = self._outputs(tmpdir)
+            self.assertIn("INCOMPLETE AUDIT", report)
+            self.assertIn("- High tier: big", report)
+            self.assertEqual(payload["run"]["models"]["fast"], "small")
+
+    def test_missing_snapshot_says_not_recorded_and_keeps_cost(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmpdir = Path(td)
+            self._mk_sliced_waves(tmpdir)
+            self._run_cli(tmpdir)
+            report, payload = self._outputs(tmpdir)
+            self.assertIn("- Run metadata: not recorded", report)
+            self.assertIn("## Estimated cost", report)
+            self.assertEqual(payload["run"]["harness"], "unknown")
+
+    def test_misshaped_snapshot_still_writes_the_report(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmpdir = Path(td)
+            self._mk_waves(tmpdir)
+            self._snapshot(tmpdir, {"harness": "codex", "tier_waves": ["W1"]})
+            proc = self._run_cli(tmpdir)
+            self.assertIn("WARNING", proc.stderr)
+            report, payload = self._outputs(tmpdir)
+            self.assertIn("- Run metadata: not recorded", report)
+            self.assertEqual(payload["run"]["harness"], "unknown")
+
+    def test_claude_snapshot_marks_tiers_as_aliases(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmpdir = Path(td)
+            self._mk_waves(tmpdir)
+            self._snapshot(tmpdir, {
+                "plugin_version": "9.1.0", "harness": "claude",
+                "models": {"orchestrator": "unknown", "high": "opus", "fast": "sonnet"},
+                "tier_waves": {"high": ["W1"]},
+            })
+            self._run_cli(tmpdir)
+            report, _ = self._outputs(tmpdir)
+            self.assertIn("- High tier: opus (Claude Code alias) — W1", report)
+            self.assertIn("- Fast tier: sonnet (Claude Code alias)\n", report)
+            self.assertNotIn("Reasoning effort", report)
+
+    def test_rerun_with_snapshot_is_byte_identical(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmpdir = Path(td)
+            self._mk_waves(tmpdir)
+            self._snapshot(tmpdir, _CODEX_SNAPSHOT)
+            self._run_cli(tmpdir)
+            first = (tmpdir / FINDINGS_JSON_NAME).read_bytes(), (tmpdir / "REPORT.md").read_bytes()
+            self._run_cli(tmpdir)
+            second = (tmpdir / FINDINGS_JSON_NAME).read_bytes(), (tmpdir / "REPORT.md").read_bytes()
+            self.assertEqual(first, second)
 
 
 if __name__ == "__main__":

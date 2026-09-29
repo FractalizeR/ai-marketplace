@@ -131,6 +131,20 @@ class MissingOrMismatchedContractTests(unittest.TestCase):
             records = pf.load(review_root)
             self.assertEqual(records, [])
 
+    def test_run_snapshot_key_is_tolerated(self):
+        """fr-security-review >= 5.1 adds a top-level `run` block without a schema bump."""
+        with tempfile.TemporaryDirectory() as td:
+            review_root = Path(td)
+            (review_root / "findings.json").write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "run": {"harness": "codex", "models": {"high": "big", "fast": "small"}},
+                    "confirmed": [], "needs_validation": [], "hardening": [],
+                }),
+                encoding="utf-8",
+            )
+            self.assertEqual(pf.load(review_root), [])
+
 
 class CoverageTests(unittest.TestCase):
     """DoD #6: assert_full_coverage must catch both an orphan and a

@@ -659,6 +659,7 @@ def render_summary(
     incomplete: bool = False,
     unmatched_needs_validation: list[NeedsValidation] | None = None,
     unmatched_hardening: list[HardeningNote] | None = None,
+    run_info=None,
 ) -> str:
     total_counted = len(merged) + len(manual)
     by_sev: dict[str, int] = {}
@@ -680,6 +681,7 @@ def render_summary(
             "as a partial review, not a clean bill of health."
         )
         lines.append("")
+    lines.extend(_render_run_block(run_info))
     lines.extend([
         "## Executive Summary",
         "",
@@ -755,9 +757,42 @@ def render_summary(
         waves_plan, merged, plugin_root or _default_plugin_root()
     )
     lines.extend(coverage_lines)
-    from .cost import render_cost_block
-    lines.extend(render_cost_block(cost))
+    # The estimate is priced on Anthropic tiers; a Codex run's cost is unrelated.
+    if run_info is None or run_info.harness != "codex":
+        from .cost import render_cost_block
+        lines.extend(render_cost_block(cost))
     return "\n".join(lines)
+
+
+def _render_run_block(run_info) -> list[str]:
+    """`## Run` — what produced this report, read from the run snapshot
+    (`run_info.RunInfo`). None → no block (library callers); an empty snapshot
+    (missing or unreadable file) → a "not recorded" line, so an old review root
+    re-deduped says so. Tier waves are the planned ones, not a record of what ran."""
+    if run_info is None:
+        return []
+    lines = ["## Run", ""]
+    if not run_info.is_recorded():
+        lines += ["- Run metadata: not recorded (run_info.json from wave planning is missing or unreadable)", ""]
+        return lines
+    build = f"harness: {run_info.harness}"
+    if run_info.bundle_version:
+        build += f", bundle {run_info.bundle_version}"
+    lines.append(f"- Plugin: fr-security-review {run_info.plugin_version} ({build})")
+    source = {"frsr": " (via frsr)", "self-reported": " (self-reported)"}.get(
+        run_info.orchestrator_source, "")
+    lines.append(f"- Orchestrator: {run_info.orchestrator}{source}")
+    alias = " (Claude Code alias)" if run_info.harness == "claude" else ""
+    for tier, model in (("High", run_info.high), ("Fast", run_info.fast)):
+        waves = run_info.tier_waves.get(tier.lower()) or []
+        suffix = f" — {', '.join(waves)}" if waves else ""
+        lines.append(f"- {tier} tier: {model}{alias}{suffix}")
+    if run_info.harness == "codex":
+        effort = run_info.reasoning_effort
+        cfg = f"; config model {run_info.config_model}" if run_info.config_model else ""
+        lines.append(f"- Reasoning effort: {effort} (Codex config.toml{cfg})")
+    lines.append("")
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -777,6 +812,7 @@ def render_report(
     unmatched_needs_validation: list[NeedsValidation] | None = None,
     unmatched_hardening: list[HardeningNote] | None = None,
     resolutions: dict | None = None,
+    run_info=None,
 ) -> str:
     """Legacy single-file report (all findings inline).
 
@@ -794,6 +830,7 @@ def render_report(
         incomplete=incomplete,
         unmatched_needs_validation=unmatched_needs_validation,
         unmatched_hardening=unmatched_hardening,
+        run_info=run_info,
     )]
     out.append("## Findings")
     out.append("")
@@ -851,6 +888,7 @@ def render_index_report(
     unmatched_needs_validation: list[NeedsValidation] | None = None,
     unmatched_hardening: list[HardeningNote] | None = None,
     resolutions: dict | None = None,
+    run_info=None,
 ) -> str:
     """Executive summary + index table linking to per-family detail files.
 
@@ -880,6 +918,7 @@ def render_index_report(
             incomplete=incomplete,
             unmatched_needs_validation=unmatched_needs_validation,
             unmatched_hardening=unmatched_hardening,
+            run_info=run_info,
         )
     ]
     out.append("## Findings by category")
@@ -988,6 +1027,7 @@ def write_split_report(
     unmatched_needs_validation: list[NeedsValidation] | None = None,
     unmatched_hardening: list[HardeningNote] | None = None,
     resolutions: dict | None = None,
+    run_info=None,
 ) -> list[Path]:
     """Write index + per-family detail files. Returns list of written paths."""
     details_dir.mkdir(parents=True, exist_ok=True)
@@ -1005,6 +1045,7 @@ def write_split_report(
             incomplete=incomplete,
             unmatched_needs_validation=unmatched_needs_validation,
             unmatched_hardening=unmatched_hardening,
+            run_info=run_info,
             resolutions=resolutions,
         ),
     )

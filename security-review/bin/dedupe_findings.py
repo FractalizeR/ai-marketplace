@@ -41,6 +41,7 @@ from dedupe.models import FLAG_PARSE_FAILED  # noqa: E402
 from dedupe.parser import parse_wave  # noqa: E402
 from dedupe.pipeline import attach_side_records, dedupe  # noqa: E402
 from dedupe.renderer import _write_reflowed, render_report, write_split_report  # noqa: E402
+import run_info  # noqa: E402
 import validate_context as _vc  # noqa: E402
 from dedupe.state import (  # noqa: E402
     VerdictsInError,
@@ -433,6 +434,9 @@ def main(argv: list[str] | None = None) -> int:
     incomplete = bool(dispatch_gap_lines)
     waves_plan = load_waves_plan(args.waves_plan)
     recon_gap_lines = read_recon_gaps(review_root, waves_plan)
+    # Snapshot from wave planning, never re-derived here: dedupe is re-run after
+    # triage from whatever tree the user has, which must not re-attribute the run.
+    run = run_info.load(review_root / run_info.RUN_INFO_NAME) or run_info.RunInfo()
 
     if not paths:
         # ZERO-INPUT PASS (Codex #9): all waves failed → no findings files, but
@@ -450,11 +454,12 @@ def main(argv: list[str] | None = None) -> int:
             details_dir,
             coverage_gaps=coverage_gaps,
             incomplete=True,
+            run_info=run,
         )
         # findings.json is the public contract (P2.4) — write it every run,
         # empty payload included, so a consumer never has to guess whether a
         # stale file from a previous run is still current.
-        write_findings_json(review_root, [], [], [], [])
+        write_findings_json(review_root, [], [], [], [], run_info=run)
         print(
             f"Wrote {args.output} (INCOMPLETE: no input findings; "
             f"{len(dispatch_gap_lines)} dispatch gap(s))"
@@ -526,12 +531,14 @@ def main(argv: list[str] | None = None) -> int:
                 unmatched_needs_validation=side_records.unmatched_needs_validation,
                 unmatched_hardening=side_records.unmatched_hardening,
                 resolutions=render_resolutions,
+                run_info=run,
             ),
         )
         write_findings_json(
             review_root, merged, manual,
             side_records.unmatched_needs_validation,
             side_records.unmatched_hardening,
+            run_info=run,
         )
         if state_usable:
             save_state(review_root, resolutions=new_resolutions)
@@ -555,11 +562,13 @@ def main(argv: list[str] | None = None) -> int:
         unmatched_needs_validation=side_records.unmatched_needs_validation,
         unmatched_hardening=side_records.unmatched_hardening,
         resolutions=render_resolutions,
+        run_info=run,
     )
     write_findings_json(
         review_root, merged, manual,
         side_records.unmatched_needs_validation,
         side_records.unmatched_hardening,
+        run_info=run,
     )
     if state_usable:
         save_state(review_root, resolutions=new_resolutions)

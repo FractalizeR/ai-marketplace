@@ -138,6 +138,7 @@ def build_findings_export(
     manual: list[MergedFinding],
     unmatched_needs_validation: list[NeedsValidation],
     unmatched_hardening: list[HardeningNote],
+    run_info=None,
 ) -> dict:
     """Build the `findings.json` payload as a plain dict (json-serializable).
 
@@ -175,12 +176,15 @@ def build_findings_export(
     for hn in sorted(unmatched_hardening, key=lambda x: (x.source_file, x.sink_file, x.sink_line)):
         hardening.append(_hardening_entry(hn, matched_to=None))
 
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "confirmed": confirmed,
-        "needs_validation": needs_validation,
-        "hardening": hardening,
-    }
+    payload = {"schema_version": SCHEMA_VERSION}
+    # Additive, so schema_version stays: consumers read only the three lists.
+    # It comes from the run snapshot file, keeping rule 2 (no run-to-run drift).
+    if run_info is not None:
+        payload["run"] = run_info.as_dict()
+    payload["confirmed"] = confirmed
+    payload["needs_validation"] = needs_validation
+    payload["hardening"] = hardening
+    return payload
 
 
 def write_findings_json(
@@ -189,12 +193,15 @@ def write_findings_json(
     manual: list[MergedFinding],
     unmatched_needs_validation: list[NeedsValidation],
     unmatched_hardening: list[HardeningNote],
+    run_info=None,
 ) -> Path:
     """Write the public contract to `<review_root>/findings.json` and return
     its path. Overwrites unconditionally, same idempotency convention as
     `recon_inventory.py`/`dedupe_findings.py`'s other outputs (CLAUDE.md:
     "Idempotency in recon and dedup" — no append-only side effects)."""
-    payload = build_findings_export(merged, manual, unmatched_needs_validation, unmatched_hardening)
+    payload = build_findings_export(
+        merged, manual, unmatched_needs_validation, unmatched_hardening, run_info=run_info
+    )
     out_path = Path(review_root) / FINDINGS_JSON_NAME
     out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return out_path
