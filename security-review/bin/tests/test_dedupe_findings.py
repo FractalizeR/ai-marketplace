@@ -719,7 +719,7 @@ class ParseWaveMutabilityTests(unittest.TestCase):
 class ParseWaveApiTests(unittest.TestCase):
     """`parse_wave` / `parse_findings_file` contract (parse_findings_file's
     signature must stay `(path) -> list[Finding]` -- callers outside this
-    package depend on it: bin/dedupe_findings.py, bin/tests/test_refute.py)."""
+    package depend on it: bin/dedupe_findings.py)."""
 
     def test_parse_findings_file_signature_unchanged_returns_only_findings(self):
         """`parse_findings_file` on a wave_format=2 file returns ONLY the
@@ -1325,7 +1325,7 @@ class AttachSideRecordsTests(unittest.TestCase):
     def test_dedupe_signature_and_behavior_unchanged(self):
         """Guard against P2.2 accidentally routing bucket records through
         `dedupe()` -- its signature and return shape must stay exactly what
-        `bin/dedupe_findings.py` and `test_refute.py` call today."""
+        `bin/dedupe_findings.py` calls today."""
         merged, manual = df.dedupe([self._confirmed()])
         self.assertIsInstance(merged, list)
         self.assertIsInstance(manual, list)
@@ -2716,6 +2716,14 @@ class ReflowMarkdownTests(unittest.TestCase):
                     len(line), df.DEFAULT_WRAP_WIDTH,
                     f"line exceeds DEFAULT_WRAP_WIDTH: {line!r}",
                 )
+
+
+class RefuteFlagRemovedTests(unittest.TestCase):
+    def test_refute_flag_is_an_argparse_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(SystemExit) as ctx:
+                dff.main(["--output", str(Path(td) / "REPORT.md"), "--refute", str(Path(td) / "refute.md")])
+        self.assertEqual(ctx.exception.code, 2)
 
 
 if __name__ == "__main__":

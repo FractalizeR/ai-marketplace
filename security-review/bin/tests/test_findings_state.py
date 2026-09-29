@@ -13,7 +13,7 @@ THIS_DIR = Path(__file__).resolve().parent
 BIN_DIR = THIS_DIR.parent
 sys.path.insert(0, str(BIN_DIR))
 
-from dedupe.models import FLAG_REFUTE_CLAIMED, Finding, MergedFinding  # noqa: E402
+from dedupe.models import Finding, MergedFinding  # noqa: E402
 from dedupe.state import compute_evidence_hash  # noqa: E402
 from dedupe.state import (  # noqa: E402
     FindingSnapshot,
@@ -28,7 +28,6 @@ from dedupe.state import (  # noqa: E402
     load_continuation_baseline,
     load_state,
     load_verdicts_in,
-    resolutions_from_refuted_findings,
     save_state,
     snapshots_from,
 )
@@ -244,10 +243,10 @@ class ResolutionsAccumulateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             review_root = Path(td)
             save_state([], review_root, resolutions={
-                "hash1": Resolution(verdict="rejected", source="refute"),
+                "hash1": Resolution(verdict="rejected", source="audit-triage"),
             })
             save_state([], review_root, resolutions={
-                "hash2": Resolution(verdict="rejected", source="refute"),
+                "hash2": Resolution(verdict="rejected", source="audit-triage"),
             })
             loaded = load_resolutions(review_root)
         self.assertEqual(set(loaded), {"hash1", "hash2"})
@@ -256,7 +255,7 @@ class ResolutionsAccumulateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             review_root = Path(td)
             save_state([], review_root, resolutions={
-                "hash1": Resolution(verdict="rejected", source="refute"),
+                "hash1": Resolution(verdict="rejected", source="audit-triage"),
             })
             save_state([], review_root, resolutions={
                 "hash1": Resolution(verdict="reaffirmed", source="triage"),
@@ -269,7 +268,7 @@ class ResolutionsAccumulateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             review_root = Path(td)
             save_state([], review_root, resolutions={
-                "hash1": Resolution(verdict="rejected", source="refute"),
+                "hash1": Resolution(verdict="rejected", source="audit-triage"),
             })
             first_seq = load_resolutions(review_root)["hash1"].run_seq
             # A plain run with no fresh resolutions must not touch hash1's run_seq.
@@ -278,7 +277,7 @@ class ResolutionsAccumulateTests(unittest.TestCase):
             # A run that DOES supply a (possibly unrelated) resolution bumps
             # the counter for what it touches.
             save_state([], review_root, resolutions={
-                "hash2": Resolution(verdict="rejected", source="refute"),
+                "hash2": Resolution(verdict="rejected", source="audit-triage"),
             })
             reloaded = load_resolutions(review_root)
             self.assertEqual(reloaded["hash1"].run_seq, first_seq)
@@ -289,63 +288,9 @@ class ResolutionsAccumulateTests(unittest.TestCase):
         own to_dict is the boundary that matters here; findings.json/REPORT.md
         never construct a Resolution from state at all (see
         renderer._render_resolution_note, which never reads run_seq)."""
-        res = Resolution(verdict="rejected", source="refute", run_seq=7)
+        res = Resolution(verdict="rejected", source="audit-triage", run_seq=7)
         self.assertIn("run_seq", res.to_dict())  # present in state.json (by design)
         # But the rendered note must not mention it — covered in test_renderer.py.
-
-
-class ResolutionsFromRefutedFindingsTests(unittest.TestCase):
-    def _mk_merged(self, sink_snippet="if (true) { deny(); }", **overrides) -> MergedFinding:
-        f = Finding(
-            title_line="h", sink_file="src/A.php", sink_line=10,
-            sink_kind="csrf_missing", root_cause_family="authz",
-            enclosing_symbol="A::m", sink_snippet=sink_snippet,
-            severity="High", confidence=9,
-        )
-        mf = MergedFinding(primary=f)
-        for k, v in overrides.items():
-            setattr(mf, k, v)
-        return mf
-
-    def test_builds_resolution_for_refute_claimed_finding(self):
-        with tempfile.TemporaryDirectory() as td:
-            project_root = Path(td)
-            guard = project_root / "src" / "Guard.php"
-            guard.parent.mkdir(parents=True)
-            guard.write_text("<?php\nfunction check() {\n    deny_unless(hasRole('admin'));\n}\n")
-            mf = self._mk_merged(
-                flags=[FLAG_REFUTE_CLAIMED],
-                refute_file="src/Guard.php", refute_line=3,
-                refute_rationale="role check", refute_confidence=9,
-            )
-            out = resolutions_from_refuted_findings([mf], project_root)
-            self.assertIn(mf.primary.sink_hash, out)
-            res = out[mf.primary.sink_hash]
-            self.assertEqual(res.verdict, "rejected")
-            self.assertEqual(res.source, "refute")
-            self.assertEqual(res.refute_file, "src/Guard.php")
-            self.assertEqual(res.refute_line, 3)
-            self.assertEqual(
-                res.evidence_hash,
-                compute_evidence_hash("src/Guard.php", 3, project_root),
-            )
-
-    def test_skips_finding_without_refute_claimed_flag(self):
-        with tempfile.TemporaryDirectory() as td:
-            mf = self._mk_merged()  # no flags
-            out = resolutions_from_refuted_findings([mf], Path(td))
-        self.assertEqual(out, {})
-
-    def test_skips_nohash00_finding(self):
-        with tempfile.TemporaryDirectory() as td:
-            mf = self._mk_merged(
-                sink_snippet="",  # -> nohash00
-                flags=[FLAG_REFUTE_CLAIMED],
-                refute_file="src/Guard.php", refute_line=1,
-            )
-            self.assertEqual(mf.primary.sink_hash, "nohash00")
-            out = resolutions_from_refuted_findings([mf], Path(td))
-        self.assertEqual(out, {})
 
 
 class ActiveRejectionsTests(unittest.TestCase):
@@ -367,7 +312,7 @@ class ActiveRejectionsTests(unittest.TestCase):
             evidence_hash = compute_evidence_hash("src/Guard.php", 3, project_root)
             resolutions = {"h1": Resolution(
                 verdict="rejected", evidence_hash=evidence_hash,
-                refute_file="src/Guard.php", refute_line=3, source="refute",
+                refute_file="src/Guard.php", refute_line=3, source="audit-triage",
             )}
             active = active_rejections(resolutions, project_root)
         self.assertIn("h1", active)
@@ -375,7 +320,7 @@ class ActiveRejectionsTests(unittest.TestCase):
     def test_key_scenario_protection_removed_drops_the_mark(self):
         """The scenario DoD #5 names by name: the protection at
         refute_file:refute_line is removed (sink untouched) -> the mark must
-        be dropped on the NEXT run, without re-running --refute."""
+        be dropped on the NEXT run, without re-importing the verdict."""
         with tempfile.TemporaryDirectory() as td:
             project_root = self._mk_project(Path(td), [
                 "<?php", "function check() {", "    deny_unless(hasRole('admin'));", "}",
@@ -383,7 +328,7 @@ class ActiveRejectionsTests(unittest.TestCase):
             evidence_hash = compute_evidence_hash("src/Guard.php", 3, project_root)
             resolutions = {"h1": Resolution(
                 verdict="rejected", evidence_hash=evidence_hash,
-                refute_file="src/Guard.php", refute_line=3, source="refute",
+                refute_file="src/Guard.php", refute_line=3, source="audit-triage",
             )}
             # Protection removed; only line 3 changes, nothing else moves.
             (project_root / "src" / "Guard.php").write_text(
@@ -404,7 +349,7 @@ class ActiveRejectionsTests(unittest.TestCase):
             evidence_hash = compute_evidence_hash("src/Guard.php", 3, project_root)
             resolutions = {"h1": Resolution(
                 verdict="rejected", evidence_hash=evidence_hash,
-                refute_file="src/Guard.php", refute_line=3, source="refute",
+                refute_file="src/Guard.php", refute_line=3, source="audit-triage",
             )}
             (project_root / "src" / "Guard.php").write_text(
                 "\n".join([
@@ -428,7 +373,7 @@ class ActiveRejectionsTests(unittest.TestCase):
             path_based_hash = hashlib.sha256(b"src/Guard.php:3").hexdigest()[:8]
             resolutions = {"h1": Resolution(
                 verdict="rejected", evidence_hash=path_based_hash,
-                refute_file="src/Guard.php", refute_line=3, source="refute",
+                refute_file="src/Guard.php", refute_line=3, source="audit-triage",
             )}
             (project_root / "src" / "Guard.php").write_text(
                 "\n".join(["<?php", "function check() {", "    // no check anymore", "}"]),
@@ -460,7 +405,7 @@ class ActiveRejectionsTests(unittest.TestCase):
     def test_missing_evidence_file_drops_the_mark(self):
         resolutions = {"h1": Resolution(
             verdict="rejected", evidence_hash="deadbeef",
-            refute_file="src/Gone.php", refute_line=1, source="refute",
+            refute_file="src/Gone.php", refute_line=1, source="audit-triage",
         )}
         active = active_rejections(resolutions, Path("/nonexistent"))
         self.assertEqual(active, {})
@@ -668,6 +613,141 @@ class LoadVerdictsInTests(unittest.TestCase):
                 self._evidence_import(root, refute_file="../secret.php", refute_line=2)
 
 
+class CrossRunResolutionMemoryTests(unittest.TestCase):
+    """End-to-end: a `rejected` verdict imported with `--verdicts-in`
+    persists across runs via `.findings_state.json`, survives as a `Previously
+    rejected` annotation WITHOUT suppressing the finding, drops automatically
+    when the cited evidence changes, and keeps REPORT.md / findings.json
+    byte-stable across repeated runs.
+    """
+
+    CLI = str(BIN_DIR / "dedupe_findings.py")
+
+    def _mk_project(self, td_path: Path):
+        from tests.test_dedupe_findings import _mk_finding_md  # type: ignore
+
+        review_root = td_path / "review"
+        waves = review_root / "waves"
+        waves.mkdir(parents=True)
+        (waves / "W1.md").write_text(
+            _mk_finding_md(
+                n=1,
+                sink_file="src/Auth/Controller.php",
+                sink_line=42,
+                sink_kind="csrf_missing",
+                root_cause_family="authz",
+                enclosing_symbol="Controller::callback",
+                sink_snippet="$ok = $request->get('token');\nreturn $ok;",
+                severity="High",
+                confidence=9,
+            ),
+            encoding="utf-8",
+        )
+        project_root = td_path / "project"
+        guard = project_root / "src" / "Auth" / "Guard.php"
+        guard.parent.mkdir(parents=True)
+        guard.write_text(
+            "<?php\nfunction checkCsrf() { return hash_equals($a, $b); }\n"
+            "function unrelated() { return 1; }\n",
+            encoding="utf-8",
+        )
+        return review_root, waves, project_root
+
+    def _run(self, *, review_root, waves, project_root, verdicts_in=None):
+        import subprocess
+        args = [
+            "python3", self.CLI,
+            "--input-glob", str(waves / "*.md"),
+            "--output", str(review_root / "REPORT.md"),
+            "--details-dir", str(review_root / "REPORT"),
+            "--project-root", str(project_root),
+        ]
+        if verdicts_in is not None:
+            args += ["--verdicts-in", str(verdicts_in)]
+        result = subprocess.run(args, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # The finding is `authz` family -> its body lives in REPORT/authz.md.
+        detail = (review_root / "REPORT" / "authz.md").read_text(encoding="utf-8")
+        return (
+            (review_root / "REPORT.md").read_text(encoding="utf-8") + "\n" + detail,
+            (review_root / "findings.json").read_bytes(),
+        )
+
+    def _import_rejection(self, review_root, waves, project_root):
+        """Run 0: a plain run produces findings.json, then the verdict bound
+        to its hash is imported."""
+        self._run(review_root=review_root, waves=waves, project_root=project_root)
+        raw = (review_root / "findings.json").read_bytes()
+        sink_hash = json.loads(raw)["confirmed"][0]["sink_hash"]
+        verdicts = review_root / "verdicts.json"
+        verdicts.write_text(json.dumps({
+            "schema_version": 1,
+            "findings_json_sha256": hashlib.sha256(raw).hexdigest(),
+            "verdicts": [{
+                "sink_hash": sink_hash, "verdict": "rejected", "source": "audit-triage",
+                "refute_file": "src/Auth/Guard.php", "refute_line": 2,
+            }],
+        }), encoding="utf-8")
+        return self._run(
+            review_root=review_root, waves=waves, project_root=project_root,
+            verdicts_in=verdicts,
+        )
+
+    def test_mark_persists_without_reimport_and_does_not_suppress_finding(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root, waves, project_root = self._mk_project(Path(td))
+            report0, _ = self._import_rejection(review_root, waves, project_root)
+            self.assertIn("Previously rejected", report0)
+
+            report1, _ = self._run(
+                review_root=review_root, waves=waves, project_root=project_root,
+            )
+            self.assertIn("Previously rejected", report1)
+            self.assertIn("src/Auth/Guard.php:2", report1)
+            self.assertIn("`src/Auth/Controller.php:42`", report1)
+
+    def test_idempotent_across_repeated_runs(self):
+        with tempfile.TemporaryDirectory() as td:
+            review_root, waves, project_root = self._mk_project(Path(td))
+            self._import_rejection(review_root, waves, project_root)
+            runs = [
+                self._run(review_root=review_root, waves=waves, project_root=project_root)
+                for _ in range(3)
+            ]
+        self.assertEqual(runs[0], runs[1])
+        self.assertEqual(runs[1], runs[2])
+
+    def test_evidence_removed_drops_mark_on_next_run(self):
+        """The protection is removed at refute_file:refute_line while the sink
+        is untouched -> the mark is gone on the very next run."""
+        with tempfile.TemporaryDirectory() as td:
+            review_root, waves, project_root = self._mk_project(Path(td))
+            self._import_rejection(review_root, waves, project_root)
+            guard = project_root / "src" / "Auth" / "Guard.php"
+
+            # Control: an UNRELATED edit in the same file must not drop the mark.
+            guard.write_text(
+                "<?php\nfunction checkCsrf() { return hash_equals($a, $b); }\n"
+                "function unrelated() { return 2; }\n",
+                encoding="utf-8",
+            )
+            report_control, _ = self._run(
+                review_root=review_root, waves=waves, project_root=project_root,
+            )
+            self.assertIn("Previously rejected", report_control)
+
+            guard.write_text(
+                "<?php\nfunction checkCsrf() { return true; /* FIXME removed check */ }\n"
+                "function unrelated() { return 2; }\n",
+                encoding="utf-8",
+            )
+            report_after, _ = self._run(
+                review_root=review_root, waves=waves, project_root=project_root,
+            )
+        self.assertNotIn("Previously rejected", report_after)
+        self.assertIn("`src/Auth/Controller.php:42`", report_after)
+
+
 class ContinuationBaselineTests(unittest.TestCase):
     """A second dedupe pass over the same wave files re-states one run. Diffing
     it against the snapshot that run's own first pass wrote made every finding
@@ -694,7 +774,7 @@ class ContinuationBaselineTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def _dedupe(self, review_root: Path, *, refute: Path | None = None) -> str:
+    def _dedupe(self, review_root: Path) -> str:
         import subprocess
         args = [
             "python3", self.CLI,
@@ -703,43 +783,9 @@ class ContinuationBaselineTests(unittest.TestCase):
             "--details-dir", str(review_root / "REPORT"),
             "--project-root", str(review_root),
         ]
-        if refute is not None:
-            args += ["--refute", str(refute)]
         proc = subprocess.run(args, capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         return (review_root / "REPORT.md").read_text(encoding="utf-8")
-
-    def _empty_refute(self, review_root: Path) -> Path:
-        path = review_root / "refute.md"
-        path.write_text("refute_records: []\n", encoding="utf-8")
-        return path
-
-    def test_refute_pass_of_a_first_run_reports_no_previous_run(self):
-        with tempfile.TemporaryDirectory() as td:
-            review_root = Path(td)
-            self._wave(review_root / "waves", line=10, snippet="$id = $req->get('id');")
-            self.assertNotIn("## Diff vs previous run", self._dedupe(review_root))
-            report = self._dedupe(review_root, refute=self._empty_refute(review_root))
-            self.assertNotIn("## Diff vs previous run", report)
-
-    def test_refute_pass_repeats_the_first_passs_diff(self):
-        with tempfile.TemporaryDirectory() as td:
-            review_root = Path(td)
-            waves = review_root / "waves"
-            # Run 1 — the genuine previous run.
-            self._wave(waves, line=10, snippet="$id = $req->get('id');")
-            self._dedupe(review_root)
-            # Run 2, first pass — a different sink, so one new and one closed.
-            self._wave(waves, line=77, snippet="$other = $req->get('slug');")
-            first = self._dedupe(review_root)
-            self.assertIn("- New findings (not in previous state): 1", first)
-            self.assertIn("- Recurring (also in previous state): 0", first)
-            self.assertIn("- Closed (in previous state, gone now): 1", first)
-            # Run 2, second pass — same waves, so the same diff, not a self-diff.
-            second = self._dedupe(review_root, refute=self._empty_refute(review_root))
-            self.assertIn("- New findings (not in previous state): 1", second)
-            self.assertIn("- Recurring (also in previous state): 0", second)
-            self.assertIn("- Closed (in previous state, gone now): 1", second)
 
     def test_plain_rerun_over_the_same_waves_is_a_continuation_too(self):
         # No flag distinguishes this pass; only the wave files do. A flag-based
@@ -767,9 +813,8 @@ class ContinuationBaselineTests(unittest.TestCase):
             self._dedupe(review_root)
             self._wave(waves, line=77, snippet="$other = $req->get('slug');")
             self._dedupe(review_root)
-            refute = self._empty_refute(review_root)
-            self._dedupe(review_root, refute=refute)
-            third = self._dedupe(review_root, refute=refute)
+            self._dedupe(review_root)
+            third = self._dedupe(review_root)
             self.assertIn("- New findings (not in previous state): 1", third)
             self.assertIn("- Closed (in previous state, gone now): 1", third)
 
@@ -781,7 +826,7 @@ class ContinuationBaselineTests(unittest.TestCase):
             waves = review_root / "waves"
             self._wave(waves, line=10, snippet="$id = $req->get('id');")
             self._dedupe(review_root)
-            self._dedupe(review_root, refute=self._empty_refute(review_root))
+            self._dedupe(review_root)
             self._wave(waves, line=10, snippet="$id = $req->get('id'); // reworded")
             report = self._dedupe(review_root)
             self.assertIn("- New findings (not in previous state): 1", report)

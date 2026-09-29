@@ -24,7 +24,7 @@ enforces three rules the prose-only REPORT.md never had to:
      `confirmed` set).
 
 `flags` on a `confirmed` entry is the *merge group's* `MergedFinding.flags`
-(e.g. `[MERGED_DESPITE_HASH_MISMATCH]`, `[REFUTE_CLAIMED]`), replicated
+(e.g. `[MERGED_DESPITE_HASH_MISMATCH]`), replicated
 identically on every constituent row of that group (primary and every
 `merged_from` item) — it is not a per-Finding value, even though it sits on
 a per-Finding row. A consumer joining rows by `primary_sink_hash` sees the

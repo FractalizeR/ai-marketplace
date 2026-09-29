@@ -16,7 +16,6 @@ from .models import (
     FLAG_CROSS_SINK_MERGE,
     FLAG_MERGED_DESPITE_HASH_MISMATCH,
     FLAG_PARSE_FAILED,
-    FLAG_REFUTE_CLAIMED,
     SEVERITY_RANK,
     HardeningNote,
     MergedFinding,
@@ -143,22 +142,9 @@ def render_finding(idx: int, mf: MergedFinding, *, resolutions: dict | None = No
     map of REMEMBERED, still-valid rejections from prior runs (already
     filtered by `state.active_rejections` -- this function does not
     re-validate evidence). It never removes the finding from the report; it
-    only appends a note, mutually exclusive with the live `[REFUTE_CLAIMED]`
-    blockquote below (a finding refuted THIS run already carries that
-    inline, so the historical note would be redundant)."""
+    only appends a note."""
     f = mf.primary
-    # `[REFUTE_CLAIMED]` is rendered with the refute_file:refute_line tail to
-    # make the audit trail visible inline (operator sees where the rationale
-    # was anchored without scrolling to refute_invalid.md).
-    visible_flags: list[str] = []
-    for fl in mf.flags:
-        if fl == FLAG_REFUTE_CLAIMED and (mf.refute_file or mf.refute_line):
-            visible_flags.append(
-                f"{fl} {mf.refute_file}:{mf.refute_line}"
-            )
-        else:
-            visible_flags.append(fl)
-    flag_suffix = f" {' '.join(visible_flags)}" if visible_flags else ""
+    flag_suffix = f" {' '.join(mf.flags)}" if mf.flags else ""
     title = (
         f"# Vulnerability {idx}: [{_title_category(mf)}]: "
         f"`{f.sink_file}:{f.sink_line}`{flag_suffix}"
@@ -201,13 +187,7 @@ def render_finding(idx: int, mf: MergedFinding, *, resolutions: dict | None = No
             out.append(f"**Also detected in:** {', '.join(sources)}")
     if mf.related:
         out.append(f"**Related to:** {', '.join(mf.related)}")
-    if FLAG_REFUTE_CLAIMED in mf.flags and mf.refute_rationale:
-        out.append("")
-        out.append(
-            f"> Refute claim: {mf.refute_rationale} "
-            f"(confidence {mf.refute_confidence})"
-        )
-    elif resolutions:
+    if resolutions:
         resolution = resolutions.get(f.sink_hash)
         if resolution is not None and getattr(resolution, "verdict", None) == "rejected":
             out.append("")
@@ -389,7 +369,7 @@ def render_needs_validation_entry(
 
     `resolutions` (same remembered, already-`active_rejections`-filtered map
     `render_finding` takes) marks a standalone lead whose `sink_hash` was
-    previously rejected via `--verdicts-in`/refute -- memory marks, it does
+    previously rejected via `--verdicts-in` -- memory marks, it does
     not suppress: the entry still renders in full above the note."""
     flag_suffix = f" {' '.join(nv.flags)}" if nv.flags else ""
     loc = f"{nv.sink_file}:{nv.sink_line}" if nv.sink_file else "(no location)"
@@ -491,7 +471,7 @@ def _normalize_checklist_path(p: str, plugin_root: Path) -> str:
     waves_plan emits absolute paths (resolve_checklists). For readability in
     REPORT.md we strip the plugin-root prefix. If a path is not under THIS
     install's plugin_root -- e.g. waves_plan.json was saved by a DIFFERENT
-    install (a composite audit, a rebuilt codex/opencode bundle) rather than
+    install (a composite audit, a rebuilt codex bundle) rather than
     a custom test path -- we fall back to `checklist_tail`: a "checklists/"-
     rooted tail reads the same regardless of which install produced it, and
     keeps this install's own absolute layout out of the shared report. Only
@@ -705,7 +685,6 @@ def render_summary(
     details_dirname: str | None = None,
     diff=None,
     cost=None,
-    refute_summary: dict[str, int] | None = None,
     waves_plan: list[dict] | None = None,
     plugin_root: Path | None = None,
     coverage_gaps: list[str] | None = None,
@@ -792,31 +771,6 @@ def render_summary(
             f"{cross_sink_merges} cross-sink merges, "
             f"{parse_failures} parse failures"
         )
-    if refute_summary:
-        # Shown only when adversarial pass actually ran (refute_summary != None).
-        # `confirmed` = main findings without [REFUTE_CLAIMED];
-        # `refute_claimed` = main findings refuted with valid evidence;
-        # `refute_invalid` = refute records that failed auto-validation;
-        # `manual_review` mirrors the manual_review.md count for completeness;
-        # `parse_failed` derived locally from manual flags (so the renderer
-        # owns the count semantics, not refute.py).
-        lines.append("")
-        lines.append("### Adversarial refute pass — by state")
-        lines.append("")
-        lines.append(f"- Confirmed (no refute claim): {refute_summary.get('confirmed', 0)}")
-        lines.append(
-            f"- Refute claimed (valid evidence, [REFUTE_CLAIMED] tag): "
-            f"{refute_summary.get('refute_claimed', 0)}"
-        )
-        lines.append(
-            f"- Refute invalid (rejected, see `{details_dirname}/refute_invalid.md`): "
-            f"{refute_summary.get('refute_invalid', 0)}"
-            if details_dirname
-            else f"- Refute invalid (rejected, see refute_invalid.md): "
-            f"{refute_summary.get('refute_invalid', 0)}"
-        )
-        lines.append(f"- Manual review: {refute_summary.get('manual_review', 0)}")
-        lines.append(f"- Parse failed: {parse_failed_count}")
     lines.append("")
     if manual:
         manual_ref = (
@@ -850,7 +804,6 @@ def render_report(
     *,
     diff=None,
     cost=None,
-    refute_summary: dict[str, int] | None = None,
     waves_plan: list[dict] | None = None,
     plugin_root: Path | None = None,
     coverage_gaps: list[str] | None = None,
@@ -870,7 +823,6 @@ def render_report(
         merged, manual,
         diff=diff,
         cost=cost,
-        refute_summary=refute_summary,
         waves_plan=waves_plan,
         plugin_root=plugin_root,
         coverage_gaps=coverage_gaps,
@@ -928,7 +880,6 @@ def render_index_report(
     *,
     diff=None,
     cost=None,
-    refute_summary: dict[str, int] | None = None,
     waves_plan: list[dict] | None = None,
     plugin_root: Path | None = None,
     coverage_gaps: list[str] | None = None,
@@ -960,7 +911,6 @@ def render_index_report(
             details_dirname=details_dirname,
             diff=diff,
             cost=cost,
-            refute_summary=refute_summary,
             waves_plan=waves_plan,
             plugin_root=plugin_root,
             coverage_gaps=coverage_gaps,
@@ -1069,7 +1019,6 @@ def write_split_report(
     *,
     diff=None,
     cost=None,
-    refute_summary: dict[str, int] | None = None,
     waves_plan: list[dict] | None = None,
     plugin_root: Path | None = None,
     coverage_gaps: list[str] | None = None,
@@ -1089,7 +1038,6 @@ def write_split_report(
             merged, manual, relname,
             diff=diff,
             cost=cost,
-            refute_summary=refute_summary,
             waves_plan=waves_plan,
             plugin_root=plugin_root,
             coverage_gaps=coverage_gaps,

@@ -12,11 +12,9 @@ The diff lands as a `## Diff vs previous run` block in the executive summary.
 No machinery beyond a simple `set` comparison — it is a UX hint, not auth.
 
 Stage 2 / P2.5 adds a second, independent piece of cross-run memory:
-`resolutions` — a `sink_hash -> Resolution` map recording adversarial-refute
-(and, via `--verdicts-in`, external triage-tool) verdicts so a rejected false
-positive is not re-discovered and re-argued on every run. See
-`memory/cloudflare-borrow-plan/03-verdict-buckets.md` ("Refute помечает; ключ
-инвалидации — по содержимому, не по пути") for the design rationale:
+`resolutions` — a `sink_hash -> Resolution` map recording external triage-tool
+verdicts (`--verdicts-in`) so a rejected false positive is not re-discovered
+and re-argued on every run. Design rules:
 
   - A resolution ANNOTATES a finding, it never removes it from the report
     (recall-first). `active_rejections` + the renderer only ever ADD a note.
@@ -32,8 +30,7 @@ positive is not re-discovered and re-argued on every run. See
     would couple external consumers to run-count, breaking the idempotency
     contract those files already guarantee (CLAUDE.md "Idempotency in recon
     and dedup").
-  - Free-text rationale is deliberately NOT persisted here (only in
-    `refute.md` / rendered prose for the run that produced it) — state.py
+  - Free-text rationale is deliberately NOT persisted here — state.py
     only carries the structured fields needed to reproduce/validate the
     mark: verdict, evidence location, and provenance.
 """
@@ -46,7 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from .models import CONDITION_KEYS, FLAG_REFUTE_CLAIMED, MergedFinding, _sink_hash_from_snippet
+from .models import CONDITION_KEYS, MergedFinding, _sink_hash_from_snippet
 
 
 STATE_FILENAME = ".findings_state.json"
@@ -155,7 +152,7 @@ def snapshots_from(merged: list[MergedFinding], manual: list[MergedFinding]) -> 
 
 
 # ---------------------------------------------------------------------------
-# Resolutions: cross-run adversarial-refute / external-triage verdicts.
+# Resolutions: cross-run external-triage verdicts.
 # ---------------------------------------------------------------------------
 
 
@@ -189,50 +186,14 @@ class Resolution:
         }
 
 
-def resolutions_from_refuted_findings(
-    merged_findings: list[MergedFinding], project_root: Path
-) -> dict[str, Resolution]:
-    """Build fresh `rejected` Resolutions from findings THIS run's adversarial
-    refute pass tagged `[REFUTE_CLAIMED]` (`refute.apply_refute_records`
-    already stamped `refute_file`/`refute_line`/`refute_rationale` on the
-    `MergedFinding` — rationale is deliberately not carried into the
-    Resolution, see module docstring).
-
-    `run_seq` is left at 0 — `save_state` stamps the real value when it
-    merges these into the persisted history, since only the writer knows
-    the current counter.
-    """
-    out: dict[str, Resolution] = {}
-    for mf in merged_findings:
-        if FLAG_REFUTE_CLAIMED not in mf.flags or not mf.refute_file:
-            continue
-        sink_hash = mf.primary.sink_hash
-        if sink_hash == "nohash00":
-            # Sentinel for "no usable snippet" (models._sink_hash_from_snippet) —
-            # every such finding collides on the same key, so persisting a
-            # resolution for it would silently apply to any other nohash00
-            # finding on a later run. Same exclusion `compute_diff` applies.
-            continue
-        out[sink_hash] = Resolution(
-            verdict="rejected",
-            condition_keys=tuple(mf.primary.condition_keys),
-            evidence_hash=compute_evidence_hash(mf.refute_file, mf.refute_line, project_root),
-            refute_file=mf.refute_file,
-            refute_line=mf.refute_line,
-            source="refute",
-            run_seq=0,
-        )
-    return out
-
-
 def active_rejections(resolutions: dict[str, Resolution], project_root: Path) -> dict[str, Resolution]:
     """Filter a resolutions map down to the ones that should still annotate a
     finding on THIS run: verdict is `rejected`, and — for any resolution that
     cites code evidence (`refute_file` set) — the content at that location
     still hashes to what it did when the resolution was recorded.
 
-    A `reaffirmed` resolution (e.g. a human later overrode a refute claim via
-    `--verdicts-in`) is excluded here by construction — there is nothing to
+    A `reaffirmed` resolution (e.g. a human later overrode an earlier
+    `rejected` via `--verdicts-in`) is excluded here by construction — there is nothing to
     render for it; it exists purely to cancel a prior `rejected` entry for
     the same sink_hash (the merge in `save_state` keeps only the latest
     verdict per hash).
@@ -325,7 +286,7 @@ def save_state(
 
     `baseline` is what THIS write compared against, and `run_id` identifies the
     inputs it was computed from — persisted so a later pass over the same
-    inputs (refute, imported verdicts, a plain re-render) diffs against the
+    inputs (imported verdicts, a plain re-render) diffs against the
     real previous run instead of against the snapshot its own first pass just
     wrote. `None` baseline is recorded as `null`, meaning "there was no
     previous run", which is distinct from the key being absent (a file written
@@ -401,8 +362,8 @@ def load_state(review_root: Path) -> Optional[list[FindingSnapshot]]:
 def compute_run_id(input_paths: list[Path]) -> str:
     """Identify a dedupe run by the wave files it reads — names plus content.
 
-    Two invocations over the same wave files are the same run: the refute pass,
-    an imported-verdicts pass, a plain re-render. A later audit writes different
+    Two invocations over the same wave files are the same run: an imported-verdicts
+    pass, a plain re-render. A later audit writes different
     wave content and so gets a different id. Unreadable files are folded in by
     name alone rather than skipped, so a file that disappears still changes the
     id. Empty input → "", which never matches a recorded id.
@@ -509,7 +470,7 @@ def load_verdicts_in(
     `models.CONDITION_KEYS` enum); `refute_file`/`refute_line` are optional
     but must be given together — when given, `evidence_hash` is computed
     immediately (current file content) so the mark can later be
-    auto-invalidated by `active_rejections` exactly like a refute-pass one.
+    auto-invalidated by `active_rejections` when the cited line changes.
 
     Raises `VerdictsInError` on any schema violation, unknown field, unknown
     or sentinel sink_hash, duplicate sink_hash, a stale `findings_json_sha256`,

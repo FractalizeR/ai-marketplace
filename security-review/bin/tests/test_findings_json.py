@@ -21,7 +21,6 @@ from dedupe.export import (  # noqa: E402
     SCHEMA_VERSION,
     build_findings_export,
 )
-from dedupe.refute import RefuteRecord, apply_refute_records  # noqa: E402
 
 _CLI_SCRIPT = str(Path(__file__).resolve().parent.parent / "dedupe_findings.py")
 
@@ -241,55 +240,6 @@ class ExportSchemaTests(unittest.TestCase):
         payload = build_findings_export(merged, manual, [], [])
         self.assertEqual(len(payload["confirmed"]), 1)
         self.assertEqual(payload["confirmed"][0]["review_bucket"], "manual_review")
-
-
-# ---------------------------------------------------------------------------
-# Order regression: attach_side_records happens BEFORE refute; the plan's
-# probe found `apply_refute_records` never reconstructs a MergedFinding, so
-# an attached annotation must survive a subsequent refute pass unchanged.
-# ---------------------------------------------------------------------------
-
-
-class AttachBeforeRefuteOrderTests(unittest.TestCase):
-    def test_attached_needs_validation_survives_refute_pass(self):
-        f = df.Finding(
-            title_line="h", sink_file="src/Auth/Guard.php", sink_line=3,
-            sink_kind="csrf_missing", root_cause_family="authz",
-            enclosing_symbol="Guard::check", sink_snippet="hash_equals($a,$b);",
-            severity="High", confidence=9,
-        )
-        merged, manual = df.dedupe([f])
-        nv = df.NeedsValidation(
-            sink_file="src/Auth/Guard.php", sink_line=3, sink_kind="csrf_missing",
-            root_cause_family="authz", enclosing_symbol="Guard::check",
-            sink_snippet="hash_equals($a,$b);",
-        )
-        # Step 1 (as in dedupe_findings.main): attach BEFORE refute.
-        pipeline.attach_side_records(merged, [nv], [])
-        self.assertEqual(merged[0].needs_validation, [nv])
-
-        primary = merged[0].primary
-        finding_key = f"{primary.sink_hash}:{primary.sink_file}:{primary.sink_line}:{primary.sink_kind}"
-        with tempfile.TemporaryDirectory() as td:
-            td_path = Path(td)
-            (td_path / "src" / "Auth").mkdir(parents=True)
-            (td_path / "src" / "Auth" / "Guard.php").write_text(
-                "<?php\nfunction checkState() {\n    hash_equals($a, $b);\n}\n",
-                encoding="utf-8",
-            )
-            rec = RefuteRecord(
-                finding_key=finding_key, refute_file="src/Auth/Guard.php",
-                refute_line=3, rationale="hash_equals present", confidence=9,
-            )
-            # Step 2: refute pass runs AFTER attach.
-            merged_after, invalid = apply_refute_records(merged, [rec], td_path)
-
-        self.assertEqual(invalid, [])
-        self.assertIn(df.FLAG_REFUTE_CLAIMED, merged_after[0].flags)
-        self.assertEqual(
-            merged_after[0].needs_validation, [nv],
-            "attached needs_validation annotation must survive the refute pass",
-        )
 
 
 # ---------------------------------------------------------------------------

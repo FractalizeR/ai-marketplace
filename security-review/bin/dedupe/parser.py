@@ -568,6 +568,6 @@ def parse_findings_file(path: Path) -> list[Finding]:
 
     Thin wrapper over `parse_wave` -- signature unchanged (it is in the
     public `__all__` and has callers outside this package:
-    `bin/dedupe_findings.py`, `bin/tests/test_refute.py`).
+    `bin/dedupe_findings.py`).
     """
     return parse_wave(path).findings

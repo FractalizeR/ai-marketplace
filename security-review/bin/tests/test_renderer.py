@@ -19,7 +19,6 @@ from dedupe.models import (  # noqa: E402
     FLAG_CROSS_SINK_MERGE,
     FLAG_MERGED_DESPITE_HASH_MISMATCH,
     FLAG_PARSE_FAILED,
-    FLAG_REFUTE_CLAIMED,
     Finding,
     HardeningNote,
     MergedFinding,
@@ -778,7 +777,7 @@ class ResolutionAnnotationTests(unittest.TestCase):
     def test_rejected_resolution_renders_note_without_removing_finding(self):
         mf = self._mk_mf()
         resolutions = {mf.primary.sink_hash: Resolution(
-            verdict="rejected", refute_file="src/Guard.php", refute_line=3, source="refute",
+            verdict="rejected", refute_file="src/Guard.php", refute_line=3, source="audit-triage",
         )}
         body = render_finding(1, mf, resolutions=resolutions)
         # DoD 6: the finding itself is NOT suppressed -- title/body still present.
@@ -830,30 +829,11 @@ class ResolutionAnnotationTests(unittest.TestCase):
         body = render_finding(1, mf)
         self.assertNotIn("Previously rejected", body)
 
-    def test_fresh_refute_claim_this_run_takes_priority_over_historical_note(self):
-        """A finding refuted THIS run already carries the live blockquote --
-        the historical note would be redundant, not wrong, but must not
-        double up."""
-        mf = self._mk_mf(
-            flags=[FLAG_REFUTE_CLAIMED],
-            refute_rationale="fresh evidence this run",
-            refute_confidence=9,
-            refute_file="src/Fresh.php",
-            refute_line=1,
-        )
-        resolutions = {mf.primary.sink_hash: Resolution(
-            verdict="rejected", refute_file="src/Old.php", refute_line=99, source="refute",
-        )}
-        body = render_finding(1, mf, resolutions=resolutions)
-        self.assertIn("Refute claim: fresh evidence this run", body)
-        self.assertNotIn("src/Old.php", body)
-        self.assertEqual(body.count("Previously rejected"), 0)
-
     def test_run_seq_never_leaks_into_rendered_output(self):
         mf = self._mk_mf()
         resolutions = {mf.primary.sink_hash: Resolution(
             verdict="rejected", refute_file="src/Guard.php", refute_line=3,
-            source="refute", run_seq=42,
+            source="audit-triage", run_seq=42,
         )}
         body = render_finding(1, mf, resolutions=resolutions)
         self.assertNotIn("42", body)
@@ -894,7 +874,7 @@ class StandaloneResolutionAnnotationTests(unittest.TestCase):
     def test_needs_validation_entry_marks_rejected_hash(self):
         nv = self._nv()
         resolutions = {nv.sink_hash: Resolution(
-            verdict="rejected", refute_file="src/Guard.php", refute_line=3, source="refute",
+            verdict="rejected", refute_file="src/Guard.php", refute_line=3, source="audit-triage",
         )}
         entry = render_needs_validation_entry(1, nv, resolutions=resolutions)
         # DoD: the lead itself is not suppressed -- title/body still present.
@@ -984,11 +964,11 @@ class StandaloneResolutionAnnotationTests(unittest.TestCase):
             raw_resolutions = {
                 nv.sink_hash: Resolution(
                     verdict="rejected", evidence_hash=evidence_hash,
-                    refute_file="src/Guard.php", refute_line=3, source="refute",
+                    refute_file="src/Guard.php", refute_line=3, source="audit-triage",
                 ),
                 hn.sink_hash: Resolution(
                     verdict="rejected", evidence_hash=evidence_hash,
-                    refute_file="src/Guard.php", refute_line=3, source="refute",
+                    refute_file="src/Guard.php", refute_line=3, source="audit-triage",
                 ),
             }
 
@@ -1030,7 +1010,7 @@ class AttachedResolutionAnnotationTests(unittest.TestCase):
       replay or a blockquote -- see the module note above
       `_render_attached_needs_validation` -- so this is a safe field-line
       addition, not the blockquote-reflow case `render_finding`'s
-      `[REFUTE_CLAIMED]`/`resolutions` blockquote branch has to avoid)."""
+      `resolutions` blockquote branch has to avoid)."""
 
     def _nv(self, sink_snippet, **kwargs) -> NeedsValidation:
         defaults = dict(
@@ -1062,7 +1042,7 @@ class AttachedResolutionAnnotationTests(unittest.TestCase):
         attach_side_records([mf], [nv], [])
         self.assertNotEqual(nv.sink_hash, mf.primary.sink_hash)  # tier-2/3, own hash
         resolutions = {nv.sink_hash: Resolution(
-            verdict="rejected", refute_file="src/Guard.php", refute_line=3, source="refute",
+            verdict="rejected", refute_file="src/Guard.php", refute_line=3, source="audit-triage",
         )}
         body = render_finding(1, mf, resolutions=resolutions)
         self.assertIn("**Needs validation (attached):**", body)

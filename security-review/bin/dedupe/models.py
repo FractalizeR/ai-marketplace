@@ -59,7 +59,7 @@ def _sink_hash_from_snippet(snippet: str) -> str:
 # Checklist path normalization.
 #
 # A wave file / waves_plan.json can be rendered by a DIFFERENT plugin install
-# than the one that produced it (composite audits, a codex/opencode bundle
+# than the one that produced it (composite audits, a codex bundle
 # built on another machine, a re-run against a rebuilt dist/). An absolute
 # filesystem path baked in at authoring time (a worker's `Discovered via`
 # value, or a `checklists` entry in waves_plan.json) must never survive into
@@ -175,7 +175,6 @@ FLAG_MERGED_DESPITE_HASH_MISMATCH = "[MERGED_DESPITE_HASH_MISMATCH]"
 FLAG_CROSS_SINK_MERGE = "[CROSS_SINK_MERGE]"
 FLAG_CONFLICTING_SEVERITY = "[CONFLICTING SEVERITY]"
 FLAG_CONFIDENCE_DISAGREEMENT = "[CONFIDENCE DISAGREEMENT]"
-FLAG_REFUTE_CLAIMED = "[REFUTE_CLAIMED]"
 
 # Verdict-bucket parsing flags (Stage 2 / P2.1) — set directly on
 # `NeedsValidation`/`HardeningNote` by the parser, since these types have no
@@ -373,13 +372,6 @@ class MergedFinding:
     related: list[str] = field(default_factory=list)   # references by stable ID
     alternative_sink_kinds: list[str] = field(default_factory=list)
     alternative_root_cause_families: list[str] = field(default_factory=list)
-    # Adversarial refute pass annotations (filled by `dedupe.refute` when
-    # `--refute=<path>` is supplied). Empty by default. See agents/security-refute.md
-    # and bin/dedupe/refute.py for the contract.
-    refute_rationale: str = ""
-    refute_confidence: int = 0
-    refute_file: str = ""
-    refute_line: int = 0
     # Verdict-bucket annotations (Stage 2 / P2.2), filled by
     # `pipeline.attach_side_records` after `dedupe()` has already run.
     # Optional with a mutable-safe default so the two `MergedFinding(primary=f)`

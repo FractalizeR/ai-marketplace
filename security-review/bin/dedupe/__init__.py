@@ -21,7 +21,6 @@ from .models import (
     FLAG_ATTACHED_WITHOUT_HASH,
     FLAG_NV_INCOMPLETE,
     FLAG_PARSE_FAILED,
-    FLAG_REFUTE_CLAIMED,
     FLAG_VERDICT_HAS_SEVERITY,
     KNOWN_ROOT_CAUSE_FAMILIES,
     KNOWN_SINK_KINDS,
@@ -43,14 +42,6 @@ from .export import (
 )
 from .parser import WaveFormatError, parse_findings_file, parse_wave
 from .pipeline import attach_side_records, dedupe
-from .refute import (
-    RefuteInvalid,
-    RefuteRecord,
-    apply_refute_records,
-    parse_refute_md,
-    validate_refute_evidence,
-    write_refute_invalid_md,
-)
 from .reflow import (
     DEFAULT_WRAP_WIDTH,
     reflow_markdown,
@@ -84,7 +75,6 @@ __all__ = [
     "FLAG_CROSS_SINK_MERGE",
     "FLAG_CONFLICTING_SEVERITY",
     "FLAG_CONFIDENCE_DISAGREEMENT",
-    "FLAG_REFUTE_CLAIMED",
     "FLAG_VERDICT_HAS_SEVERITY",
     "FLAG_ATTACHED_WITHOUT_HASH",
     "FLAG_NV_INCOMPLETE",
@@ -100,13 +90,6 @@ __all__ = [
     "FINDINGS_JSON_NAME",
     "build_findings_export",
     "write_findings_json",
-    # Refute
-    "RefuteRecord",
-    "RefuteInvalid",
-    "parse_refute_md",
-    "validate_refute_evidence",
-    "apply_refute_records",
-    "write_refute_invalid_md",
     # Renderer
     "render_finding",
     "render_report",

@@ -40,12 +40,6 @@ from dedupe.export import FINDINGS_JSON_NAME, SCHEMA_VERSION as FINDINGS_SCHEMA_
 from dedupe.models import FLAG_PARSE_FAILED  # noqa: E402
 from dedupe.parser import parse_wave  # noqa: E402
 from dedupe.pipeline import attach_side_records, dedupe  # noqa: E402
-from dedupe.refute import (  # noqa: E402
-    apply_refute_records,
-    compute_refute_summary,
-    parse_refute_md,
-    write_refute_invalid_md,
-)
 from dedupe.renderer import _write_reflowed, render_report, write_split_report  # noqa: E402
 import validate_context as _vc  # noqa: E402
 from dedupe.state import (  # noqa: E402
@@ -57,7 +51,6 @@ from dedupe.state import (  # noqa: E402
     load_resolutions,
     load_state,
     load_verdicts_in,
-    resolutions_from_refuted_findings,
     save_state,
     snapshots_from,
 )
@@ -226,20 +219,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Skip cross-run findings-state load/save (no .findings_state.json read or written).",
     )
     parser.add_argument(
-        "--refute",
-        type=Path,
-        default=None,
-        help="Path to <review_root>/refute.md emitted by security-refute agent. "
-        "When supplied, refute records are applied to the merged findings (tag "
-        "[REFUTE_CLAIMED] + counters in executive summary) and a "
-        "refute_invalid.md audit file is emitted under --details-dir.",
-    )
-    parser.add_argument(
         "--project-root",
         type=Path,
         default=Path.cwd(),
-        help="Project root for refute evidence validation (refute_file paths "
-        "in refute.md are resolved relative to this directory). Default: cwd.",
+        help="Project root that --verdicts-in evidence paths (refute_file) are "
+        "resolved against. Default: cwd.",
     )
     parser.add_argument(
         "--waves-plan",
@@ -351,39 +335,19 @@ def main(argv: list[str] | None = None) -> int:
     merged, manual = dedupe(all_findings)
     parse_failed_count = sum(1 for m in manual if FLAG_PARSE_FAILED in m.flags)
 
-    # Verdict-bucket attachment (P2.2/P2.4), explicitly BEFORE the refute
-    # pass below. Order is not load-bearing for correctness — refute.py never
-    # reconstructs a MergedFinding (no `MergedFinding(` call site in that
-    # module), so attached needs_validation/hardening annotations survive a
-    # later refute pass unchanged either way — but attaching first means
-    # findings.json and the report reflect buckets even on a run with no
-    # --refute at all. The union `merged + manual` is mandatory, not just
-    # `merged`: a finding that fails custom-sink auto-promotion lands in
-    # `manual`, and only this union call lets its attached annotations render
-    # (see `pipeline.attach_side_records`'s own docstring and
-    # `AttachSideRecordsSpyTests` in test_dedupe_findings.py).
+    # Verdict-bucket attachment (P2.2/P2.4). The union `merged + manual` is
+    # mandatory, not just `merged`: a finding that fails custom-sink
+    # auto-promotion lands in `manual`, and only this union call lets its
+    # attached annotations render (see `pipeline.attach_side_records`'s own
+    # docstring and `AttachSideRecordsSpyTests` in test_dedupe_findings.py).
     side_records = attach_side_records(merged + manual, all_needs_validation, all_hardening)
-
-    # Adversarial pass: apply refute.md records on top of dedupe output.
-    refute_summary: dict[str, int] | None = None
-    refute_invalid_count = 0
-    refute_claimed_count = 0
-    refute_invalid_records: list = []
-    if args.refute is not None:
-        records = parse_refute_md(args.refute)
-        merged, refute_invalid_records = apply_refute_records(
-            merged, records, args.project_root
-        )
-        refute_summary = compute_refute_summary(merged, manual, refute_invalid_records)
-        refute_claimed_count = refute_summary["refute_claimed"]
-        refute_invalid_count = refute_summary["refute_invalid"]
 
     # Cross-run diff: load previous state from <review_root> = output.parent.
     # When --no-state is passed (or output happens to lack a parent on weird
     # invocations) we skip the load/save round-trip entirely.
     #
-    # A second pass over the SAME wave files — the refute pass, an imported-
-    # verdicts pass, a plain re-render — re-states one run rather than taking a
+    # A second pass over the SAME wave files — an imported-verdicts pass, a
+    # plain re-render — re-states one run rather than taking a
     # fresh look at the code. Diffing it against the state its own first pass
     # just wrote would report every finding as recurring and none as new, so it
     # inherits that pass's baseline and persists it unchanged. Sameness is
@@ -400,24 +364,18 @@ def main(argv: list[str] | None = None) -> int:
         diff = compute_diff(baseline, snapshots)
 
     # Cross-run resolution memory (Stage 2 / P2.5): REMEMBERED rejections from
-    # prior runs (adversarial refute and/or --verdicts-in) that still hold —
+    # prior runs (--verdicts-in) that still hold —
     # `active_rejections` re-validates each one's evidence against the CURRENT
     # project tree, so a removed protection silently drops the mark rather
-    # than mis-annotating a regression as "already reviewed". THIS run's own
-    # fresh refute claims are NOT included here: they already render via the
-    # live `[REFUTE_CLAIMED]` blockquote (see `renderer.render_finding`), so
-    # folding them in too would be redundant, not wrong.
+    # than mis-annotating a regression as "already reviewed".
     prior_resolutions = load_resolutions(review_root) if state_usable else {}
     render_resolutions = {**active_rejections(prior_resolutions, args.project_root), **verdicts_in_resolutions}
 
-    # Resolutions to PERSIST this run: this run's fresh refute claims plus any
-    # freshly-imported --verdicts-in records (which win on a same-sink_hash
-    # collision — human triage supersedes the automated pass). `save_state`
-    # merges these into history; it does not need `render_resolutions`, which
-    # already carries the (possibly stale, re-validated) history — persisting
-    # the same rejected-but-filtered-out prior entries again would just be a
-    # no-op churn on `run_seq`.
-    new_resolutions = {**resolutions_from_refuted_findings(merged, args.project_root), **verdicts_in_resolutions}
+    # Resolutions to PERSIST this run: freshly-imported --verdicts-in records.
+    # `save_state` merges them into history; it does not need
+    # `render_resolutions`, which already carries the (possibly stale,
+    # re-validated) history.
+    new_resolutions = verdicts_in_resolutions
 
     # Coverage gaps: recon-level (console enrichment skipped, from CONTEXT.md)
     # PLUS wave-dispatch execution gaps (from dispatch_gaps.json). Both render
@@ -449,13 +407,6 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
 
-    refute_print_suffix = ""
-    if args.refute is not None:
-        refute_print_suffix = (
-            f" + refute_claimed={refute_claimed_count}"
-            f" + refute_invalid={refute_invalid_count}"
-        )
-
     if args.single_file:
         _write_reflowed(
             args.output,
@@ -463,7 +414,6 @@ def main(argv: list[str] | None = None) -> int:
                 merged, manual,
                 diff=diff,
                 cost=cost,
-                refute_summary=refute_summary,
                 waves_plan=waves_plan,
                 coverage_gaps=coverage_gaps,
                 incomplete=incomplete,
@@ -482,7 +432,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"Wrote {args.output} "
             f"({len(merged)} merged, {len(manual)} manual, "
-            f"{parse_failed_count} parse-failed in manual{refute_print_suffix})"
+            f"{parse_failed_count} parse-failed in manual)"
         )
         return 0
 
@@ -494,7 +444,6 @@ def main(argv: list[str] | None = None) -> int:
         details_dir,
         diff=diff,
         cost=cost,
-        refute_summary=refute_summary,
         waves_plan=waves_plan,
         coverage_gaps=coverage_gaps,
         incomplete=incomplete,
@@ -502,11 +451,6 @@ def main(argv: list[str] | None = None) -> int:
         unmatched_hardening=side_records.unmatched_hardening,
         resolutions=render_resolutions,
     )
-    if args.refute is not None:
-        # Emit audit log of refute records that failed validation. Always write
-        # the file when --refute was supplied (even if empty) so operators see
-        # an explicit "no invalid records" rather than missing artefact.
-        write_refute_invalid_md(refute_invalid_records, details_dir / "refute_invalid.md")
     write_findings_json(
         review_root, merged, manual,
         side_records.unmatched_needs_validation,
@@ -517,7 +461,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"Wrote {args.output} + {len(written) - 1} detail file(s) in {details_dir} "
         f"({len(merged)} merged, {len(manual)} manual, "
-        f"{parse_failed_count} parse-failed in manual{refute_print_suffix})"
+        f"{parse_failed_count} parse-failed in manual)"
     )
     return 0
 
