@@ -39,7 +39,7 @@ frsr project --models high=<id>,fast=<id>           # prints the prepared comman
 frsr project --models high=<id>,fast=<id> -- --quick --no-console   # orchestrator flags go after --
 ```
 
-`--models` (comma-separated, no spaces; list the ids with `codex debug models`) is required until a `--go` run has saved the tier map for that review directory; later runs may drop it. The bundle lands in `dist/` (gitignored), so each machine builds its own. The installer prints the `FR_SECURITY_CORE_ROOT` export for the session where you run an audit without `frsr` — do **not** put it in your shell rc globally.
+`--models` (comma-separated, spaces around `,` and `=` are tolerated; list the ids with `codex debug models`) is required until a `--go` run has saved the tier map for that review directory; later runs may drop it. The bundle lands in `dist/` (gitignored), so each machine builds its own. The installer prints the `FR_SECURITY_CORE_ROOT` export for the session where you run an audit without `frsr` — do **not** put it in your shell rc globally.
 
 The [multi-environment guide](./docs/multi-environment.md) is the big picture — architecture, model tiering, the offline posture, and troubleshooting. The exact install steps, model setup, and permissions are in [`harness/codex/INSTALL.md`](./harness/codex/INSTALL.md).
 

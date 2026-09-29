@@ -65,8 +65,8 @@ frsr project --models high=<id>,fast=<id>     # list the ids with: codex debug m
 On a `--go` run (a dry run writes nothing),
 [`security-review/bin/shared/model_resolver.py`](../security-review/bin/shared/model_resolver.py)
 saves them to `<review_root>/.model_map.json`, and later runs against the same
-review root reuse the saved map. Write the pair comma-separated with no spaces;
-a map written by a pre-5.0 build (it carries a guessed `provenance`) is ignored. With neither `--models` nor a saved map the run
+review root reuse the saved map. Write the pair comma-separated (spaces around `,` and `=` are tolerated);
+a map written by a pre-5.0 build (it carries a `provenance` key) is ignored. With neither `--models` nor a saved map the run
 stops with that hint — there is no automatic model discovery or guessing, and the
 ids are not validated (a wrong id shows up as crashed waves).
 

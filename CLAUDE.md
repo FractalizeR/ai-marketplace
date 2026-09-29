@@ -47,7 +47,7 @@ Other `make` targets (`make help`): `build-codex` (bundle into `dist/codex`), `i
 ### Driving the audit
 
 - Claude Code: `/fr-security-review:security-project [flags]` (`security-review/commands/security-project.md`). Artifacts go to `security-review-<label>/` in cwd; the label comes from harness self-introspection unless `--label=` or `--review-root=` is passed.
-- Codex: `frsr [project] --models high=<id>,fast=<id> [--console-cmd <tpl>] [--go] -- <orchestrator flags>`. Orchestrator flags (`--quick`, `--no-console`, …) go after `--`; an unknown option before `--` is an error. Without `--go`, `frsr` only prints the prepared command (Codex runs the orchestrator unsandboxed to spawn workers). `--models` (comma-separated, no spaces) is required until a `--go` run saved it to `<review_root>/.model_map.json`, then reused; ids come from `codex debug models`. `frsr` refuses a source-tree-looking `--review-root` before writing anything.
+- Codex: `frsr [project] --models high=<id>,fast=<id> [--console-cmd <tpl>] [--go] -- <orchestrator flags>`. Orchestrator flags (`--quick`, `--no-console`, …) go after `--`; an unknown option before `--` is an error. Without `--go`, `frsr` only prints the prepared command (Codex runs the orchestrator unsandboxed to spawn workers). `--models` (comma-separated; spaces around `,` and `=` are tolerated) is required until a `--go` run saved it to `<review_root>/.model_map.json`, then reused; ids come from `codex debug models`. `frsr` refuses a source-tree-looking `--review-root`, or one that is the project root or contains it, before writing anything; it validates `--models` and reads the saved map by calling the bundle's `model_resolver.py --check` / `--describe`, not by re-implementing the rules.
 
 ## Codex derivation (`build/`)
 
@@ -68,7 +68,7 @@ The Claude prose under `security-review/{commands,agents}/` is authoritative; th
 
 Used only by the Codex harness (Claude fans out with native `Task`).
 
-- `model_resolver.py --models high=<id>,fast=<id> --review-root <dir>` writes `.model_map.json` `{high, fast}`; without `--models` the saved map is used (a pre-5.0 map whose `provenance` is not `cli` is ignored with a message); neither → exit 2. No discovery, no id validation.
+- `model_resolver.py --models high=<id>,fast=<id> --review-root <dir>` writes `.model_map.json` `{high, fast}`; without `--models` the saved map is used (a pre-5.0 map, i.e. one carrying a `provenance` key at all, is ignored with a message); `--check --models <spec>` and `--describe --review-root <dir>` are side-effect-free (validate the spec / report `usable|absent|invalid|ignored-pre-5.0` and the high id); neither → exit 2. No discovery, no id validation.
 - `dispatch.py` — `dispatch_waves` runs one `codex exec` per plan slice (≤6 concurrent); `dispatch_role` runs the single `recon` process. Planned slices' wave files are deleted before fan-out, so a stale file plus a crashed worker is still a gap; a fresh `waves/<slice_id>.md` is success regardless of exit code. `--allow-gaps` writes `dispatch_gaps.json`, which `dedupe_findings.py --dispatch-gaps` folds into REPORT.md as INCOMPLETE; a clean run removes a stale one.
 - `contracts.py` — typed seams; subprocess is the single injected seam. Tests pass a fake runner and never spawn a real `codex`.
 
