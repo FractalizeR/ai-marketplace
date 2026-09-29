@@ -728,7 +728,7 @@ class ExtractorFailurePartialStatus(unittest.TestCase):
             with self.subTest(section=name):
                 self.assertNotEqual(_section(result, where, name).status, "partial")
 
-    def test_sanity_names_the_extractor_cause_and_confidence_drops(self):
+    def test_sanity_warns_with_the_extractor_cause_and_confidence_drops(self):
         import recon_inventory
         from validate_context import sanity_check
         with tempfile.TemporaryDirectory() as td:
@@ -738,10 +738,13 @@ class ExtractorFailurePartialStatus(unittest.TestCase):
             self.assertEqual(rc, 0)
             res = sanity_check(review_root, project_root=FIXTURES)
             context = (review_root / "CONTEXT.md").read_text(encoding="utf-8")
+        self.assertTrue(res.ok(), res.errors)
         self.assertIn(
             f"sanity[extractor]: attack_surface not collected — extractor_failed: class: {self.CAUSE}",
-            res.errors,
+            res.warnings,
         )
+        self.assertIn("attack_surface", [g["section_path"] for g in res.gaps
+                                         if g["kind"] == "extractor_failed"])
         self.assertIn("level: low", context)
 
 

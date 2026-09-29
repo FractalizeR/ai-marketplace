@@ -866,7 +866,7 @@ class ExtractorFailurePartialStatus(unittest.TestCase):
         voters = result.recon_bags["stack"]["symfony"]["voters"]
         self.assertEqual(voters.status, "ok")
 
-    def test_sanity_errors_name_the_extractor_cause(self):
+    def test_sanity_warnings_name_the_extractor_cause(self):
         import recon_inventory
         from validate_context import sanity_check
         with tempfile.TemporaryDirectory() as td:
@@ -875,12 +875,14 @@ class ExtractorFailurePartialStatus(unittest.TestCase):
                 rc = recon_inventory.cmd_inventory(FIX_MIN, "symfony", review_root, True)
             self.assertEqual(rc, 0)
             res = sanity_check(review_root, project_root=FIX_MIN)
+        self.assertTrue(res.ok(), res.errors)
         self.assertIn(
             "sanity[extractor]: attack_surface not collected — extractor_failed: class: "
             "extract_php_metadata --kind=class timed out after 1s",
-            res.errors,
+            res.warnings,
         )
-        self.assertTrue(all(e.startswith("sanity[extractor]: ") for e in res.errors), res.errors)
+        self.assertIn("attack_surface", [g["section_path"] for g in res.gaps
+                                         if g["kind"] == "extractor_failed"])
 
 
 class ExtractorFailedReasonPerCollector(unittest.TestCase):
