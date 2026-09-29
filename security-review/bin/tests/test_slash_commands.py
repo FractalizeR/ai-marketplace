@@ -8,7 +8,7 @@ behavior, but we can lint the markdown to ensure the contracts haven't drifted:
 - self-introspection vocabulary `claude | codex | gemini | deepseek | qwen | other-`
 - `--review-root` overrides `--label`
 - review-root layout: directory + `.gitignore` (`*`)
-- legacy v1 detection: warn, don't touch
+- removed flags are warned about and ignored
 - review-root paths plumbed through recon-agent, plan_waves, worker, dedupe
 - worker uses `<REVIEW_ROOT>/waves/<slice_id>.md` (not legacy SECURITY_REVIEW_RESULTS_*)
 - security-project supports `--quick` / `--scope=` / exploratory
@@ -94,30 +94,6 @@ class CommonContract(unittest.TestCase):
                     text,
                     r'test -f "<REVIEW_ROOT>/\.gitignore"\s*\|\|\s*printf [\'"]\*\\n[\'"] > "<REVIEW_ROOT>/\.gitignore"',
                     f"{name}: missing idempotent .gitignore creation",
-                )
-
-    def test_legacy_v1_detection_warn_only(self) -> None:
-        # Old SECURITY_CONTEXT.md must trigger a warning, not abort or rm.
-        # In composite repos the file may live at <cwd> or at <PROJECT_ROOT>,
-        # so both locations must be probed.
-        for name, text in self._cmds():
-            with self.subTest(cmd=name):
-                self.assertIn("Legacy v1 detected", text, f"{name}: missing legacy v1 banner")
-                self.assertIn('test -f "<cwd>/SECURITY_CONTEXT.md"', text,
-                              f"{name}: missing v1 probe at <cwd>")
-                self.assertIn('test -f "<PROJECT_ROOT>/SECURITY_CONTEXT.md"', text,
-                              f"{name}: missing v1 probe at <PROJECT_ROOT>"
-                              " (composite repos)")
-                # Must NOT remove or rename the legacy file.
-                self.assertNotRegex(
-                    text,
-                    r"rm\s+-f?\s+.*SECURITY_CONTEXT\.md",
-                    f"{name}: legacy v1 file must not be deleted automatically",
-                )
-                self.assertNotRegex(
-                    text,
-                    r"mv\s+.*SECURITY_CONTEXT\.md",
-                    f"{name}: legacy v1 file must not be moved automatically",
                 )
 
     def test_recon_agent_called_with_review_root(self) -> None:
@@ -307,6 +283,17 @@ class ProjectOnly(unittest.TestCase):
         self.assertIn("--quick", self.text)
         self.assertIn("--scope=<glob>", self.text)
         self.assertIn("--scope-glob", self.text, "plan_waves invocation must pass --scope-glob")
+
+    def test_removed_flags_warned_and_ignored(self) -> None:
+        # Flags removed in 5.0.0 must not abort an old invocation: one warning,
+        # then the run continues. They must not come back into argument-hint.
+        hint = re.search(r'^argument-hint:\s*"(.+)"\s*$', self.text, re.MULTILINE).group(1)
+        for flag in ("--skip-recon", "--force-skip-recon"):
+            with self.subTest(flag=flag):
+                self.assertNotIn(flag, hint)
+        self.assertIn("was removed in 5.0.0 and is ignored", self.text)
+        self.assertNotIn("compute_fingerprint", self.text)
+        self.assertNotIn("SECURITY_CONTEXT.md", self.text)
 
     def test_exploratory_default_on(self) -> None:
         self.assertIn("Exploratory wave W∞ is enabled by default", self.text)

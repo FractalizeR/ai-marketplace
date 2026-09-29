@@ -2,9 +2,7 @@
 
 Console enrichment (running the project's `bin/console` for routes / ceiling=high) is the only recon step that **executes the project**. Running it on the host when the project lives **inside a container** distorts the environment (wrong PHP version, services unreachable). This step decides HOW to run it, expressed as a `CONSOLE_MODE` value forwarded to recon in step 4, then boot-tests it before recon depends on it. Codex runs headless (`codex exec`, approval `never`), so resolution is **non-interactive**: driven entirely by flags plus the static probe, and a console that is applicable but does not boot **stops the run** rather than degrading silently.
 
-Skip this whole step (set `CONSOLE_MODE = off`, proceed to step 4) when `--skip-recon` is taken (CONTEXT.md is reused, not regenerated).
-
-Otherwise, resolve `CONSOLE_MODE`:
+Resolve `CONSOLE_MODE`:
 
 - `--no-console` was passed → `CONSOLE_MODE = off` (user's explicit static-only choice). Wins over everything below.
 - `--console-cmd=<tpl>` was passed → `CONSOLE_MODE = <tpl>` verbatim (user already chose the runner). **Caveat on Codex:** a template with spaces (almost all container/Makefile commands) is truncated by the whitespace-split argument contract — prefer the environment variable below, which `frsr --console-cmd` sets for you.

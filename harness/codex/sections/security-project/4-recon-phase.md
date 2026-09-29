@@ -1,18 +1,5 @@
 ### 4. Recon phase
 
-**If `--skip-recon` is passed AND `<REVIEW_ROOT>/CONTEXT.md` exists:**
-
-1. Validate the schema: `python3 ${FR_SECURITY_CORE_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>"`
-2. Compute current fingerprints: `python3 ${FR_SECURITY_CORE_ROOT}/bin/compute_fingerprint.py . --json`
-3. Extract `project_fingerprint` and `code_fingerprint` from the frontmatter of the existing `<REVIEW_ROOT>/CONTEXT.md`, compare:
-   - **project_fingerprint mismatch** → `abort`: "Configuration/dependencies changed, full recon required"
-   - **project_fingerprint match + code_fingerprint match** → use context as-is
-   - **project_fingerprint match + code_fingerprint mismatch**:
-     - If `--force-skip-recon` → continue with warning
-     - Else → `codex exec` runs headless (approval `never`), so there is no interactive confirm. Default to **abort** with the hint `--force-skip-recon`. If `--interactive` was passed (the user signalled they want to proceed through checkpoints, but Codex cannot prompt), **continue with awareness** instead of aborting: print a stale-context warning, set `recon_confidence: medium`, and do **not** auto-retry.
-
-**Otherwise (full recon):**
-
 Launch **one** recon process. Codex has no named agents and no in-process subagent — recon runs as a single external `codex exec` invocation that **reads and follows** the bundled recon agent file, driven through the shared role dispatcher (`shared/dispatch.py`, `dispatch_role`) so freshness, stdout capture, and gap classification match every other stage. The recon process picks the recipe itself (detect) and calls `recon_inventory.py`, which writes `<REVIEW_ROOT>/CONTEXT.md`. Forward the same inputs the in-process path forwarded — both paths **absolute** (Step 0.4 invariant), the console decision from step 3b (`CONSOLE_MODE`), and, if step 3a collected a non-empty exclude list, `EXCLUDE_CSV`:
 
 ```bash
@@ -59,5 +46,5 @@ If only warnings (sanity diff 5–20 %) — Codex runs headless with no retry pr
 ⚠️  Sanity-check: coverage in the warning range (5–20 %).
    Possibly some files are outside expected directories or follow non-standard naming.
    Continuing with the available inventory (recon_confidence: medium) — workers will cover the declared entry points.
-   To improve coverage, re-run recon (drop --skip-recon) or widen the recipe's expected directories.
+   To improve coverage, re-run recon or widen the recipe's expected directories.
 ```

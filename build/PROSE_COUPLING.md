@@ -41,7 +41,7 @@ ONE template, keyed by `(artifact_basename, section_anchor)`.
   section_anchor: "4-recon-phase"
   pinned: "subagent_type="security-recon""
   harness_semantic: "In-process Task(security-recon) dispatch (1x)."
-  codex_action: "Launch 1 external `codex exec` (recon role); preserve the recon_inventory.py / validate_context.py / skip-recon fingerprint logic interwoven in this section."
+  codex_action: "Launch 1 external `codex exec` (recon role); preserve the recon_inventory.py / validate_context.py logic interwoven in this section."
   non_interactive_fallback: "Always run recon; no human gate."
 
 - id: recon-quality
@@ -51,14 +51,6 @@ ONE template, keyed by `(artifact_basename, section_anchor)`.
   harness_semantic: "On a sanity diff of 5-20%, ask whether to repeat recon or continue."
   codex_action: "No prompt; honor `--interactive` only where supported."
   non_interactive_fallback: "Continue with awareness of gaps (option b); recon_confidence: medium; no auto-retry."
-
-- id: recon-skip-mismatch
-  file: commands/security-project.md
-  section_anchor: "4-recon-phase"
-  pinned: "Code changed, context may be stale"
-  harness_semantic: "Optional interactive confirm when --skip-recon reuses a stale CONTEXT.md."
-  codex_action: "No prompt; honor explicit flags."
-  non_interactive_fallback: "Proceed with the reused context; note potential staleness."
 
 - id: inventory-checkpoint
   file: commands/security-project.md

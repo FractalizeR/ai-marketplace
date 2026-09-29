@@ -9,7 +9,7 @@ from _common import ARTIFACTS, PLUGIN_ROOT, read
 from extract import (
     ArtifactKind, CAT_CORE_ROOT, CAT_TASK, _assemble, extract,
 )
-from segments import Tier, assert_partition
+from segments import assert_partition
 from build import build
 from adapters import ClaudeAdapter
 
@@ -47,8 +47,8 @@ class AttrValueTests(unittest.TestCase):
             for s in _by_cat(extract(read(path), kind), "CORE_ROOT"):
                 roles[s.attrs["role"]] += 1
                 fences[s.attrs["fence_context"]] += 1
-        self.assertEqual(dict(roles), {"path_prefix": 12, "flag_value": 1})
-        self.assertEqual(dict(fences), {"triple_fence": 10, "inline_code": 3})
+        self.assertEqual(dict(roles), {"path_prefix": 10, "flag_value": 1})
+        self.assertEqual(dict(fences), {"triple_fence": 10, "inline_code": 1})
 
     def test_task_blocks_both_syntaxes_and_attrs(self):
         rows = []
@@ -99,7 +99,7 @@ class AttrValueTests(unittest.TestCase):
         for path, kind in ARTIFACTS.items():
             for s in _by_cat(extract(read(path), kind), "auq"):
                 kinds[s.attrs["occurrence_kind"]] += 1
-        self.assertEqual(dict(kinds), {"prose-mention": 5, "labeled-block": 1})
+        self.assertEqual(dict(kinds), {"prose-mention": 4, "labeled-block": 1})
 
     def test_args_injection_present_in_command(self):
         args = _by_cat(_segments("commands/security-project.md"), "args_injection")

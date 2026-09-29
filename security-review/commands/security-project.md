@@ -1,6 +1,6 @@
 ---
 description: "Two-phase project security audit: recon + parallel waves of focused workers + exploratory wave for cross-layer chains + deterministic dedup. Artifacts go to `security-review-{label}/`."
-argument-hint: "[--label=<x>] [--review-root=<out-dir>] [--project-root=<path>] [--interactive] [--skip-recon] [--force-skip-recon] [--quick] [--all-opus] [--scope=<glob>] [--no-console] [--console-cmd=<template>] [--exclude=<csv>]"
+argument-hint: "[--label=<x>] [--review-root=<out-dir>] [--project-root=<path>] [--interactive] [--quick] [--all-opus] [--scope=<glob>] [--no-console] [--console-cmd=<template>] [--exclude=<csv>]"
 allowed-tools:
   - Read
   - Write
@@ -38,14 +38,13 @@ Parse flags from `$ARGUMENTS`:
 - `--review-root=<out-dir>` — override of the **review-root output directory** (artifacts: `CONTEXT.md`, `waves/`, `REPORT.md`). For Docker/CI/firejail isolation. Accepts a relative path (resolved from cwd) or absolute. If set — `--label` is ignored. **This flag does NOT specify what to scan** — use `--scope=<glob>` to restrict the audit area, and `--project-root=<path>` to point at a non-cwd project.
 - `--project-root=<path>` — corner of the audited project (where `composer.json` / framework configs live). Defaults to `cwd`. Use in composite repos where CLAUDE.md / cwd is one directory above the actual project root (for example monorepo with `api/` PHP subproject + shared top-level CLAUDE.md). Recon, exclude paths, and sanity coverage all resolve against this value. Accepts a relative (from cwd) or absolute path.
 - `--interactive` — checkpoint with the user after recon (via AskUserQuestion)
-- `--skip-recon` — reuse existing `<review_root>/CONTEXT.md` (fingerprint validation)
-- `--force-skip-recon` — continue on code_fingerprint mismatch
 - `--quick` — **disable** the exploratory wave W∞ (ON by default). For fast runs / CI.
 - `--all-opus` — force opus for all waves (legacy). By default W4/W5 on sonnet (mechanical data flow).
 - `--scope=<glob>` — restrict target_files by a glob pattern (for example `src/Api/**`)
 - `--no-console` — static-only recon: the utility does NOT run the project's console. Use when auditing hostile/untrusted repos (no guarantee that bootstrap will not execute malicious code), when runtime credentials are absent, or in CI scenarios where project execution is forbidden. Ceiling=medium (intentionally). Alternative — isolation via firejail/Docker without the flag.
 - `--console-cmd=<template>` — explicit command for running the project console, e.g. `--console-cmd="docker compose exec -T php php bin/console"`. Use when the project runs **inside a container** (docker compose / Makefile / ddev / Sail) — running `bin/console` on the host would distort the environment (wrong PHP version, missing services). May contain a `{args}` placeholder for Makefile-style passthrough (`--console-cmd="make console CMD={args}"`); otherwise the subcommand is appended. When neither this flag nor `--no-console` is passed and the project looks containerized, **step 3b asks you interactively** (see below) instead of silently degrading. `--no-console` wins over this flag. **On the derived Codex harness** a space-containing value here is truncated by the whitespace-split argument contract — there, set the console command via the `FR_SECURITY_CONSOLE_CMD` environment variable instead (e.g. `frsr --console-cmd "…"`), which step 3b honors; see step 3b.
 - `--exclude=<csv>` — additional path prefixes (relative to `<project_root>`) that will NOT be parsed by the PHP extractor. For example, `--exclude=legacy,src/ThirdParty,generated`. These paths are added to the built-in `DEFAULT_EXCLUDE` (`vendor/`, `var/cache/`, `var/log/`, `node_modules/`, `storage/framework/cache/`, `storage/logs/`, `bootstrap/cache/`, `public/build/`, `.git/`, `.claude/`) — they do NOT replace it. If the flag is not passed explicitly — only built-in defaults + items found in CLAUDE.md apply (see step 3a).
+- `--skip-recon`, `--force-skip-recon` — removed in 5.0.0 (every run does a fresh recon). If one is passed, print `WARNING: <flag> was removed in 5.0.0 and is ignored` once and continue.
 - `--no-adversarial` — **disable** the adversarial refute pass (ON by default). The refute wave reduces the false-positive rate via a second pass through Sonnet. Disable if you need the fastest possible run without the second pass.
 
 **Important about defaults:**
@@ -201,23 +200,6 @@ The plugin does not modify the project-level `.gitignore` and does not enter git
 its own; if 0.5.2 found tracked artifacts, the user applies the printed command
 themselves.
 
-### 2. Legacy v1 detection (warning, not abort)
-
-If an **old** `SECURITY_CONTEXT.md` is detected (v1 layout, before the v3 redesign) — probe both `<cwd>` and `<PROJECT_ROOT>` (in composite repos the file may sit in either):
-
-```bash
-test -f "<cwd>/SECURITY_CONTEXT.md"          && echo "found-at-cwd"
-test -f "<PROJECT_ROOT>/SECURITY_CONTEXT.md" && echo "found-at-project-root"
-```
-
-If either probe succeeds → print a warning to the user, **do not touch the file**. Name the location(s) explicitly so the user knows where to look:
-
-```
-⚠️  Legacy v1 detected: SECURITY_CONTEXT.md at <found_path> (schema v1)
-    The file is not modified. Fresh recon will be written to <REVIEW_ROOT>/CONTEXT.md.
-    The old file can be removed manually after a successful run.
-```
-
 ### 3. Clean up previous artifacts
 
 ```bash
@@ -280,9 +262,7 @@ Do not analyze in security review:
 
 Console enrichment (running the project's `bin/console` for routes / ceiling=high) is the only recon step that **executes the project**. Running it on the host when the project lives **inside a container** distorts the environment (wrong PHP version, services unreachable). This step decides HOW to run it — and, when ambiguous, **asks you rather than silently degrading** (which would lower analysis quality) — then boot-tests the resolved runner before recon depends on it.
 
-Skip this whole step (set `CONSOLE_CMD = none`, proceed to step 4) when `--skip-recon` is taken (CONTEXT.md is reused, not regenerated).
-
-Otherwise, resolve `CONSOLE_CMD`:
+Resolve `CONSOLE_CMD`:
 
 - `--no-console` was passed → `CONSOLE_CMD = --no-console` (user's explicit static-only choice). Wins over everything below.
 - `--console-cmd=<tpl>` was passed → `CONSOLE_CMD = --console-cmd=<tpl>` (user already chose the runner).
@@ -321,20 +301,6 @@ Whichever branch resolved `CONSOLE_CMD` (including `none`, which still boot-test
 > Non-interactive / CI (no human to prompt): if the boot-test fails (`ok=false`), **stop** the review — do not proceed degraded. Report `reason` and the exact flags that unblock it (`--console-cmd=<tpl>` or `--no-console`, or export `FR_SECURITY_CONSOLE_CMD`). CI must pass one of these explicitly to make the choice deterministic; `applicable=false` / `ok=true` proceeds with no prompt needed.
 
 ### 4. Recon phase
-
-**If `--skip-recon` is passed AND `<REVIEW_ROOT>/CONTEXT.md` exists:**
-
-1. Validate the schema: `python3 ${CLAUDE_PLUGIN_ROOT}/bin/validate_context.py --review-root "<REVIEW_ROOT>"`
-2. Compute current fingerprints: `python3 ${CLAUDE_PLUGIN_ROOT}/bin/compute_fingerprint.py . --json`
-3. Extract `project_fingerprint` and `code_fingerprint` from the frontmatter of the existing `<REVIEW_ROOT>/CONTEXT.md`, compare:
-   - **project_fingerprint mismatch** → `abort`: "Configuration/dependencies changed, full recon required"
-   - **project_fingerprint match + code_fingerprint match** → use context as-is
-   - **project_fingerprint match + code_fingerprint mismatch**:
-     - If `--force-skip-recon` → continue with warning
-     - Else if `--interactive` → `AskUserQuestion`: "Code changed, context may be stale. Continue?"
-     - Else → `abort` with the hint `--force-skip-recon`
-
-**Otherwise (full recon):**
 
 Launch the recon agent. It will pick the recipe itself (detect) and call `recon_inventory.py`, which writes `<REVIEW_ROOT>/CONTEXT.md`. Forward the console decision from step 3b (`CONSOLE_CMD`: `--no-console`, or `--console-cmd=<tpl>`, or — when `CONSOLE_CMD = env` — **no console flag at all**, since the utility reads `FR_SECURITY_CONSOLE_CMD` from the environment, or nothing). If step 3a collected a non-empty `EXCLUDE_CSV` — forward `--exclude=<EXCLUDE_CSV>`:
 
