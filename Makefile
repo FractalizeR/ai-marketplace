@@ -32,6 +32,7 @@ check: ## Full local validation gate (2-harness anti-drift + build + engine + tr
 	python3 -m unittest discover -s build/tests
 	python3 -m unittest discover -s security-review/bin/tests
 	python3 -m unittest discover -s audit-triage/bin/tests
+	python3 -m unittest discover -s scripts/tests
 	claude plugin validate .
 	scripts/leakcheck.sh --all
 

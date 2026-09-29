@@ -57,8 +57,7 @@ engine — Codex does not substitute \${FR_SECURITY_CORE_ROOT}, it is a plain sh
 
   export FR_SECURITY_CORE_ROOT="$PLUGIN_DIR/core"
 
-Do NOT put FR_SECURITY_CORE_ROOT in your shell rc globally — it is per-harness and would
-collide with the OpenCode value. Set it in the session where you run the audit.
+Set it in the session where you run the audit, not globally in your shell rc.
 
-Then start a NEW Codex thread and invoke the skill: security-project / security-changes.
+Then start a NEW Codex thread and invoke the skill: security-project.
 EOF

@@ -1,95 +1,131 @@
 #!/usr/bin/env bash
 #
-# frsr — run an fr-security-review audit on Codex or OpenCode from any directory.
+# frsr — run an fr-security-review audit on Codex from any directory.
 #
 # Installed to a PATH dir by `make install-launchers`, which bakes the repo root
-# into @@REPO@@ below. It sets the per-harness FR_SECURITY_CORE_ROOT (and, for
-# OpenCode, OPENCODE_CONFIG), resolves the model tier map, and invokes the harness
-# — removing the manual export dance.
-#
-# Usage:
-#   frsr <project|changes> --harness <codex|opencode> [options] [-- extra args]
-#
-# Options:
-#   --harness <codex|opencode>   required
-#   --review-root <dir>          output dir (default: security-review-<harness> in cwd)
-#   --project-root <dir>         project to audit (default: current dir)
-#   --models high=<id>,fast=<id> pin model tiers (bypasses auto-proposal)
-#   --console-cmd <template>     run the project console via this command (may
-#                                contain spaces, e.g. "docker compose exec -T php
-#                                bin/console"); exported as FR_SECURITY_CONSOLE_CMD
-#                                so it rides the environment intact instead of the
-#                                whitespace-splitting orchestrator arg contract.
-#                                The run boot-tests the console up front and
-#                                stops if one is required but doesn't boot, unless
-#                                this flag, the env var, or --no-console (after
-#                                --) is set.
-#   --no-resolve                 reuse an existing .model_map.json, skip discovery
-#   --go                         (codex) actually execute; without it, the prepared
-#                                command is printed for review (codex runs the
-#                                orchestrator UNSANDBOXED to spawn workers)
-#   --dry-run                    print what would run, do nothing
-#
-# Everything after `--` is appended verbatim to the orchestrator arguments
-# (e.g. -- --no-console --quick).
+# into @@REPO@@ below. It sets FR_SECURITY_CORE_ROOT, saves the model tier map and
+# invokes Codex — removing the manual export dance.
 #
 set -euo pipefail
 
 REPO="@@REPO@@"
 
 die() { echo "frsr: $*" >&2; exit 2; }
-usage() { sed -n '3,31p' "$0" | sed 's/^# \{0,1\}//'; }
 
-[ $# -ge 1 ] || { usage; exit 2; }
-SUB="$1"; shift
-case "$SUB" in
-  project|changes) ;;
-  -h|--help|help) usage; exit 0 ;;
-  *) die "unknown subcommand '$SUB' (want: project|changes)" ;;
-esac
+usage() {
+  cat <<'HELP'
+Usage:
+  frsr [project] [--models high=<id>,fast=<id>] [options] [-- extra args]
 
-HARNESS="" ; REVIEW_ROOT="" ; PROJECT_ROOT="$PWD" ; MODELS="" ; CONSOLE_CMD="" ; RESOLVE=1 ; GO=0 ; DRY=0
-PASS=()
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --harness) HARNESS="${2:?}"; shift 2 ;;
-    --harness=*) HARNESS="${1#*=}"; shift ;;
-    --review-root) REVIEW_ROOT="${2:?}"; shift 2 ;;
-    --review-root=*) REVIEW_ROOT="${1#*=}"; shift ;;
-    --project-root) PROJECT_ROOT="${2:?}"; shift 2 ;;
-    --project-root=*) PROJECT_ROOT="${1#*=}"; shift ;;
-    --models) MODELS="${2:?}"; shift 2 ;;
-    --models=*) MODELS="${1#*=}"; shift ;;
-    --console-cmd) CONSOLE_CMD="${2:?}"; shift 2 ;;
-    --console-cmd=*) CONSOLE_CMD="${1#*=}"; shift ;;
-    --no-resolve) RESOLVE=0; shift ;;
-    --go|-y) GO=1; shift ;;
-    --dry-run) DRY=1; shift ;;
-    --) shift; PASS+=("$@"); break ;;
-    *) PASS+=("$1"); shift ;;
+Options:
+  --harness codex              the only supported harness (default)
+  --review-root <dir>          output dir (default: security-review-codex in cwd)
+  --project-root <dir>         project to audit (default: current dir)
+  --models high=<id>,fast=<id> model tiers, both required; saved to
+                               <review-root>/.model_map.json and reused on the
+                               next run. Without it, the saved map is used; with
+                               neither, frsr stops. List ids: codex debug models
+  --console-cmd <template>     run the project console via this command (may
+                               contain spaces, e.g. "docker compose exec -T php
+                               bin/console"); exported as FR_SECURITY_CONSOLE_CMD
+                               so it rides the environment intact instead of the
+                               whitespace-splitting orchestrator arg contract.
+                               The run boot-tests the console up front and
+                               stops if one is required but doesn't boot, unless
+                               this flag, the env var, or --no-console (after
+                               --) is set.
+  --go                         actually execute; without it the prepared command
+                               is printed for review (codex runs the orchestrator
+                               UNSANDBOXED to spawn workers)
+  --dry-run                    print what would run, do nothing
+  -h, --help                   this text (any position before --); writes nothing
+
+Everything after `--` is appended verbatim to the orchestrator arguments
+(e.g. -- --no-console --quick).
+HELP
+}
+
+# Help wins anywhere before `--`, before any other argument is looked at.
+for a in "$@"; do
+  case "$a" in
+    --) break ;;
+    -h|--help) usage; exit 0 ;;
   esac
 done
 
+if [ $# -ge 1 ]; then
+  case "$1" in
+    project) shift ;;
+    help) usage; exit 0 ;;
+    changes) die "the 'changes' mode was removed in 5.0; run 'frsr project' (a whole-project audit)" ;;
+    -*) ;;
+    *) die "unknown subcommand '$1' (the only mode is 'project')" ;;
+  esac
+fi
+
+HARNESS="codex" ; REVIEW_ROOT="" ; PROJECT_ROOT="$PWD" ; MODELS="" ; CONSOLE_CMD="" ; GO=0 ; DRY=0
+PASS=()
+need_val() { [ "$1" -ge 2 ] || die "$2 needs a value"; }
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --harness) need_val $# "$1"; HARNESS="$2"; shift 2 ;;
+    --harness=*) HARNESS="${1#*=}"; shift ;;
+    --review-root) need_val $# "$1"; REVIEW_ROOT="$2"; shift 2 ;;
+    --review-root=*) REVIEW_ROOT="${1#*=}"; shift ;;
+    --project-root) need_val $# "$1"; PROJECT_ROOT="$2"; shift 2 ;;
+    --project-root=*) PROJECT_ROOT="${1#*=}"; shift ;;
+    --models) need_val $# "$1"; MODELS="$2"; shift 2 ;;
+    --models=*) MODELS="${1#*=}"; shift ;;
+    --console-cmd) need_val $# "$1"; CONSOLE_CMD="$2"; shift 2 ;;
+    --console-cmd=*) CONSOLE_CMD="${1#*=}"; shift ;;
+    --go|-y) GO=1; shift ;;
+    --dry-run) DRY=1; shift ;;
+    --) shift; PASS+=("$@"); break ;;
+    -*) die "unknown option '$1' (orchestrator flags go after '--'; see 'frsr --help')" ;;
+    *) die "unexpected argument '$1' (see 'frsr --help')" ;;
+  esac
+done
+
+# --- validation: everything below must pass before anything is written or run ---
 case "$HARNESS" in
-  codex)
-    PLUGIN="$REPO/dist/codex/plugins/fr-security-review"
-    CORE="$PLUGIN/core"
-    DISCOVERY="codex debug models"
-    ;;
-  opencode)
-    CORE="$REPO/dist/opencode/core"
-    DISCOVERY="opencode models"
-    export OPENCODE_CONFIG="$REPO/dist/opencode/opencode.json"
-    ;;
-  "") die "--harness codex|opencode is required" ;;
-  *) die "unknown harness '$HARNESS'" ;;
+  codex) ;;
+  opencode) die "the OpenCode harness was removed in 5.0; only '--harness codex' is supported" ;;
+  *) die "unknown harness '$HARNESS' (only 'codex' is supported)" ;;
 esac
 
-[ -d "$CORE" ] || die "bundle not built at $CORE — run 'make install-$HARNESS' in $REPO"
+PLUGIN="$REPO/dist/codex/plugins/fr-security-review"
+CORE="$PLUGIN/core"
+[ -d "$CORE" ] || die "bundle not built at $CORE — run 'make install-codex' in $REPO"
 
+: "${REVIEW_ROOT:=security-review-codex}"
+
+# Reads .high from a tier map that has both tiers, else prints nothing.
+map_high() {
+  python3 - "$1" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    if all(isinstance(d.get(t), str) and d[t] for t in ("high", "fast")):
+        print(d["high"])
+except (OSError, ValueError, AttributeError):
+    pass
+PY
+}
+
+HIGH=""
+if [ -n "$MODELS" ]; then
+  for tier in high fast; do
+    [[ "$MODELS" =~ (^|,)$tier=[^,]+(,|$) ]] \
+      || die "--models needs both tiers, e.g. --models high=<id>,fast=<id> (missing $tier)"
+  done
+  HIGH="$(printf '%s' "$MODELS" | tr ',' '\n' | sed -n 's/^ *high=//p' | head -n1)"
+else
+  HIGH="$(map_high "$REVIEW_ROOT/.model_map.json")"
+  [ -n "$HIGH" ] || die "model tiers are not set: pass --models high=<id>,fast=<id> (list ids with 'codex debug models'); no saved map at $REVIEW_ROOT/.model_map.json"
+fi
+
+CMD="security-project"
 export FR_SECURITY_CORE_ROOT="$CORE"
-: "${REVIEW_ROOT:=security-review-$HARNESS}"
-CMD="security-$SUB"
 
 # Console command rides the environment, not $ARGUMENTS: a template like
 # "docker compose exec -T php bin/console" contains spaces, which the shared
@@ -104,58 +140,40 @@ fi
 
 # The orchestrator parses $ARGUMENTS by splitting on whitespace, so a space in
 # a path truncates --project-root/--review-root at the space. This is a limit of
-# the shared argument contract (same for the manual `opencode run`/Claude path),
-# not something frsr can quote around — warn rather than silently mis-run.
+# the shared argument contract, not something frsr can quote around — warn rather
+# than silently mis-run.
 case "$PROJECT_ROOT" in *[[:space:]]*) WS=1 ;; *) WS=0 ;; esac
 case "$REVIEW_ROOT" in *[[:space:]]*) WS=1 ;; esac
 [ "$WS" = 1 ] && echo "frsr: WARNING: a path contains whitespace; the orchestrator splits its arguments on spaces, so --project-root/--review-root may be truncated. Prefer space-free paths." >&2
 
 echo "frsr: harness=$HARNESS  project_root=$PROJECT_ROOT  review_root=$REVIEW_ROOT"
 echo "frsr: FR_SECURITY_CORE_ROOT=$FR_SECURITY_CORE_ROOT"
-
-# --- model tiers (idempotent; persisted to <review_root>/.model_map.json) ---
-if [ "$RESOLVE" = 1 ]; then
-  RESOLVE_CMD=(python3 "$CORE/bin/shared/model_resolver.py"
-              --discovery-cmd "$DISCOVERY" --review-root "$REVIEW_ROOT")
-  [ -n "$MODELS" ] && RESOLVE_CMD+=(--models "$MODELS")
-  if [ "$DRY" = 1 ]; then echo "DRY: ${RESOLVE_CMD[*]}"; else "${RESOLVE_CMD[@]}"; fi
-fi
-
-# The orchestrator process itself (not just the per-wave workers) needs a capable
-# model — run it on the resolved `high` tier. Workers get their own -m per slice
-# from the persisted map, inside the dispatcher.
-MFLAG=()
-if [ -f "$REVIEW_ROOT/.model_map.json" ]; then
-  HIGH="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("high",""))' \
-          "$REVIEW_ROOT/.model_map.json" 2>/dev/null || true)"
-  [ -n "${HIGH:-}" ] && { MFLAG=(-m "$HIGH"); echo "frsr: orchestrator model=$HIGH"; }
-fi
+echo "frsr: orchestrator model=$HIGH"
 
 # The orchestrator parses dash-flags from its arguments (see the command's
 # argument-hint: --review-root=, --project-root=, --no-console, --quick, …).
 ARGS="--project-root=$PROJECT_ROOT --review-root=$REVIEW_ROOT"
 [ ${#PASS[@]} -gt 0 ] && ARGS="$ARGS ${PASS[*]}"
 
-if [ "$HARNESS" = opencode ]; then
-  # `--` before the message: ARGS starts with --project-root=, which opencode
-  # would otherwise parse as its own CLI flags (prints help + exits). Same class
-  # as the 2C recon-template fix.
-  RUN=(opencode run ${MFLAG[@]+"${MFLAG[@]}"} --command "$CMD" -- "$ARGS")
-  if [ "$DRY" = 1 ]; then printf 'DRY: '; printf '%q ' "${RUN[@]}"; echo; exit 0; fi
-  exec "${RUN[@]}"
-else
-  # Codex has no headless "invoke skill by name"; drive the installed SKILL by
-  # path. The orchestrator must run UNSANDBOXED to spawn worker processes; the
-  # workers it launches stay `-s workspace-write` sandboxed + offline.
-  PROMPT="read and follow $PLUGIN/skills/$CMD/SKILL.md then run it: $ARGS"
-  RUN=(codex exec ${MFLAG[@]+"${MFLAG[@]}"} --dangerously-bypass-approvals-and-sandbox "$PROMPT")
-  if [ "$DRY" = 1 ] || [ "$GO" != 1 ]; then
-    echo
-    echo "Prepared Codex command (orchestrator runs UNSANDBOXED to spawn workers;"
-    echo "the workers it spawns stay sandboxed + offline). Review, then add --go to run:"
-    echo
-    printf '  '; printf '%q ' "${RUN[@]}"; echo
-    exit 0
-  fi
-  exec "${RUN[@]}"
+# Codex has no headless "invoke skill by name"; drive the installed SKILL by
+# path. The orchestrator must run UNSANDBOXED to spawn worker processes; the
+# workers it launches stay `-s workspace-write` sandboxed + offline. The
+# orchestrator process itself needs a capable model (the `high` tier); workers
+# get their own -m per slice from the saved map, inside the dispatcher.
+PROMPT="read and follow $PLUGIN/skills/$CMD/SKILL.md then run it: $ARGS"
+RUN=(codex exec -m "$HIGH" --dangerously-bypass-approvals-and-sandbox "$PROMPT")
+if [ "$DRY" = 1 ] || [ "$GO" != 1 ]; then
+  echo
+  echo "Prepared Codex command (orchestrator runs UNSANDBOXED to spawn workers;"
+  echo "the workers it spawns stay sandboxed + offline). Review, then add --go to run:"
+  echo
+  printf '  '; printf '%q ' "${RUN[@]}"; echo
+  exit 0
 fi
+
+command -v codex >/dev/null 2>&1 || die "'codex' not found on PATH"
+if [ -n "$MODELS" ]; then
+  python3 "$CORE/bin/shared/model_resolver.py" --review-root "$REVIEW_ROOT" --models "$MODELS" >/dev/null \
+    || die "could not save the model tier map to $REVIEW_ROOT/.model_map.json"
+fi
+exec "${RUN[@]}"
