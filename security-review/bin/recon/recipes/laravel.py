@@ -331,12 +331,6 @@ def _list_php_files(project_root: Path) -> list[tuple[str, Path]]:
     return out
 
 
-def _touched(file_rel: str, diff_files: Optional[set[str]]) -> bool:
-    if diff_files is None:
-        return False
-    return file_rel in diff_files
-
-
 # Laravel-specific grep patterns. Mirrors symfony.py spirit but adds Laravel
 # facades: `Crypt::decrypt`, `decrypt(`, `Storage::`, `Http::*`. Kept narrow
 # to keep precision over recall — worker checklists pick up edge cases.
@@ -376,7 +370,6 @@ def collect_grep_section(
     files: list[tuple[str, Path]],
     pattern: re.Pattern[str],
     kind_label: str,
-    diff_files: Optional[set[str]],
 ) -> list[dict]:
     items: list[dict] = []
     for rel, abs_path in files:
@@ -399,7 +392,6 @@ def collect_grep_section(
                 "line": lineno,
                 "has_dynamic_arg": "$" in line[m.end():m.end() + 60],
                 "source": "extract_php_metadata.php:grep",
-                "touched_by_diff": _touched(rel, diff_files),
             })
     return items
 
@@ -421,7 +413,6 @@ _AUTHZ_PATTERNS = [
 
 def collect_authz_usage(
     files: list[tuple[str, Path]],
-    diff_files: Optional[set[str]],
 ) -> list[dict]:
     items: list[dict] = []
     for rel, abs_path in files:
@@ -440,7 +431,6 @@ def collect_authz_usage(
                     "file": rel,
                     "line": lineno,
                     "snippet": line.strip()[:120],
-                    "touched_by_diff": _touched(rel, diff_files),
                 })
                 break
     return items
@@ -568,7 +558,6 @@ _USE_NAMESPACE_PREFIX_RE = re.compile(r"^\s*(?:use|namespace)\s")
 def collect_fintech_markers(
     project_root: Path,
     files: list[tuple[str, Path]],
-    diff_files: Optional[set[str]],
 ) -> list[dict]:
     items: list[dict] = []
     composer = project_root / "composer.json"
@@ -593,7 +582,6 @@ def collect_fintech_markers(
                                 "label": marker,
                                 "dep": dep,
                                 "file": "composer.json",
-                                "touched_by_diff": _touched("composer.json", diff_files),
                             })
                             break
     for rel, abs_path in files:
@@ -617,7 +605,6 @@ def collect_fintech_markers(
                 "file": rel,
                 "line": lineno,
                 "snippet": line.strip()[:120],
-                "touched_by_diff": _touched(rel, diff_files),
             })
     return items
 
@@ -1272,8 +1259,6 @@ def _evidence_strength_for_middleware(token: str) -> str:
 def _build_routes_authz_matrix(
     project_root: Path,
     classes_app: list[dict],
-    *,
-    diff_files: Optional[set[str]] = None,
 ) -> SectionPayload:
     """Cross-product of routes × middleware × authz call sites (static-only).
 
@@ -1508,15 +1493,6 @@ def _build_routes_authz_matrix(
 
     # Stable sort: file, line.
     items.sort(key=lambda it: (it.get("file") or "", it.get("line") or 0))
-
-    if diff_files is not None:
-        norm = {p.lstrip("./") for p in diff_files}
-        for item in items:
-            f = item.get("file")
-            if isinstance(f, str) and f in norm:
-                # Mark touched_by_diff via a non-schema key? schema is closed —
-                # we don't add a key. Caller can correlate via file+line.
-                pass
 
     status = "ok" if items else "none"
     return SectionPayload(
@@ -2112,7 +2088,6 @@ def _build_runtime(project_root: Path) -> SectionPayload:
 
 def build_inventory(
     project_root: Path,
-    diff_files: Optional[set[str]] = None,
     *,
     plugin_root: Optional[Path] = None,
     no_console: bool = False,
@@ -2120,10 +2095,6 @@ def build_inventory(
     exclude: Optional[tuple[str, ...]] = None,
 ) -> InventoryResult:
     """Run the full Laravel recipe pipeline.
-
-    diff_files — when not None, recipe should mark items whose `file` is in
-    the set with `touched_by_diff: true`. (Caller — recon_inventory.py — sets
-    this. MVP recipe applies it as a post-pass.)
 
     no_console / console_runner — accepted for contract uniformity but unused:
     the Laravel recipe is fully static (no `php artisan` enrichment yet, see
@@ -2165,16 +2136,16 @@ def build_inventory(
     auth_layer = _build_auth_layer(project_root)
 
     # ----- authz_usage -----
-    authz_items = collect_authz_usage(files, diff_files)
+    authz_items = collect_authz_usage(files)
     authz_usage = SectionPayload(status="ok", items=authz_items)
 
     # ----- output_renderers -----
     output_renderers = _build_output_renderers(project_root)
 
     # ----- grep-based domains -----
-    serialization_items = collect_grep_section(files, _SERIALIZATION_RE, "serialization", diff_files)
-    file_ops_items = collect_grep_section(files, _FILE_OPS_RE, "file_op", diff_files)
-    http_client_items = collect_grep_section(files, _HTTP_CLIENT_RE, "http_client", diff_files)
+    serialization_items = collect_grep_section(files, _SERIALIZATION_RE, "serialization")
+    file_ops_items = collect_grep_section(files, _FILE_OPS_RE, "file_op")
+    http_client_items = collect_grep_section(files, _HTTP_CLIENT_RE, "http_client")
     serialization = SectionPayload(status="ok", items=serialization_items)
     file_operations = SectionPayload(status="ok", items=file_ops_items)
     http_clients = SectionPayload(status="ok", items=http_client_items)
@@ -2183,7 +2154,7 @@ def build_inventory(
     secrets = collect_secrets(project_root, files, warnings)
 
     # ----- fintech_markers -----
-    fintech_items = collect_fintech_markers(project_root, files, diff_files)
+    fintech_items = collect_fintech_markers(project_root, files)
     fintech_markers = SectionPayload(status="ok", items=fintech_items)
 
     # ----- frontend_assets (list-section per schema v2) -----
@@ -2227,25 +2198,11 @@ def build_inventory(
 
     # 3.4.0 Wave 2-E sections.
     stack_laravel["routes_authz_matrix"] = _partial_on_failure(
-        _build_routes_authz_matrix(project_root, classes_app, diff_files=diff_files),
+        _build_routes_authz_matrix(project_root, classes_app),
         class_failure,
     )
     stack_laravel["sensitive_columns"] = _build_sensitive_columns(project_root)
     stack_laravel["runtime"] = _build_runtime(project_root)
-
-    # ----- diff_files post-pass: stamp touched_by_diff on list items -----
-    if diff_files is not None:
-        norm = {p.lstrip("./") for p in diff_files}
-        for payload in (attack_surface, data_access, output_renderers,
-                        stack_laravel.get("policies"),
-                        stack_laravel.get("service_providers"),
-                        stack_laravel.get("form_requests")):
-            if payload is None or not payload.items:
-                continue
-            for item in payload.items:
-                f = item.get("file")
-                if isinstance(f, str) and f in norm:
-                    item["touched_by_diff"] = True
 
     core: dict[str, SectionPayload] = {
         "attack_surface": attack_surface,

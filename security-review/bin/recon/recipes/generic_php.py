@@ -122,7 +122,6 @@ CORE_SECTION_IDS = (
 
 def build_inventory(
     project_root: Path,
-    diff_files: Optional[set[str]] = None,
     *,
     plugin_root: Optional[Path] = None,
     no_console: bool = False,

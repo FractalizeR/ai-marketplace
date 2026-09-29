@@ -7,7 +7,7 @@ CLI:
         1 if no recipe matches (bare directory).
 
   recon_inventory.py <project_root> --recipe <name> --review-root <dir>
-                                    [--diff-files=<file>] [--no-console]
+                                    [--no-console]
                                     [--force-recipe]
       → Writes <dir>/CONTEXT.md (schema v2) + <dir>/.gitignore="*". Idempotent.
         --no-console (S1): currently always set; console enrichment is S2.
@@ -508,7 +508,6 @@ def cmd_inventory(
     project_root: Path,
     recipe_name: str,
     review_root_arg: Path,
-    diff_files: Optional[set[str]],
     no_console: bool,
     exclude: Optional[tuple[str, ...]] = None,
     console_cmd: Optional[str] = None,
@@ -561,7 +560,6 @@ def cmd_inventory(
     with _sandbox.extractor_run_scope():
         result: InventoryResult = recipe.build_inventory(
             project_root,
-            diff_files=diff_files,
             plugin_root=plugin_root,
             no_console=no_console,
             console_runner=console_runner,
@@ -610,7 +608,7 @@ def cmd_inventory(
         "git_rev": git_rev,
         "project_fingerprint": pf,
         "code_fingerprint": cf,
-        "scope": "changes" if diff_files is not None else "project",
+        "scope": "project",
         "stack": _stack_block(
             recipe, project_root,
             detected_addons=result.detected_addons,
@@ -733,15 +731,6 @@ def cmd_validate(review_root_arg: Path) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _parse_diff_files(arg: Optional[Path]) -> Optional[set[str]]:
-    if arg is None:
-        return None
-    if not arg.is_file():
-        print(f"error: --diff-files not found: {arg}", file=sys.stderr)
-        sys.exit(2)
-    return {ln.strip() for ln in arg.read_text(encoding="utf-8").splitlines() if ln.strip()}
-
-
 def _parse_exclude(arg: Optional[str]) -> Optional[tuple[str, ...]]:
     """Parse `--exclude=a,b,c` into a tuple of normalized prefixes.
 
@@ -765,7 +754,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--detect", action="store_true", help="Detect stack only")
     parser.add_argument("--recipe", help="Recipe name (e.g. symfony, generic_php)")
     parser.add_argument("--review-root", type=Path, help="Output directory for CONTEXT.md")
-    parser.add_argument("--diff-files", type=Path, default=None, help="File listing changed files")
     parser.add_argument("--no-console", action="store_true",
                         help="Do not invoke the project console (static-only inventory)")
     parser.add_argument("--console-cmd", default=None,
@@ -818,11 +806,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("error: --review-root is required with --recipe", file=sys.stderr)
         return 2
 
-    diff_files = _parse_diff_files(args.diff_files)
     exclude = _parse_exclude(args.exclude)
     console_cmd = _resolve_console_cmd(args.console_cmd, args.no_console)
     return cmd_inventory(
-        args.project_root, args.recipe, args.review_root, diff_files, args.no_console,
+        args.project_root, args.recipe, args.review_root, args.no_console,
         exclude, console_cmd=console_cmd,
     )
 

@@ -4,7 +4,7 @@ Recipes are Python modules in `bin/recon/recipes/`. Each defines:
 - RECIPE_NAME, LANGUAGE
 - RECON_BAGS_SCHEMA: dict[str, SectionSpec]
 - detect(project_root) -> StackMatch | None
-- build_inventory(project_root, diff_files=None, *,
+- build_inventory(project_root, *,
                   plugin_root=None, no_console=False, console_runner=None,
                   exclude=None) -> InventoryResult
 - sanity_probes() -> list[SanityProbe]

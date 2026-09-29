@@ -328,27 +328,6 @@ class BuildInventorySmokeTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# diff_files post-pass
-# ---------------------------------------------------------------------------
-
-
-@unittest.skipUnless(_php_available(), "php CLI required for extractor invocation")
-class DiffPostPassTests(unittest.TestCase):
-    def test_touched_by_diff_marker_set_on_attack_surface(self):
-        result = laravel.build_inventory(
-            FIXTURES,
-            diff_files={"app/Http/Controllers/PostController.php"},
-            plugin_root=PLUGIN_ROOT,
-        )
-        items = result.core["attack_surface"].items
-        # Routes whose `file` resolved to PostController should be marked.
-        marked = [i for i in items if i.get("touched_by_diff")]
-        self.assertGreater(len(marked), 0)
-        for it in marked:
-            self.assertEqual(it["file"], "app/Http/Controllers/PostController.php")
-
-
-# ---------------------------------------------------------------------------
 # exclude= propagation through build_inventory (3.1.1)
 # ---------------------------------------------------------------------------
 
@@ -539,7 +518,7 @@ class CollectorRegressionTests(unittest.TestCase):
                                  f"comment-line serialization match leaked: {it!r}")
 
     def test_authz_var_can_pattern(self):
-        items = laravel.collect_authz_usage([], None)
+        items = laravel.collect_authz_usage([])
         self.assertEqual(items, [])  # smoke
         # Synthetic file with `$user->can('edit', $post)`.
         with tempfile.TemporaryDirectory() as td:
@@ -553,7 +532,7 @@ class CollectorRegressionTests(unittest.TestCase):
                 "}\n",
                 encoding="utf-8",
             )
-            items = laravel.collect_authz_usage([("app/Ctl.php", f)], None)
+            items = laravel.collect_authz_usage([("app/Ctl.php", f)])
         kinds = {it["kind"] for it in items}
         self.assertIn("var_can", kinds)
 
@@ -565,7 +544,7 @@ class CollectorRegressionTests(unittest.TestCase):
                 "Route::get('/x', 'Foo@bar')->middleware(['can:edit', 'auth']);\n",
                 encoding="utf-8",
             )
-            items = laravel.collect_authz_usage([("routes/web.php", f)], None)
+            items = laravel.collect_authz_usage([("routes/web.php", f)])
         kinds = {it["kind"] for it in items}
         self.assertIn("middleware_can", kinds)
 
@@ -580,7 +559,7 @@ class CollectorRegressionTests(unittest.TestCase):
                 }}),
                 encoding="utf-8",
             )
-            items = laravel.collect_fintech_markers(project, [], None)
+            items = laravel.collect_fintech_markers(project, [])
             labels = {(it.get("dep"), it.get("label")) for it in items
                       if it.get("kind") == "composer_dep"}
             self.assertIn(("laravel/cashier", "cashier"), labels)
@@ -604,7 +583,7 @@ class CollectorRegressionTests(unittest.TestCase):
                 encoding="utf-8",
             )
             items = laravel.collect_fintech_markers(
-                Path(td), [("app/Svc.php", f)], None,
+                Path(td), [("app/Svc.php", f)],
             )
         # `use ...` and `namespace ...` lines must be skipped.
         for it in items:
@@ -628,7 +607,7 @@ class CollectorRegressionTests(unittest.TestCase):
                 encoding="utf-8",
             )
             items = laravel.collect_grep_section(
-                [("app/Svc.php", f)], laravel._HTTP_CLIENT_RE, "http_client", None,
+                [("app/Svc.php", f)], laravel._HTTP_CLIENT_RE, "http_client",
             )
         # Only the GuzzleHttp\Client line should match.
         lines = {it["line"] for it in items}
@@ -755,7 +734,7 @@ class ExtractorFailurePartialStatus(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             review_root = Path(td) / "review"
             with self._failing():
-                rc = recon_inventory.cmd_inventory(FIXTURES, "laravel", review_root, None, True)
+                rc = recon_inventory.cmd_inventory(FIXTURES, "laravel", review_root, True)
             self.assertEqual(rc, 0)
             res = sanity_check(review_root, project_root=FIXTURES)
             context = (review_root / "CONTEXT.md").read_text(encoding="utf-8")

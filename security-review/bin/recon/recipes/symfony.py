@@ -669,7 +669,6 @@ def _attr_first_positional(attr: dict) -> Optional[str]:
 def collect_attack_surface(
     project_root: Path,
     plugin_root: Path,
-    diff_files: Optional[set[str]],
     sources_used: list[str],
     warnings: list[str],
     console_runner: "object",
@@ -720,7 +719,7 @@ def collect_attack_surface(
             file_rel = _to_relative(r.get("file"), project_root)
             if file_rel is None or _is_excluded(file_rel, EXCLUDE_PATHS):
                 continue
-            items.append(_route_item(r, project_root, diff_files, kind="http_route"))
+            items.append(_route_item(r, project_root, kind="http_route"))
 
     # 2. classes for cli_command / message_handler / event_listener / http_route_admin.
     classes_data, classes_warn = sandbox.run_extractor(
@@ -770,7 +769,6 @@ def collect_attack_surface(
                     "methods": [],
                     "guards": [],
                     "source": "extract_php_metadata.php:class",
-                    "touched_by_diff": _touched(file_rel, diff_files),
                     "line": line,
                 })
                 continue
@@ -785,7 +783,6 @@ def collect_attack_surface(
                     "methods": [],
                     "guards": [],
                     "source": "extract_php_metadata.php:class",
-                    "touched_by_diff": _touched(file_rel, diff_files),
                     "line": line,
                 })
                 continue
@@ -799,7 +796,6 @@ def collect_attack_surface(
                     "methods": [],
                     "guards": [],
                     "source": "extract_php_metadata.php:class",
-                    "touched_by_diff": _touched(file_rel, diff_files),
                     "line": line,
                 })
                 continue
@@ -813,7 +809,6 @@ def collect_attack_surface(
                     "methods": [],
                     "guards": [],
                     "source": "extract_php_metadata.php:class",
-                    "touched_by_diff": _touched(file_rel, diff_files),
                     "line": line,
                 })
 
@@ -822,7 +817,7 @@ def collect_attack_surface(
         if session is None:
             session = ConsoleSession(console_runner, sources_used, warnings)
         _enrich_via_console(
-            project_root, items, sources_used, warnings, diff_files, session,
+            project_root, items, sources_used, warnings, session,
             fqn_to_file,
         )
     else:
@@ -842,7 +837,6 @@ def collect_attack_surface(
 def _route_item(
     extractor_item: dict,
     project_root: Path,
-    diff_files: Optional[set[str]],
     kind: str,
 ) -> dict:
     file_rel = _to_relative(extractor_item.get("file"), project_root) or ""
@@ -855,7 +849,6 @@ def _route_item(
         "methods": list(extractor_item.get("methods") or []),
         "guards": [],
         "source": "extract_php_metadata.php:routes",
-        "touched_by_diff": _touched(file_rel, diff_files),
         "line": extractor_item.get("line") or 0,
     }
 
@@ -867,15 +860,6 @@ def _to_relative(abs_path: Any, project_root: Path) -> Optional[str]:
     modules can't drift on the macOS `/var ↔ /private/var` symlink edge case.
     """
     return _shared_to_relative(abs_path, project_root)
-
-
-def _touched(file_rel: str, diff_files: Optional[set[str]]) -> bool:
-    if diff_files is None:
-        return False
-    if file_rel in diff_files:
-        return True
-    # Allow callers to pass diff entries with leading `./`.
-    return ("./" + file_rel) in diff_files
 
 
 def _extract_cli_command_name(cls: dict) -> Optional[str]:
@@ -892,7 +876,6 @@ def _enrich_via_console(
     items: list[dict],
     sources_used: list[str],
     warnings: list[str],
-    diff_files: Optional[set[str]],
     session: ConsoleSession,
     fqn_to_file: Optional[dict[str, str]] = None,
 ) -> None:
@@ -954,7 +937,6 @@ def _enrich_via_console(
                     "methods": list(method_str.split("|")) if method_str else [],
                     "guards": [],
                     "source": "console:debug_router",
-                    "touched_by_diff": _touched(file_rel, diff_files) if file_rel else False,
                     "line": 0,
                 })
 
@@ -975,7 +957,6 @@ _DYNAMIC_QUERY_RE = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*\s*\.\s*[\"'`]|->andWhe
 def collect_data_access(
     project_root: Path,
     plugin_root: Path,
-    diff_files: Optional[set[str]],
     sources_used: list[str],
     warnings: list[str],
     *,
@@ -1024,7 +1005,6 @@ def collect_data_access(
             "has_native_sql": bool(_QUERY_PATTERNS["raw"].search(text)),
             "has_dynamic_query": bool(_DYNAMIC_QUERY_RE.search(text)),
             "source": "extract_php_metadata.php:class",
-            "touched_by_diff": _touched(file_rel, diff_files),
         })
     return items, None
 
@@ -1691,7 +1671,6 @@ _AUTHZ_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 def collect_authz_usage(
     files: list[tuple[str, Path]],
     project_root: Path,
-    diff_files: Optional[set[str]],
 ) -> list[dict]:
     items: list[dict] = []
     for rel, abs_path in files:
@@ -1712,7 +1691,6 @@ def collect_authz_usage(
                     "line": lineno,
                     "attribute_or_role": attribute,
                     "source": "extract_php_metadata.php:grep",
-                    "touched_by_diff": _touched(rel, diff_files),
                 })
                 break  # one match per line — avoid double-reporting overlap
     return items
@@ -1726,7 +1704,6 @@ def collect_authz_usage(
 def collect_output_renderers(
     project_root: Path,
     files: list[tuple[str, Path]],
-    diff_files: Optional[set[str]],
 ) -> list[dict]:
     """Twig templates + controller render() / new JsonResponse / new Response calls."""
     items: list[dict] = []
@@ -1754,7 +1731,6 @@ def collect_output_renderers(
                 "identifier": rel,
                 "autoescape": autoescape,
                 "source": "glob:templates",
-                "touched_by_diff": _touched(rel, diff_files),
             })
 
     # Controllers: render / JsonResponse / Response.
@@ -1776,7 +1752,6 @@ def collect_output_renderers(
                     "identifier": m.group(1),
                     "autoescape": "na",
                     "source": "extract_php_metadata.php:grep",
-                    "touched_by_diff": _touched(rel, diff_files),
                     "line": lineno,
                 })
                 continue  # don't double-report a single line
@@ -1787,7 +1762,6 @@ def collect_output_renderers(
                     "identifier": f"{rel}:{lineno}",
                     "autoescape": "na",
                     "source": "extract_php_metadata.php:grep",
-                    "touched_by_diff": _touched(rel, diff_files),
                     "line": lineno,
                 })
                 continue
@@ -1798,7 +1772,6 @@ def collect_output_renderers(
                     "identifier": f"{rel}:{lineno}",
                     "autoescape": "na",
                     "source": "extract_php_metadata.php:grep",
-                    "touched_by_diff": _touched(rel, diff_files),
                     "line": lineno,
                 })
     return items
@@ -1824,7 +1797,6 @@ def collect_grep_section(
     files: list[tuple[str, Path]],
     pattern: re.Pattern[str],
     kind_label: str,
-    diff_files: Optional[set[str]],
 ) -> list[dict]:
     items: list[dict] = []
     for rel, abs_path in files:
@@ -1842,7 +1814,6 @@ def collect_grep_section(
                 "line": lineno,
                 "has_dynamic_arg": "$" in line[m.end():m.end() + 60],
                 "source": "extract_php_metadata.php:grep",
-                "touched_by_diff": _touched(rel, diff_files),
             })
     return items
 
@@ -2068,7 +2039,6 @@ def collect_secrets(
 def collect_fintech_markers(
     project_root: Path,
     files: list[tuple[str, Path]],
-    diff_files: Optional[set[str]],
 ) -> list[dict]:
     items: list[dict] = []
     composer = project_root / "composer.json"
@@ -2084,7 +2054,6 @@ def collect_fintech_markers(
                     "marker": dep,
                     "file": "composer.json",
                     "source": "composer.json",
-                    "touched_by_diff": _touched("composer.json", diff_files),
                 })
     decimal_re = re.compile(r"#\[\s*ORM\\Column\([^)]*type:\s*['\"](decimal|float|money)['\"]")
     for rel, abs_path in files:
@@ -2100,14 +2069,12 @@ def collect_fintech_markers(
                     "entity": Path(rel).stem,
                     "field": "",
                     "source": "extract_php_metadata.php:grep",
-                    "touched_by_diff": _touched(rel, diff_files),
                 })
     return items
 
 
 def collect_frontend_assets(
     project_root: Path,
-    diff_files: Optional[set[str]],
 ) -> list[dict]:
     items: list[dict] = []
     importmap = project_root / "importmap.php"
@@ -2118,7 +2085,6 @@ def collect_frontend_assets(
             "name": "importmap",
             "file": rel,
             "source": "glob:importmap.php",
-            "touched_by_diff": _touched(rel, diff_files),
         })
     assets_root = project_root / "assets"
     if assets_root.is_dir():
@@ -2135,7 +2101,6 @@ def collect_frontend_assets(
                 "name": Path(rel).stem,
                 "file": rel,
                 "source": "glob:assets",
-                "touched_by_diff": _touched(rel, diff_files),
             })
     return items
 
@@ -3070,7 +3035,6 @@ CORE_SECTION_IDS = (
 
 def build_inventory(
     project_root: Path,
-    diff_files: Optional[set[str]] = None,
     *,
     plugin_root: Optional[Path] = None,
     no_console: bool = False,
@@ -3136,13 +3100,13 @@ def build_inventory(
     # `console_disabled_by_flag` is appended by the utility (cmd_inventory),
     # not the recipe, so we don't emit it here to avoid duplication.
     attack_items, attack_extractor_failures = collect_attack_surface(
-        project_root, plugin_root, diff_files, sources_used, warnings, console_runner,
+        project_root, plugin_root, sources_used, warnings, console_runner,
         exclude=exclude, session=session,
     )
 
     # 2. data_access.
     data_items, data_extractor_failure = collect_data_access(
-        project_root, plugin_root, diff_files, sources_used, warnings,
+        project_root, plugin_root, sources_used, warnings,
         exclude=exclude,
     )
 
@@ -3153,22 +3117,22 @@ def build_inventory(
     )
 
     # 4. authz_usage.
-    authz_items = collect_authz_usage(files, project_root, diff_files)
+    authz_items = collect_authz_usage(files, project_root)
 
     # 5. output_renderers.
-    renderers_items = collect_output_renderers(project_root, files, diff_files)
+    renderers_items = collect_output_renderers(project_root, files)
 
     # 6. serialization / file_operations / http_clients.
-    serialization_items = collect_grep_section(files, _SERIALIZATION_RE, "serialization", diff_files)
-    file_ops_items = collect_grep_section(files, _FILE_OPS_RE, "file_op", diff_files)
-    http_client_items = collect_grep_section(files, _HTTP_CLIENT_RE, "http_client", diff_files)
+    serialization_items = collect_grep_section(files, _SERIALIZATION_RE, "serialization")
+    file_ops_items = collect_grep_section(files, _FILE_OPS_RE, "file_op")
+    http_client_items = collect_grep_section(files, _HTTP_CLIENT_RE, "http_client")
 
     # 7. secrets.
     secrets_payload = collect_secrets(project_root, files, warnings, security=security_config)
 
     # 8. fintech_markers + frontend_assets.
-    fintech_items = collect_fintech_markers(project_root, files, diff_files)
-    frontend_items = collect_frontend_assets(project_root, diff_files)
+    fintech_items = collect_fintech_markers(project_root, files)
+    frontend_items = collect_frontend_assets(project_root)
 
     # 9. recon_bags.stack.symfony.*.
     voters_payload = collect_voters(project_root, plugin_root, warnings, exclude=exclude)

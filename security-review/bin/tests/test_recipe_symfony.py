@@ -11,8 +11,7 @@ Covers DoD from REDESIGN_v3_PLAN.md §S2:
    in serialization.
 5. Path traversal — utility refuses to read outside project_root.
 6. Wall-clock budget — symfony_minimal `--no-console` ≤ 30 s.
-7. Per-section source_files on scalar sections (mode=changes channel 2).
-8. touched_by_diff propagation when `diff_files` provided.
+7. Per-section source_files on scalar sections.
 """
 
 from __future__ import annotations
@@ -873,9 +872,7 @@ class ExtractorFailurePartialStatus(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             review_root = Path(td) / "review"
             with self._inject_class_kind_failure():
-                rc = recon_inventory.cmd_inventory(
-                    FIX_MIN, "symfony", review_root, None, True,
-                )
+                rc = recon_inventory.cmd_inventory(FIX_MIN, "symfony", review_root, True)
             self.assertEqual(rc, 0)
             res = sanity_check(review_root, project_root=FIX_MIN)
         self.assertIn(
@@ -995,39 +992,9 @@ class WallClockBudget(unittest.TestCase):
 
 
 @unittest.skipUnless(shutil.which("php"), "php not on PATH")
-class TouchedByDiffPropagation(unittest.TestCase):
-    """Recipe must mark items with file ∈ diff_files as touched_by_diff: true."""
-
-    def test_diff_marks_routes_in_changed_controller(self):
-        with tempfile.TemporaryDirectory() as td:
-            review_root = Path(td) / "review"
-            diff_file = Path(td) / "changed.txt"
-            diff_file.write_text("src/Controller/PostController.php\n")
-            proc = _run_recipe(
-                FIX_MIN, review_root,
-                "--no-console", f"--diff-files={diff_file}",
-            )
-            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-            text = (review_root / "CONTEXT.md").read_text()
-        payload = _section_payload(text, "attack_surface")
-        post_routes = [it for it in payload["items"]
-                       if it.get("kind") == "http_route"
-                       and it["file"] == "src/Controller/PostController.php"]
-        self.assertTrue(post_routes)
-        for it in post_routes:
-            self.assertTrue(it["touched_by_diff"], f"item not marked: {it}")
-        # And another controller's items must NOT be marked.
-        auth_routes = [it for it in payload["items"]
-                       if it.get("kind") == "http_route"
-                       and it["file"] == "src/Controller/AuthController.php"]
-        for it in auth_routes:
-            self.assertFalse(it["touched_by_diff"])
-
-
-@unittest.skipUnless(shutil.which("php"), "php not on PATH")
 class ScalarSectionSourceFiles(unittest.TestCase):
     """Every scalar section with status=ok must declare `source_files`
-    (rev 3.4 mode=changes channel 2)."""
+    so the workers are routed to it."""
 
     def test_all_scalar_ok_sections_have_source_files(self):
         from validate_context import _section_payload as vc_payload, extract_sections
@@ -1262,7 +1229,7 @@ class TripleReviewRegressions(unittest.TestCase):
             )
             from recon.recipes.symfony import _list_php_files
             files = _list_php_files(scratch)
-            items = collect_authz_usage(files, scratch, None)
+            items = collect_authz_usage(files, scratch)
         # Exactly one record per matched line.
         self.assertEqual(len([it for it in items if it["file"] == "src/Foo.php"]), 1)
 
@@ -1336,7 +1303,7 @@ class ConsoleRouteFileResolution(unittest.TestCase):
             },
         })
 
-    def _enrich(self, fqn_to_file, diff_files=None):
+    def _enrich(self, fqn_to_file):
         from unittest import mock
         from recon import sandbox
         items: list[dict] = []
@@ -1352,7 +1319,7 @@ class ConsoleRouteFileResolution(unittest.TestCase):
              mock.patch.object(sandbox, "run_console_command", side_effect=fake_run):
             session = recipe_symfony.ConsoleSession(object(), sources, warnings)
             recipe_symfony._enrich_via_console(
-                Path("/proj"), items, sources, warnings, diff_files, session, fqn_to_file,
+                Path("/proj"), items, sources, warnings, session, fqn_to_file,
             )
         return {it["identifier"]: it for it in items if it.get("kind") == "http_route"}
 
@@ -1370,15 +1337,6 @@ class ConsoleRouteFileResolution(unittest.TestCase):
              "src/Api/Admin/Controller/AuthController.php"},
         )
         self.assertEqual(routes["app_ghost"]["file"], "")
-        self.assertFalse(routes["app_ghost"]["touched_by_diff"])
-
-    def test_touched_by_diff_follows_resolved_file(self):
-        routes = self._enrich(
-            {"App\\Api\\Admin\\Controller\\AuthController":
-             "src/Api/Admin/Controller/AuthController.php"},
-            diff_files={"src/Api/Admin/Controller/AuthController.php"},
-        )
-        self.assertTrue(routes["app_admin_auth"]["touched_by_diff"])
 
     def test_only_debug_router_is_run(self):
         # The event-dispatcher / messenger debug probes had no consumer and
@@ -1396,7 +1354,7 @@ class ConsoleRouteFileResolution(unittest.TestCase):
         with mock.patch.object(sandbox, "try_console_smoke", return_value=(True, None)), \
              mock.patch.object(sandbox, "run_console_command", side_effect=fake_run):
             session = recipe_symfony.ConsoleSession(object(), sources, warnings)
-            recipe_symfony._enrich_via_console(Path("/proj"), [], sources, warnings, None, session)
+            recipe_symfony._enrich_via_console(Path("/proj"), [], sources, warnings, session)
         self.assertEqual(calls, [["debug:router", "--format=json"]])
         self.assertEqual(sources, ["console:smoke", "console:debug_router"])
         self.assertEqual(warnings, [])
@@ -1438,7 +1396,7 @@ class ConsoleRouteFileResolution(unittest.TestCase):
              mock.patch.object(sandbox, "run_console_command", side_effect=fake_run):
             session = recipe_symfony.ConsoleSession(object(), sources, warnings)
             recipe_symfony._enrich_via_console(
-                Path("/proj"), items, sources, warnings, None, session,
+                Path("/proj"), items, sources, warnings, session,
                 {"Liip\\MonitorBundle\\Controller\\HealthCheckController":
                  "vendor/liip/monitor-bundle/Controller/HealthCheckController.php"},
             )

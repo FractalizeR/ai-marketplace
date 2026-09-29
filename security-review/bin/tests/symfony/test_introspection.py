@@ -453,7 +453,7 @@ class FindConfigEvidenceEnvConditionalPhpXml(unittest.TestCase):
         (self.root / "config" / "packages" / name).write_text(body)
         return intro.find_config_evidence(self.root, "security", intro.SECURITY_SUBTREE_KEYS)
 
-    def test_php_and_xml_env_conditionals_set_no_env_flag(self):
+    def test_php_and_xml_env_branches_set_no_env_flag(self):
         php = self._ev("security.php", (
             "<?php\nreturn static function (ContainerConfigurator $container): void {\n"
             "    if ('prod' === $container->env()) {\n"

@@ -28,7 +28,7 @@ class SectionPayload:
     """One section of CONTEXT.md.
 
     Either `items` (list-shape) or `data` (scalar-shape) is populated, not both.
-    `source_files` is required for scalar sections (rev 3.4 mode=changes channel 2).
+    `source_files` is required for scalar sections: it routes their files to the workers.
     """
 
     status: SectionStatus
