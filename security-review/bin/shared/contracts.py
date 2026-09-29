@@ -1,7 +1,7 @@
 """Typed contracts shared by `model_resolver` and `dispatch` (Phase 2A).
 
 Defines the data carriers (`Roots`, `RunResult`), the typed Callable aliases for
-every injected seam (subprocess `Runner`, command builders, the resolver checkpoint), and the typed exceptions. No implementation logic —
+every injected seam (subprocess `Runner`, command builders), and the typed exceptions. No implementation logic —
 this module is import-only so both helpers (and their tests) share one source of
 truth for the seams.
 
@@ -12,10 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Mapping, Sequence
-
-if TYPE_CHECKING:  # avoid an import cycle: model_resolver imports contracts.
-    from shared.model_resolver import ModelInfo, TierMap
+from typing import Callable, Mapping, Sequence
 
 
 @dataclass(frozen=True)
@@ -58,10 +55,6 @@ WaveCommandBuilder = Callable[[Mapping, str, Roots, "Path | None"], Sequence[str
 # (role, roots) -> argv  (no slice/model — recon carries no per-slice model).
 RoleCommandBuilder = Callable[[str, Roots], Sequence[str]]
 
-# (proposed_tier_map, discovered_models) -> chosen TierMap.
-# Accept-as-is = return the proposed map; raise to abort.
-Checkpoint = Callable[["TierMap", "list[ModelInfo]"], "TierMap"]
-
 
 class DispatchConfigError(Exception):
     """Bad slice label or incompatible dispatch flags (not a raw KeyError)."""
@@ -93,11 +86,4 @@ class DispatchGapError(Exception):
 
 
 class ResolverError(Exception):
-    """Discovery/parse/ambiguity/unresolved tier resolution failure.
-
-    Carries the available model ids (when known) so the CLI can print them.
-    """
-
-    def __init__(self, message: str, available: "Sequence[str] | None" = None):
-        self.available = list(available) if available is not None else None
-        super().__init__(message)
+    """Model tier map missing or malformed."""

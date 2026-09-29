@@ -7,7 +7,7 @@ is on `sys.path`.
 
 Modules:
     contracts        — typed dataclasses, Callable aliases, typed exceptions.
-    model_resolver   — AD7 discover -> propose -> confirm -> persist tier map.
+    model_resolver   — the operator-supplied {high, fast} tier map.
     dispatch         — AD4 external-process wave fan-out + single-process role.
 
 stdlib only. Subprocess is the single injected seam (a `runner` callable).
