@@ -4,6 +4,12 @@ All notable changes to this plugin will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.2] — 2026-10-01
+
+### Fixed
+
+- **A precondition no longer passes for "no victim".** Workers kept filing real findings as `hardening` by recasting the trust assumption ("the repository models a single principal") or by tagging the note with a precondition key. The worker prompt now states that a shared credential does not merge its distinct callers into one principal, that changing a resource another caller created (its lifetime, attribution or ownership) affects that resource, and that `hardening` never carries `needs_trusted_integration_compromise`, `internal_network_only`, `admin_only`, `deployment_control_not_in_source` or an `other:` key naming such a precondition — admin and integration credentials leak too, so such a finding is `confirmed` with the key, or `needs_validation`. The admin-endpoint `hardening` example no longer carries `admin_only`, and `checklists/_meta.md` no longer says severity separates `confirmed` from `hardening`.
+
 ## [5.1.1] — 2026-09-29
 
 ### Fixed
