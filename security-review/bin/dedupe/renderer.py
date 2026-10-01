@@ -14,6 +14,7 @@ from typing import Iterable
 from .models import (
     FLAG_ATTACHED_WITHOUT_HASH,
     FLAG_CROSS_SINK_MERGE,
+    FLAG_HARDENING_WITH_PRECONDITION,
     FLAG_MERGED_DESPITE_HASH_MISMATCH,
     FLAG_PARSE_FAILED,
     SEVERITY_RANK,
@@ -21,6 +22,7 @@ from .models import (
     MergedFinding,
     NeedsValidation,
     checklist_tail,
+    hardening_precondition_keys,
     normalize_discovered_via,
 )
 from .reflow import reflow_markdown
@@ -248,7 +250,8 @@ def render_finding(idx: int, mf: MergedFinding, *, resolutions: dict | None = No
 # The two forms build their body differently, deliberately:
 #   - standalone (`render_*_entry`) replays `raw_body` verbatim, like
 #     `render_finding` does for a `Finding` -- only `sink_hash` is
-#     corrected/appended, so a worker-authored `other:*` sink_kind stays
+#     corrected/appended (plus the `precondition` explanation of a flagged
+#     hardening note), so a worker-authored `other:*` sink_kind stays
 #     visible as authored even after `_normalize_known_other_kinds`
 #     canonicalizes the parsed field (same asymmetry as `render_finding`
 #     never rewriting `sink_kind`/`root_cause_family` inside `raw_body`).
@@ -278,6 +281,18 @@ def _attachment_note(flags: list[str]) -> list[str]:
     return [
         "* **attachment**: bound by location, not by quoted text — confirm it "
         "is the same sink before treating it as a note on this finding"
+    ]
+
+
+def _precondition_note(hn: HardeningNote) -> list[str]:
+    """Spell out why a hardening note is flagged, where it is rendered."""
+    if FLAG_HARDENING_WITH_PRECONDITION not in hn.flags:
+        return []
+    keys = ", ".join(hardening_precondition_keys(hn.condition_keys))
+    return [
+        f"* **precondition**: carries {keys} — a precondition means someone is "
+        "affected once it holds; re-check as confirmed (with the key) or needs_validation, "
+        "or drop the key if it names no precondition"
     ]
 
 
@@ -352,6 +367,7 @@ def _render_attached_hardening(
     if hn.flags:
         lines.append(f"* **flags**: {' '.join(hn.flags)}")
     lines.extend(_attachment_note(hn.flags))
+    lines.extend(_precondition_note(hn))
     lines.extend(_attached_resolution_note(hn.sink_hash, primary_hash, resolutions))
     src = hn.source_file + (f" ({hn.slice_id})" if hn.slice_id else "")
     lines.append(f"* **sink_hash**: `{hn.sink_hash}`")
@@ -406,6 +422,9 @@ def render_hardening_entry(
         body = _append_field(body, "sink_hash", hn.sink_hash)
     else:
         body = _replace_field(body, "sink_hash", hn.sink_hash)
+    precondition = _precondition_note(hn)
+    if precondition:
+        body = body.rstrip() + "\n" + "\n".join(precondition)
     out = [title, "", body]
     if resolutions:
         resolution = resolutions.get(hn.sink_hash)
@@ -720,6 +739,16 @@ def render_summary(
         lines.append(
             f"- Hardening notes: {hardening_attached + hardening_standalone} "
             f"({hardening_attached} attached to findings, {hardening_standalone} standalone)"
+        )
+    all_hardening = [h for m in list(merged) + list(manual) for h in m.hardening]
+    all_hardening += unmatched_hardening or []
+    hardening_with_precondition = sum(
+        1 for hn in all_hardening if FLAG_HARDENING_WITH_PRECONDITION in hn.flags
+    )
+    if hardening_with_precondition:
+        lines.append(
+            f"- Hardening notes carrying a precondition key: {hardening_with_precondition} "
+            f"{FLAG_HARDENING_WITH_PRECONDITION} — re-check each as confirmed or needs_validation"
         )
 
     # Dedup-quality stat: aggregate counts of heuristic flags across both

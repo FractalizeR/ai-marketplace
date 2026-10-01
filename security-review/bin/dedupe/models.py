@@ -182,6 +182,7 @@ FLAG_CONFIDENCE_DISAGREEMENT = "[CONFIDENCE DISAGREEMENT]"
 FLAG_VERDICT_HAS_SEVERITY = "[VERDICT_HAS_SEVERITY]"   # worker put Severity/Confidence on a bucket record; dropped
 FLAG_NV_INCOMPLETE = "[NV_INCOMPLETE]"                  # needs_validation missing blockers and/or a validation plan
 FLAG_ATTACHED_WITHOUT_HASH = "[ATTACHED_WITHOUT_HASH]"  # bucket record bound to a finding by location, not by snippet
+FLAG_HARDENING_WITH_PRECONDITION = "[HARDENING_WITH_PRECONDITION]"  # hardening note carries a precondition key
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +225,25 @@ CONDITION_KEYS: frozenset[str] = frozenset(
         "requires_attacker_owned_account",
     }
 )
+
+# A precondition means someone is affected once it holds, so these keys
+# contradict `hardening` ("no victim"). Named in the hardening rule of
+# agents/security.md and checklists/_meta.md. The prose forbids only an
+# `other:` key naming such a precondition; the flag fires on every `other:`
+# key on purpose -- a worker invents one exactly to rename the precondition.
+HARDENING_PRECONDITION_KEYS: frozenset[str] = frozenset(
+    {
+        "needs_trusted_integration_compromise",
+        "internal_network_only",
+        "admin_only",
+        "deployment_control_not_in_source",
+    }
+)
+
+
+def hardening_precondition_keys(keys: list[str]) -> list[str]:
+    """The keys among `keys` that a `hardening` note may not carry, in order."""
+    return [k for k in keys if k in HARDENING_PRECONDITION_KEYS or k.startswith("other:")]
 
 
 # ---------------------------------------------------------------------------

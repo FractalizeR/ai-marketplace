@@ -19,7 +19,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from dedupe.models import CONDITION_KEYS, SINK_KIND_TO_FAMILY  # noqa: E402
+from dedupe.models import (  # noqa: E402
+    CONDITION_KEYS,
+    HARDENING_PRECONDITION_KEYS,
+    SINK_KIND_TO_FAMILY,
+)
 
 # Plugin root: tests/ → bin/ → code-review/.
 _PLUGIN_ROOT = Path(__file__).resolve().parents[2]
@@ -327,6 +331,27 @@ class ConditionKeysEnumConsistency(unittest.TestCase):
             f"  In Python but missing in _meta.md: {sorted(missing)}\n"
             f"  In _meta.md but missing in Python: {sorted(extra)}",
         )
+
+    def _keys_in_sentence(self, text: str, opener: str) -> set[str]:
+        start = text.find(opener)
+        self.assertNotEqual(start, -1, f"hardening rule opener {opener!r} not found")
+        sentence = text[start:].split("\n", 1)[0]
+        return set(re.findall(r"`([a-z_]+)`", sentence)) & CONDITION_KEYS
+
+    def test_hardening_precondition_keys_match_the_prose_rule(self):
+        """The prose forbids `other:` keys only when they name such a
+        precondition; the flag fires on every `other:` key -- an asymmetry by
+        design, not checked here."""
+        self.assertLessEqual(HARDENING_PRECONDITION_KEYS, CONDITION_KEYS)
+        for path, opener in (
+            (_SECURITY_MD, "`hardening` never carries"),
+            (_META_MD, "Severity does not separate `confirmed` from `hardening`"),
+        ):
+            with self.subTest(path=path.name):
+                self.assertEqual(
+                    self._keys_in_sentence(path.read_text(encoding="utf-8"), opener),
+                    set(HARDENING_PRECONDITION_KEYS),
+                )
 
     def test_condition_keys_count(self):
         """Pins the count so an addition/removal is a deliberate, visible diff."""

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Literal
 
 from .models import (
+    FLAG_HARDENING_WITH_PRECONDITION,
     FLAG_NV_INCOMPLETE,
     FLAG_VERDICT_HAS_SEVERITY,
     KNOWN_SINK_KINDS,
@@ -20,6 +21,7 @@ from .models import (
     HardeningNote,
     NeedsValidation,
     ParsedWave,
+    hardening_precondition_keys,
     normalize_discovered_via,
 )
 
@@ -501,6 +503,9 @@ def _parse_hardening_block(
             hn.condition_keys = _parse_condition_keys(value)
 
         i += 1
+
+    if hardening_precondition_keys(hn.condition_keys) and FLAG_HARDENING_WITH_PRECONDITION not in hn.flags:
+        hn.flags.append(FLAG_HARDENING_WITH_PRECONDITION)
 
     return hn
 

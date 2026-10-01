@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dedupe.models import (  # noqa: E402
     FLAG_CROSS_SINK_MERGE,
+    FLAG_HARDENING_WITH_PRECONDITION,
     FLAG_MERGED_DESPITE_HASH_MISMATCH,
     FLAG_PARSE_FAILED,
     Finding,
@@ -612,6 +613,58 @@ class VerdictBucketRenderingTests(unittest.TestCase):
         # Must not leak into the per-finding body of an unrelated finding.
         finding_body = render_finding(1, mf)
         self.assertNotIn("Needs validation", finding_body)
+
+    def _flagged_hn(self, sink_snippet="code") -> HardeningNote:
+        return self._hn(
+            sink_snippet=sink_snippet,
+            condition_keys=["needs_separate_primitive", "needs_trusted_integration_compromise"],
+            flags=[FLAG_HARDENING_WITH_PRECONDITION],
+        )
+
+    def test_attached_flagged_hardening_explains_the_flag(self):
+        mf = _mk_merged(sink_snippet="code")
+        attach_side_records([mf], [], [self._flagged_hn()])
+        body = render_finding(1, mf)
+        self.assertIn(FLAG_HARDENING_WITH_PRECONDITION, body)
+        self.assertIn(
+            "* **precondition**: carries needs_trusted_integration_compromise —", body
+        )
+
+    def test_standalone_flagged_hardening_explains_the_flag(self):
+        body = render_hardening_entry(1, self._flagged_hn())
+        title = body.splitlines()[0]
+        self.assertIn(FLAG_HARDENING_WITH_PRECONDITION, title)
+        self.assertIn(
+            "* **precondition**: carries needs_trusted_integration_compromise —", body
+        )
+
+    def test_standalone_precondition_line_follows_the_body_directly(self):
+        body = render_hardening_entry(1, self._flagged_hn())
+        lines = body.splitlines()
+        idx = next(i for i, ln in enumerate(lines) if ln.startswith("* **precondition**"))
+        self.assertTrue(lines[idx - 1].startswith("* **sink_hash**"), lines[idx - 1])
+
+    def test_attached_precondition_line_reaches_family_detail_file(self):
+        from dedupe.renderer import render_family_detail
+        mf = _mk_merged(sink_snippet="code")
+        attach_side_records([mf], [], [self._flagged_hn()])
+        detail = render_family_detail(mf.primary.root_cause_family, [mf])
+        self.assertIn("* **precondition**: carries needs_trusted_integration_compromise", detail)
+
+    def test_unflagged_hardening_has_no_precondition_line(self):
+        self.assertNotIn("**precondition**", render_hardening_entry(1, self._hn()))
+
+    def test_summary_counts_flagged_hardening_attached_and_standalone(self):
+        mf = _mk_merged(sink_snippet="code")
+        attach_side_records([mf], [], [self._flagged_hn()])
+        summary = render_summary(
+            [mf], [], unmatched_hardening=[self._flagged_hn("other"), self._hn("plain")]
+        )
+        self.assertIn("- Hardening notes carrying a precondition key: 2 ", summary)
+
+    def test_summary_omits_precondition_line_when_none_flagged(self):
+        summary = render_summary([], [], unmatched_hardening=[self._hn()])
+        self.assertNotIn("precondition key", summary)
 
     def test_unmatched_hardening_gets_own_section(self):
         mf = _mk_merged(sink_snippet="code")

@@ -10,6 +10,7 @@ _group_by_family) are accessible via direct submodule imports
 
 from .models import (
     CONDITION_KEYS,
+    HARDENING_PRECONDITION_KEYS,
     FLAG_CONFIDENCE_DISAGREEMENT,
     FLAG_CONFLICTING_SEVERITY,
     FLAG_CROSS_SINK_MERGE,
@@ -19,6 +20,7 @@ from .models import (
     FLAG_MERGED_WITHOUT_SYMBOL,
     FLAG_NO_FILE,
     FLAG_ATTACHED_WITHOUT_HASH,
+    FLAG_HARDENING_WITH_PRECONDITION,
     FLAG_NV_INCOMPLETE,
     FLAG_PARSE_FAILED,
     FLAG_VERDICT_HAS_SEVERITY,
@@ -61,6 +63,7 @@ __all__ = [
     "ParsedWave",
     "SideRecords",
     "CONDITION_KEYS",
+    "HARDENING_PRECONDITION_KEYS",
     "SEVERITY_RANK",
     "SEVERITY_BY_RANK",
     "SINK_KIND_TO_FAMILY",
@@ -78,6 +81,7 @@ __all__ = [
     "FLAG_VERDICT_HAS_SEVERITY",
     "FLAG_ATTACHED_WITHOUT_HASH",
     "FLAG_NV_INCOMPLETE",
+    "FLAG_HARDENING_WITH_PRECONDITION",
     # Parser
     "parse_findings_file",
     "parse_wave",

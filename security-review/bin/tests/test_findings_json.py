@@ -76,14 +76,17 @@ def _nv_block(
 def _hardening_block(
     n: int, sink_file: str, sink_line: int, sink_kind: str, root_cause_family: str,
     enclosing_symbol: str, sink_snippet: str, *, text: str = "hardening observation",
+    condition_keys: str = "",
 ) -> str:
+    keys_line = f"* **condition_keys**: {condition_keys}\n" if condition_keys else ""
     return (
         f"# Hardening {n}: [{sink_kind}]: `{sink_file}:{sink_line}`\n\n"
         f"* **sink_kind**: {sink_kind}\n"
         f"* **root_cause_family**: {root_cause_family}\n"
         f"* **enclosing_symbol**: {enclosing_symbol}\n"
         f"* **sink_snippet**: {sink_snippet}\n"
-        f"* **text**: {text}\n\n"
+        f"* **text**: {text}\n"
+        f"{keys_line}\n"
     )
 
 
@@ -327,6 +330,46 @@ class CliWiringTests(_CliFixture, unittest.TestCase):
             hardening_entries = payload["hardening"]
             self.assertEqual(len(hardening_entries), 1)
             self.assertIsNone(hardening_entries[0]["matched_to"])
+
+    def test_hardening_with_precondition_flagged_in_json_and_report(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmpdir = Path(td)
+            _write(
+                tmpdir, "W1.md",
+                _vuln_block(
+                    1, "src/Repo.php", 42, "dql_concat", "injection", "Repo::find",
+                    "$dql = 'SELECT' . $s;",
+                ),
+                _hardening_block(
+                    1, "src/Repo.php", 42, "dql_concat", "injection", "Repo::find",
+                    "$dql = 'SELECT' . $s;", condition_keys="internal_network_only",
+                ),
+                _hardening_block(
+                    2, "src/Other.php", 99, "csrf_missing", "authz", "Other::do",
+                    "doSomething();", condition_keys="other:any_caller",
+                ),
+                _hardening_block(
+                    3, "src/Third.php", 3, "csrf_missing", "authz", "Third::do",
+                    "doThird();", condition_keys="needs_separate_primitive",
+                ),
+            )
+            self._run_cli(tmpdir)
+
+            payload = json.loads((tmpdir / FINDINGS_JSON_NAME).read_text(encoding="utf-8"))
+            self.assertEqual(payload["schema_version"], SCHEMA_VERSION)
+            flagged = {
+                e["sink_file"]: df.FLAG_HARDENING_WITH_PRECONDITION in e["flags"]
+                for e in payload["hardening"]
+            }
+            self.assertEqual(
+                flagged,
+                {"src/Repo.php": True, "src/Other.php": True, "src/Third.php": False},
+            )
+            attached = [e for e in payload["hardening"] if e["matched_to"] is not None]
+            self.assertEqual([e["sink_file"] for e in attached], ["src/Repo.php"])
+
+            report = (tmpdir / "REPORT.md").read_text(encoding="utf-8")
+            self.assertIn("- Hardening notes carrying a precondition key: 2 ", report)
 
     def test_unmatched_records_render_in_report(self):
         """Regression: before this package, the CLI parsed wave_format=2

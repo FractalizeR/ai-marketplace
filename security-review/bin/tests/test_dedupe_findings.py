@@ -122,7 +122,7 @@ def _mk_hardening_md(
     sink_snippet: str,
     *,
     text: str = "no rate limiting on this endpoint, but no principal/resource is affected",
-    condition_keys: str = "admin_only",
+    condition_keys: str = "needs_separate_primitive",
     discovered_via: str = "",
 ) -> str:
     snippet_block = "\n".join("    " + ln for ln in sink_snippet.splitlines())
@@ -655,8 +655,8 @@ class HardeningParsingTests(unittest.TestCase):
         md = _mk_hardening_md(
             1, "src/Admin.php", 5, "csrf_missing", "authz", "Admin::update",
             "$this->save($request->all());",
-            text="super-admin-only config write, single-tenant, no lower-privilege observer",
-            condition_keys="admin_only",
+            text="config write reachable only with a separate injection primitive, single-tenant",
+            condition_keys="needs_separate_primitive",
         )
         hn = self._parse_single_hardening(md)
         self.assertEqual(hn.sink_file, "src/Admin.php")
@@ -666,7 +666,7 @@ class HardeningParsingTests(unittest.TestCase):
         self.assertEqual(hn.enclosing_symbol, "Admin::update")
         self.assertIn("save($request", hn.sink_snippet)
         self.assertIn("single-tenant", hn.text)
-        self.assertEqual(hn.condition_keys, ["admin_only"])
+        self.assertEqual(hn.condition_keys, ["needs_separate_primitive"])
         self.assertEqual(hn.flags, [])
         self.assertEqual(
             hn.sink_hash,
@@ -690,6 +690,57 @@ class HardeningParsingTests(unittest.TestCase):
         )
         hn = self._parse_single_hardening(md)
         self.assertIn(df.models.FLAG_VERDICT_HAS_SEVERITY, hn.flags)
+
+    def _flags_for(self, condition_keys: str) -> list[str]:
+        md = _mk_hardening_md(
+            1, "src/Admin.php", 5, "csrf_missing", "authz", "Admin::update",
+            "$this->save($request->all());",
+            condition_keys=condition_keys,
+        )
+        return self._parse_single_hardening(md).flags
+
+    def test_each_precondition_key_flags_the_note(self):
+        for key in sorted(df.HARDENING_PRECONDITION_KEYS):
+            with self.subTest(key=key):
+                self.assertEqual(self._flags_for(key), [df.FLAG_HARDENING_WITH_PRECONDITION])
+
+    def test_any_other_key_flags_the_note(self):
+        self.assertEqual(
+            self._flags_for("other:any_key_holder"), [df.FLAG_HARDENING_WITH_PRECONDITION]
+        )
+
+    def test_keys_compatible_with_hardening_do_not_flag(self):
+        for keys in (
+            "needs_separate_primitive",
+            "requires_victim_interaction, requires_attacker_owned_account",
+        ):
+            with self.subTest(keys=keys):
+                self.assertEqual(self._flags_for(keys), [])
+
+    def test_no_condition_keys_does_not_flag(self):
+        md = _mk_hardening_md(
+            1, "src/Admin.php", 5, "csrf_missing", "authz", "Admin::update",
+            "$this->save($request->all());",
+        ).replace("* **condition_keys**: needs_separate_primitive\n", "")
+        hn = self._parse_single_hardening(md)
+        self.assertEqual(hn.condition_keys, [])
+        self.assertEqual(hn.flags, [])
+
+    def test_mixed_keys_flag_once_alongside_other_flags(self):
+        md = _mk_hardening_md(
+            1, "src/Admin.php", 5, "csrf_missing", "authz", "Admin::update",
+            "$this->save($request->all());",
+            condition_keys="needs_separate_primitive, admin_only, other:shared_key",
+        ).replace("* **text**:", "* **Severity**: Low\n* **text**:")
+        hn = self._parse_single_hardening(md)
+        self.assertEqual(
+            sorted(hn.flags),
+            sorted([df.FLAG_VERDICT_HAS_SEVERITY, df.FLAG_HARDENING_WITH_PRECONDITION]),
+        )
+        self.assertEqual(
+            df.models.hardening_precondition_keys(hn.condition_keys),
+            ["admin_only", "other:shared_key"],
+        )
 
 
 class ParseWaveMutabilityTests(unittest.TestCase):
