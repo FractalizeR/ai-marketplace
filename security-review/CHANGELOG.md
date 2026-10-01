@@ -4,6 +4,12 @@ All notable changes to this plugin will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.2.0] — 2026-10-01
+
+### Added
+
+- **`hardening` notes that carry a precondition are flagged.** A `hardening` record whose `condition_keys` include `needs_trusted_integration_compromise`, `internal_network_only`, `admin_only`, `deployment_control_not_in_source` or any `other:` key contradicts its own verdict: a precondition means someone is affected once it holds. Dedupe now adds `[HARDENING_WITH_PRECONDITION]` to the record's `flags` in `findings.json` (additive, `schema_version` stays 1), explains it under the record (in REPORT.md, or in the per-family detail file for a note attached to a finding), and counts such notes in the summary. The verdict itself is not changed — the flag is a pointer for the operator; `fr-audit-triage` shows it in its bundle manifest and INDEX.md but does not act on it yet. The flag fires on every `other:` key, wider than the worker rule, because a worker invents an `other:` key precisely to rename a precondition.
+
 ## [5.1.2] — 2026-10-01
 
 ### Fixed
