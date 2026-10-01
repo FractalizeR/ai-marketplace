@@ -99,7 +99,7 @@ A worker finding is not only "reportable" or "silently dropped" — three verdic
 | `needs_validation` | **forbidden** | the code path is traced, but the deciding fact lives outside the repo (proxy config, IdP setting, a real value only known in prod) |
 | `hardening` | **forbidden** | an observation with no affected principal or resource |
 
-`needs_validation` and `hardening` never carry `severity`/`confidence` — this is a hard constraint, not an omission. The confidence gate (≥ 8) applies only to `confirmed`; the severity gate (≥ MEDIUM) separates `confirmed` from `hardening`. `HARD EXCLUSIONS` and `TRUSTED PATTERNS` (see `agents/security.md`) stay hard filters and do **not** move into `hardening` — an excluded/trusted pattern is still not reported at all.
+`needs_validation` and `hardening` never carry `severity`/`confidence` — this is a hard constraint, not an omission. The confidence gate (≥ 8) applies only to `confirmed`. Severity does not separate `confirmed` from `hardening`: a real finding with a victim is `confirmed` at Medium or higher, and `hardening` is the absence of a victim — so it never carries `needs_trusted_integration_compromise`, `internal_network_only`, `admin_only`, `deployment_control_not_in_source` or an `other:` key naming such a precondition. `HARD EXCLUSIONS` and `TRUSTED PATTERNS` (see `agents/security.md`) stay hard filters and do **not** move into `hardening` — an excluded/trusted pattern is still not reported at all.
 
 ### Mapping `sink_kind` → `root_cause_family`
 
@@ -148,7 +148,7 @@ Example:
 - MD5/SHA1 for password hashing → confidence ≥ 9 (no exceptions).
 ```
 
-Floor rules **do not replace** the quality gate — confidence ≥ 8 for `confirmed` findings, severity ≥ MEDIUM separating `confirmed` from `hardening` (see "Verdict buckets" above; `needs_validation`/`hardening` carry no confidence, so floor rules do not apply to them) — they refine it for specific patterns.
+Floor rules **do not replace** the quality gate — confidence ≥ 8 and severity ≥ MEDIUM for `confirmed` findings (see "Verdict buckets" above; `needs_validation`/`hardening` carry no confidence, so floor rules do not apply to them) — they refine it for specific patterns.
 
 Floor rules may live in any layer — wherever they are most specific. If a pattern is mentioned in multiple layers, the more specific layer (per resolution chain) takes precedence.
 

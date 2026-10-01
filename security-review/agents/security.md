@@ -93,6 +93,12 @@ Every finding gets exactly one of three verdicts. This is a home for observation
 - **A trust assumption about who holds a credential or reaches an interface** — "every holder of the shared key is one party", "only our own services call this", "the ingress normalizes this header". That is a precondition, not an absence of victims: keep the finding `confirmed` with the matching `condition_keys` (`needs_trusted_integration_compromise`, `internal_network_only`, `deployment_control_not_in_source`), or make it `needs_validation` when the deciding fact lives outside the repository. The operator's trust model is applied later, at triage — not by you.
 - **The project's own documents calling the behavior accepted or by design** (`AGENTS.md`, `CLAUDE.md`, ADRs, code comments). Report the finding and cite the document in it; accepting the risk is the operator's decision, and the document is not evidence that nobody is affected.
 
+Two facts settle who is affected:
+- **A shared credential does not merge its holders into one principal.** When the code shows distinct callers using it — an enum of caller services, a caller-name field or header, per-caller rows or metrics — each caller is a separate principal, however the credential is issued. Restating the assumption as "the repository models a single principal" is the same assumption.
+- **Changing a resource another caller created** — its lifetime, attribution or ownership metadata — affects that resource, even when the actor could reach the same destination by other means.
+
+`hardening` never carries `needs_trusted_integration_compromise`, `internal_network_only`, `admin_only` or `deployment_control_not_in_source`, nor an `other:` key naming a precondition of that kind: a precondition means someone is affected once it holds — admin and integration credentials leak too — so the verdict is `confirmed` with that key, or `needs_validation` when the precondition is a fact outside the repository. "Any holder of the shared credential" is `needs_trusted_integration_compromise`, not an `other:` key.
+
 Both bucket types carry `condition_keys` — the concrete precondition(s) that gate the observation, from the closed enum in `checklists/_meta.md` (`internal_network_only`, `admin_only`, `needs_trusted_integration_compromise`, `needs_separate_primitive`, `deployment_control_not_in_source`, `requires_victim_interaction`, `requires_attacker_owned_account`, or `other:<name>`). `Finding` (`confirmed`) also carries `condition_keys` — optional, for a confirmed finding that still has a named precondition worth surfacing.
 
 **Deciding between the three is not a downgrade path — it changes what you assert.** Do not default to `confirmed` "to be safe" if you cannot actually confirm the deciding fact is true; do not default to `hardening` to avoid the confidence bar if there IS a traceable principal/resource. Pick the verdict that matches what you actually established.
@@ -167,7 +173,7 @@ Each finding must have:
 Both buckets share the same location fields as above (`sink_file:sink_line` in the header, `sink_kind`, `root_cause_family`, `enclosing_symbol`, `sink_snippet`) but **never** `Severity`/`Confidence` — do not emit those fields on these two verdicts.
 
 - `needs_validation` additionally requires: `claimed_root_cause` (what you believe the root cause is, pending confirmation), `trace` (the code path you followed), `blockers` (one or more concrete missing facts — what specifically you cannot confirm from the repo alone; must be non-empty), and at least one of `validation_plan_local` / `validation_plan_deployment` (how to close the gap — a local check vs. something only checkable in the deployment). `condition_keys` from the closed enum below.
-- `hardening` additionally requires: `text` (the observation itself and why no principal/resource is affected). `condition_keys` from the closed enum below.
+- `hardening` additionally requires: `text` (the observation itself and why no principal/resource is affected). `condition_keys` from the closed enum below when a precondition applies — never one of the keys excluded in "## VERDICT BUCKETS".
 
 ### Closed enum `condition_keys`
 
@@ -497,11 +503,13 @@ All 5 questions output to "PR:Admin + Impact:Low + Scope:Unchanged + no lower-pr
 * **sink_snippet**: |
     #[IsGranted('ROLE_SUPER_ADMIN')]
     class AdminConfigController
-* **text**: Writes config/runtime/feature_flags.yaml behind ROLE_SUPER_ADMIN. No new capability vs. existing CLI/DB/other-admin-endpoint access; single-tenant (no cross-tenant boundary); file not exposed to any lower-privilege observer. Worth a second look only if the app becomes multi-tenant or this role becomes reachable via privilege escalation.
-* **condition_keys**: admin_only
+* **text**: Writes config/runtime/feature_flags.yaml behind ROLE_SUPER_ADMIN. A leaked super-admin account already changes the same flags through the other admin endpoints, so this endpoint adds no capability to a compromised account; single-tenant (no cross-tenant boundary); file not exposed to any lower-privilege observer. Worth a second look only if the app becomes multi-tenant or this role becomes reachable via privilege escalation.
 ```
 
+No `condition_keys`, and specifically no `admin_only`: that key says the finding matters once an admin account is compromised, and here it does not.
+
 **What would instead promote this to `confirmed`** (if any one were true, the finding is Medium+ as normal, not `hardening`):
+- if the endpoint gave the role a capability it has nowhere else → `confirmed` with `admin_only` (admin credentials leak like any other);
 - if the file were read via a non-admin path → secret_in_response / disclosure;
 - if the application became multi-tenant → cross-tenant write through a single super-admin;
 - if `ROLE_SUPER_ADMIN` were reachable through a privilege escalation chain (for example, a voter with `default true` on a parent attribute) → a separate finding about the voter.
